@@ -6,6 +6,8 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/mask"
@@ -94,11 +96,58 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// view renders the modal box. Only the masked Display() is ever shown.
-func (m *modal) view(width int) string {
+// view renders the modal box within width columns and height lines. Only
+// the masked Display() is ever shown. A box taller than height is first
+// re-rendered with the command line truncated instead of wrapped, then, if
+// still too tall, clipped from the middle (clipMiddle) so the warning,
+// badges and prompt at the bottom stay visible.
+func (m *modal) view(width, height int) string {
+	w := width - 4
+	if w > 76 {
+		w = 76
+	}
+	if w < 10 {
+		w = 10
+	}
+	out := m.render(w, false)
+	if height <= 0 || strings.Count(out, "\n")+1 <= height {
+		return out
+	}
+	out = m.render(w, true)
+	if strings.Count(out, "\n")+1 <= height {
+		return out
+	}
+	return clipMiddle(out, height)
+}
+
+// clipMiddle keeps the first two lines of a rendered box (top border and
+// title), a dim "…" line, and the last lines, so the bottom is never lost.
+func clipMiddle(box string, height int) string {
+	lines := strings.Split(box, "\n")
+	if len(lines) <= height {
+		return box
+	}
+	if height < 4 {
+		return strings.Join(lines[len(lines)-height:], "\n")
+	}
+	border := lipgloss.RoundedBorder()
+	total := lipgloss.Width(lines[0])
+	inner := total - lipgloss.Width(border.Left) - lipgloss.Width(border.Right)
+	marker := border.Left + lipgloss.NewStyle().Width(inner).Render(" "+styleDim.Render("…")) + border.Right
+	keep := append([]string{lines[0], lines[1], marker}, lines[len(lines)-(height-3):]...)
+	return strings.Join(keep, "\n")
+}
+
+// render builds the box at inner width w. With truncate set, the command
+// line is cut to one line with an ellipsis instead of wrapping.
+func (m *modal) render(w int, truncate bool) string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render(mask.Sanitize(m.act.Title)) + "\n\n")
-	b.WriteString("  $ " + mask.Sanitize(m.act.Display()) + "\n")
+	cmd := "  $ " + mask.Sanitize(m.act.Display())
+	if truncate {
+		cmd = ansi.Truncate(cmd, w-4, "…") // w includes the border and 1-column padding each side
+	}
+	b.WriteString(cmd + "\n")
 	if m.act.Warning != "" {
 		b.WriteString("\n" + styleError.Render("! "+mask.Sanitize(m.act.Warning)) + "\n")
 	}
@@ -123,13 +172,6 @@ func (m *modal) view(width int) string {
 		if m.hint != "" {
 			b.WriteString("\n" + styleWarn.Render(m.hint))
 		}
-	}
-	w := width - 4
-	if w > 76 {
-		w = 76
-	}
-	if w < 10 {
-		w = 10
 	}
 	return styleModal.Width(w).Render(b.String())
 }

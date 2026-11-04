@@ -860,3 +860,80 @@ func TestQuitWhileRunningFallsBackWhenRunHangs(t *testing.T) {
 		t.Error("fallback cmd is not tea.Quit")
 	}
 }
+
+// ---- modal height (whole-branch review I-2) --------------------------------
+
+// The confirm prompt and badges must stay visible however short the body
+// is: a modal taller than the body is clipped from the middle, never from
+// the bottom.
+func TestModalPromptVisibleAtSmallHeights(t *testing.T) {
+	act, err := actions.AgentDisablePurge("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []int{10, 12, 24} {
+		app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "body-a"))
+		app.Update(tea.WindowSizeMsg{Width: 100, Height: h})
+		app.Update(DoMsg{Action: act})
+		out := ansi.Strip(content(app))
+		if n := strings.Count(out, "\n") + 1; n > h {
+			t.Errorf("height %d: view has %d lines", h, n)
+		}
+		flat := strings.Join(strings.Fields(strings.ReplaceAll(out, "│", " ")), " ")
+		for _, want := range []string{"Type purge to confirm", "[destructive]", "Disable agent"} {
+			if !strings.Contains(flat, want) {
+				t.Errorf("height %d: modal missing %q:\n%s", h, want, out)
+			}
+		}
+		if h == 24 && !strings.Contains(flat, "This cannot be undone") {
+			t.Errorf("height %d: warning missing:\n%s", h, out)
+		}
+		if h < 24 && !strings.Contains(out, "│ …") {
+			t.Errorf("height %d: no clip marker inside the box:\n%s", h, out)
+		}
+		// Typing still works against the visible prompt.
+		for _, r := range "purge" {
+			app.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+		if !strings.Contains(ansi.Strip(content(app)), "purge_") {
+			t.Errorf("height %d: typed verb not shown:\n%s", h, ansi.Strip(content(app)))
+		}
+	}
+}
+
+// A long Display line is width-truncated rather than wrapped when the body
+// is short, so it cannot push the badges and prompt below the fold.
+func TestModalLongDisplayKeepsPrompt(t *testing.T) {
+	argv := []string{"mcp", "add", "x", "--command", "npx"}
+	for i := 0; i < 40; i++ {
+		argv = append(argv, "--arg", fmt.Sprintf("value-number-%02d", i))
+	}
+	act := actions.Action{Title: "Add server x", Argv: argv, Network: true}
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "body-a"))
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
+	app.Update(DoMsg{Action: act})
+	out := ansi.Strip(content(app))
+	if n := strings.Count(out, "\n") + 1; n > 12 {
+		t.Errorf("view has %d lines", n)
+	}
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(out, "│", " ")), " ")
+	for _, want := range []string{"Run it? y/enter = yes", "[network]", "agentsync mcp add x --command npx --arg value-number-00", "…"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("modal missing %q:\n%s", want, out)
+		}
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "$ agentsync") && !strings.HasSuffix(strings.TrimRight(l, " │"), "…") {
+			t.Errorf("command line not truncated with an ellipsis: %q", l)
+		}
+	}
+	if strings.Contains(flat, "value-number-39") {
+		t.Errorf("command wrapped instead of truncated:\n%s", out)
+	}
+	// At a normal height the whole command is still readable (wrapped).
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	flat = strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(content(app)), "│", " ")), " ")
+	if !strings.Contains(flat, "value-number-39") || !strings.Contains(flat, "Run it? y/enter = yes") {
+		t.Errorf("tall view lost the command or prompt:\n%s", ansi.Strip(content(app)))
+	}
+}

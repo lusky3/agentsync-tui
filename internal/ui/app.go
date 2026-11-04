@@ -281,7 +281,7 @@ func sanitizeScope(s runner.Scope) string { return mask.Sanitize(string(s)) }
 func (a *App) body() string {
 	switch {
 	case a.modal != nil:
-		return a.modal.view(a.width)
+		return a.modal.view(a.width, a.bodyHeight())
 	case a.showHelp:
 		return helpText
 	case a.noProject:
