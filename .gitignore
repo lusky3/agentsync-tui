@@ -1,0 +1,4 @@
+.superpowers/
+.claude/worktrees/
+/agentsync-tui
+dist/
