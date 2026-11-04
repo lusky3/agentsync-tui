@@ -105,7 +105,7 @@ func readList(ctx context.Context, gen int, r runner.Runner, timeout time.Durati
 	}
 	list, err := model.ParseAgentList(res.Stdout)
 	if err != nil {
-		return listMsg{gen: gen, note: "agent list output unreadable"}
+		return listMsg{gen: gen, note: ui.Unreadable("agent list", res, err)}
 	}
 	return listMsg{gen: gen, agents: list}
 }

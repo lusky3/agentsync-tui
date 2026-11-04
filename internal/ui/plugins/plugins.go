@@ -175,7 +175,7 @@ func readPlugins(ctx context.Context, gen int, r runner.Runner, timeout time.Dur
 	}
 	list, err := model.ParsePluginList(res.Stdout)
 	if err != nil {
-		return pluginsMsg{gen: gen, note: "plugin list output unreadable"}
+		return pluginsMsg{gen: gen, note: ui.Unreadable("plugin list", res, err)}
 	}
 	return pluginsMsg{gen: gen, plugins: list}
 }
@@ -187,7 +187,7 @@ func readMarkets(ctx context.Context, gen int, r runner.Runner, timeout time.Dur
 	}
 	list, err := model.ParseMarketplaces(res.Stdout)
 	if err != nil {
-		return marketsMsg{gen: gen, note: "marketplace list output unreadable"}
+		return marketsMsg{gen: gen, note: ui.Unreadable("marketplace list", res, err)}
 	}
 	for i := range list {
 		list[i].URL = mask.OneLine(mask.Text(list[i].URL)) // masked before it is stored

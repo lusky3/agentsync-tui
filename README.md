@@ -31,7 +31,8 @@ agentsync-tui                    # user scope
 agentsync-tui --project ./repo   # project scope
 agentsync-tui --version
 agentsync-tui --write-timeout 10m     # bound writes too (default: no bound)
-agentsync-tui --read-timeout 0       # no bound on background reads (default 2m)
+agentsync-tui --read-timeout 0       # no bound on network reads (default 2m)
+agentsync-tui --debug-log ./tui-debug.log   # keep masked samples of unparseable output
 ```
 
 `--read-timeout` bounds the network reads: import previews of plugins or a
@@ -40,7 +41,16 @@ lists, status, diff, explain, doctor and check a screen or the header chip
 runs) are bounded at `min(30s, --read-timeout)`: the flag can lower that
 bound but not lift it. `--write-timeout` bounds every write (apply, revert,
 import, `plugin upgrade`, ...). Both take a Go duration such as `90s` or
-`10m`; `0` means no bound (for the network reads or the writes). Writes are unbounded by default because a write
+`10m`; `0` means no bound (for the network reads or the writes). While a
+command runs, the status line shows how long it has been running.
+
+agentsync's text output is not a stable interface, so a screen may report
+`<command> output unreadable` after an agentsync upgrade. `--debug-log
+<file>` then appends, for every such read, the command name, exit code,
+parse error and the first 4 KiB of stdout and stderr, masked like
+everything else the TUI shows (the file is kept at mode 0600 and rotated at
+1 MiB like the activity log). Attach it to a bug report. It is off by
+default and never records raw output. Writes are unbounded by default because a write
 cut off partway (for example `plugin upgrade --all`) can leave agentsync's
 state and the destination files out of step.
 

@@ -132,7 +132,7 @@ func readStatus(ctx context.Context, gen int, r runner.Runner, timeout time.Dura
 	rep, perr := model.ParseStatus(res.Stdout)
 	if perr != nil || (res.ExitCode != 0 && res.ExitCode != 2) {
 		if res.ExitCode == 0 {
-			return statusMsg{gen: gen, note: "status output unreadable"}
+			return statusMsg{gen: gen, note: ui.Unreadable("status", res, perr)}
 		}
 		return statusMsg{gen: gen, note: ui.ReadNote("status", res, nil)}
 	}

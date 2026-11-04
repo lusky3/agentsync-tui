@@ -93,6 +93,14 @@ func (timeoutError) Unwrap() error { return context.DeadlineExceeded }
 
 var errNoInteractive = errors.New("interactive handover unavailable")
 
+// elapsedTick refreshes the status line's elapsed time once a second while
+// a command runs (statusLine); it stops with the run.
+type elapsedTick struct{}
+
+func elapsedTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return elapsedTick{} })
+}
+
 // running is the action currently in flight.
 type running struct {
 	act    actions.Action
@@ -180,13 +188,13 @@ func (a *App) start(act actions.Action) tea.Cmd {
 	}
 	a.running.cancel = cancel
 	r := a.run
-	return func() tea.Msg {
+	return tea.Batch(func() tea.Msg {
 		res, err := r.Run(ctx, act.Argv...)
 		if err != nil && limit > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			err = timeoutError{limit}
 		}
 		return RunMsg{Action: act, Result: res, Err: err}
-	}
+	}, elapsedTickCmd())
 }
 
 // cancelRunning cancels the in-flight action, if it can be cancelled.

@@ -172,7 +172,7 @@ func readList(ctx context.Context, id uint64, gen int, kind Kind, r runner.Runne
 	}
 	items, err := model.ParseList(res.Stdout)
 	if err != nil {
-		return listMsg{id: id, gen: gen, note: word + " list output unreadable"}
+		return listMsg{id: id, gen: gen, note: ui.Unreadable(word+" list", res, err)}
 	}
 	return listMsg{id: id, gen: gen, items: items}
 }

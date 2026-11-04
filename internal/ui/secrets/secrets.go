@@ -175,7 +175,7 @@ func readList(ctx context.Context, gen int, r runner.Runner, timeout time.Durati
 	}
 	keys, err := model.ParseSecretKeys(res.Stdout)
 	if err != nil {
-		return listMsg{gen: gen, note: "secret list output unreadable"}
+		return listMsg{gen: gen, note: ui.Unreadable("secret list", res, err)}
 	}
 	return listMsg{gen: gen, keys: keys, vault: vaultOK}
 }

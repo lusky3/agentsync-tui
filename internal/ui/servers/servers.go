@@ -131,7 +131,7 @@ func readStatus(ctx context.Context, gen int, r runner.Runner, timeout time.Dura
 	}
 	rep, err := model.ParseStatus(res.Stdout)
 	if err != nil {
-		return statusMsg{gen: gen, note: "status output unreadable"}
+		return statusMsg{gen: gen, note: ui.Unreadable("status", res, err)}
 	}
 	return statusMsg{gen: gen, ok: true, states: statesByServer(rep)}
 }

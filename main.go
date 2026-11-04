@@ -50,6 +50,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	project := fs.String("project", "", "project directory (implies --scope project)")
 	readTimeout := fs.Duration("read-timeout", ui.DefaultReadTimeout,
 		"bound on network reads (import previews, plugin outdated); 0 = none. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
+	debugLog := fs.String("debug-log", "",
+		"append a masked sample (4 KiB per stream, parse error, exit code) of every read whose output could not be parsed to this file, for bug reports; off by default")
 	writeTimeout := fs.Duration("write-timeout", 0,
 		"bound on every write (apply, import, plugin upgrade, ...); 0 = none. A write cut off partway can leave agentsync's state and the destination files out of step")
 	if err := fs.Parse(args); err != nil {
@@ -65,6 +67,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *showVersion {
 		_, _ = fmt.Fprintln(stdout, "agentsync-tui "+resolveVersion(version, debug.ReadBuildInfo))
 		return 0
+	}
+
+	if *debugLog != "" {
+		abs, err := filepath.Abs(*debugLog)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
+			return 2
+		}
+		ui.SetDebugLog(abs)
 	}
 
 	scope, projectDir, err := resolveScope(*scopeFlag, *project)

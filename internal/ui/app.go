@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -250,6 +251,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, a.quitDeadline()
 		}
 		return a, nil
+	case elapsedTick:
+		if a.running != nil && a.running.cancel != nil {
+			return a, elapsedTickCmd() // the status line re-renders with the elapsed time
+		}
+		return a, nil
 	case chipMsg:
 		if msg.gen == a.chipGen && msg.state != chipSuperseded {
 			a.chip = msg.state
@@ -400,11 +406,18 @@ func (a *App) logPane() string {
 	return strings.Join(out, "\n")
 }
 
+// statusLine is the status text, with the running command's elapsed time
+// appended so a long or stuck write is visibly long (writes have no bound
+// unless --write-timeout is set).
 func (a *App) statusLine() string {
 	if a.status == "" {
 		return " "
 	}
-	return logSafe(a.status)
+	s := logSafe(a.status)
+	if r := a.running; r != nil && r.cancel != nil {
+		s += "  (" + time.Since(r.start).Round(time.Second).String() + ")"
+	}
+	return s
 }
 
 // fit pads or clips s to exactly n lines.

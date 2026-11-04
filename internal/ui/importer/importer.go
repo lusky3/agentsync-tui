@@ -104,7 +104,7 @@ func readAgents(ctx context.Context, gen int, r runner.Runner, timeout time.Dura
 	}
 	list, perr := model.ParseAgentList(res.Stdout)
 	if perr != nil {
-		m.note = "agent list output unreadable"
+		m.note = ui.Unreadable("agent list", res, perr)
 		return m
 	}
 	for _, a := range list {

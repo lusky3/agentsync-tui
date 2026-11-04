@@ -26,7 +26,7 @@ func TestRunHelpExitsZero(t *testing.T) {
 		if !strings.Contains(errb.String(), "-version") {
 			t.Fatalf("%s: usage not printed: %q", a, errb.String())
 		}
-		for _, want := range []string{"-read-timeout", "(default 2m0s)", "-write-timeout", "0 = none"} {
+		for _, want := range []string{"-read-timeout", "(default 2m0s)", "-write-timeout", "0 = none", "-debug-log"} {
 			if !strings.Contains(errb.String(), want) {
 				t.Errorf("%s: usage lacks %q: %q", a, want, errb.String())
 			}
