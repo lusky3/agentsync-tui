@@ -358,7 +358,7 @@ func (s *Screen) store(m ui.RunMsg) {
 		b.WriteString(clean(m.Result.Stderr))
 	}
 	if m.Err != nil {
-		o.note = oneLine(clean(m.Err.Error()))
+		o.note = mask.OneLine(clean(m.Err.Error()))
 	} else if m.Result.ExitCode != 0 {
 		o.note = "exit " + strconv.Itoa(m.Result.ExitCode)
 	}

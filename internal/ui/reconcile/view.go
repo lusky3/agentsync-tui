@@ -29,10 +29,6 @@ const (
 // skippedPrefix starts each line of the --auto-safe report that needs a human.
 const skippedPrefix = "skipped (needs manual review):"
 
-func oneLine(v string) string {
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(mask.Sanitize(v))
-}
-
 // avail is how many report lines fit under the header and above the footer.
 func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
 
@@ -90,9 +86,9 @@ func (s *Screen) View() tea.View {
 	status := ""
 	switch {
 	case s.note != "":
-		status = styleDim.Render(oneLine(s.note))
+		status = styleDim.Render(mask.OneLine(s.note))
 	case s.handed != "":
-		status = styleDim.Render(oneLine(s.handed))
+		status = styleDim.Render(mask.OneLine(s.handed))
 	}
 	lines = append(lines, status)
 	body := s.lines()

@@ -70,7 +70,7 @@ func (s *Screen) rows() []string {
 		it := s.items[i]
 		line := it.Name
 		if it.Detail != "" {
-			line += "  " + styleDim.Render(oneLine(mask.Text(it.Detail)))
+			line += "  " + styleDim.Render(mask.OneLine(mask.Text(it.Detail)))
 		}
 		if i == s.cursor {
 			out = append(out, styleSel.Render("> "+ansi.Strip(line)))
@@ -94,7 +94,7 @@ func (s *Screen) resultPane() []string {
 	out := []string{"", style.Render(head)}
 	end := min(c.scroll+s.paneHeight(), len(c.lines))
 	for _, l := range c.lines[min(c.scroll, end):end] {
-		out = append(out, "  "+oneLine(l))
+		out = append(out, "  "+mask.OneLine(l))
 	}
 	if len(c.lines) > s.paneHeight() {
 		out = append(out, styleDim.Render("  ctrl+d/ctrl+u/pgdn/pgup scroll • "+strconv.Itoa(c.scroll+1)+"/"+strconv.Itoa(len(c.lines))))

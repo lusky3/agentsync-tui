@@ -321,3 +321,20 @@ func walk(v any, key string, forced bool) any {
 	}
 	return v
 }
+
+// OneLine sanitises s and folds newlines and tabs into spaces, for status
+// lines and notes that must stay on one row.
+func OneLine(s string) string {
+	return strings.NewReplacer("\n", " ", "\t", " ").Replace(Sanitize(s))
+}
+
+// FirstLine returns the first non-blank line of s, trimmed and sanitised,
+// or "" when there is none.
+func FirstLine(s string) string {
+	for _, l := range strings.Split(Sanitize(s), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return OneLine(l)
+		}
+	}
+	return ""
+}

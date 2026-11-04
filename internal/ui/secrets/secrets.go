@@ -20,7 +20,6 @@ import (
 	"context"
 	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -169,7 +168,7 @@ func readList(base context.Context, gen int, r runner.Runner, timeout time.Durat
 	defer cancel()
 	res, err := r.Run(ctx, "secret", "list")
 	if err != nil {
-		return listMsg{gen: gen, note: oneLine(mask.Text(err.Error()))}
+		return listMsg{gen: gen, note: mask.OneLine(mask.Text(err.Error()))}
 	}
 	if res.ExitCode != 0 {
 		if model.IsBackendNotConfigured(res.Stderr) || model.IsBackendNotConfigured(res.Stdout) {
@@ -177,10 +176,10 @@ func readList(base context.Context, gen int, r runner.Runner, timeout time.Durat
 			if !model.IsBackendNotConfigured(text) {
 				text = res.Stdout
 			}
-			return listMsg{gen: gen, vault: vaultNotConfigured, msg: firstLine(mask.Text(text))}
+			return listMsg{gen: gen, vault: vaultNotConfigured, msg: mask.FirstLine(mask.Text(text))}
 		}
 		n := "secret list exited " + itoa(res.ExitCode)
-		if l := firstLine(mask.Text(res.Stderr)); l != "" {
+		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
 			n += ": " + l
 		}
 		return listMsg{gen: gen, note: n}
@@ -225,7 +224,7 @@ func loadUses(home string) (map[string][]string, string) {
 	}
 	note := ""
 	if err != nil {
-		note = firstLine(mask.Text(err.Error()))
+		note = mask.FirstLine(mask.Text(err.Error()))
 	}
 	return uses, note
 }
@@ -322,20 +321,4 @@ func contains(l []string, s string) bool {
 		}
 	}
 	return false
-}
-
-// oneLine makes s safe for a single terminal line.
-func oneLine(s string) string {
-	s = mask.Sanitize(s)
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(s)
-}
-
-// firstLine returns the first non-blank line of s, trimmed and sanitised.
-func firstLine(s string) string {
-	for _, l := range strings.Split(mask.Sanitize(s), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return oneLine(l)
-		}
-	}
-	return ""
 }

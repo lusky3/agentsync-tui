@@ -151,10 +151,10 @@ func readList(base context.Context, id uint64, gen int, kind Kind, r runner.Runn
 	case errors.Is(err, runner.ErrNotInstalled):
 		return listMsg{id: id, gen: gen, note: "agentsync is not installed"}
 	case err != nil:
-		return listMsg{id: id, gen: gen, note: oneLine(mask.Text(err.Error()))}
+		return listMsg{id: id, gen: gen, note: mask.OneLine(mask.Text(err.Error()))}
 	case res.ExitCode != 0:
 		n := word + " list exited " + strconv.Itoa(res.ExitCode)
-		if l := firstLine(mask.Text(res.Stderr)); l != "" {
+		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
 			n += ": " + l
 		}
 		return listMsg{id: id, gen: gen, note: n}
@@ -164,7 +164,7 @@ func readList(base context.Context, id uint64, gen int, kind Kind, r runner.Runn
 		return listMsg{id: id, gen: gen, note: word + " list output unreadable"}
 	}
 	for i := range items {
-		items[i].Detail = oneLine(mask.Text(items[i].Detail))
+		items[i].Detail = mask.OneLine(mask.Text(items[i].Detail))
 	}
 	return listMsg{id: id, gen: gen, items: items}
 }
@@ -262,7 +262,7 @@ func (s *Screen) edit() tea.Cmd {
 	}
 	p, err := PathFor(s.home, s.kind, it.Name)
 	if err != nil {
-		s.note = "error: " + oneLine(mask.Text(err.Error()))
+		s.note = "error: " + mask.OneLine(mask.Text(err.Error()))
 		return nil
 	}
 	if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
@@ -303,7 +303,7 @@ func (s *Screen) onRun(m ui.RunMsg) {
 	case errors.Is(m.Err, runner.ErrNotInstalled):
 		r.state, r.lines = "could not run", []string{"agentsync is not installed"}
 	case m.Err != nil:
-		r.state, r.lines = "could not run", []string{firstLine(mask.Text(m.Err.Error()))}
+		r.state, r.lines = "could not run", []string{mask.FirstLine(mask.Text(m.Err.Error()))}
 	case m.Result.ExitCode != 0:
 		r.state, r.lines = "failed", storedLines(m.Result.Stderr, m.Result.Stdout)
 	default:
@@ -347,19 +347,3 @@ func (s *Screen) scrollBy(n int) {
 
 // paneHeight is the number of output lines the result pane shows.
 func (s *Screen) paneHeight() int { return max(s.height/3, 5) }
-
-// oneLine makes s safe for a single terminal line.
-func oneLine(s string) string {
-	s = mask.Sanitize(s)
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(s)
-}
-
-// firstLine returns the first non-blank line of s, trimmed and sanitised.
-func firstLine(s string) string {
-	for _, l := range strings.Split(mask.Sanitize(s), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return oneLine(l)
-		}
-	}
-	return ""
-}

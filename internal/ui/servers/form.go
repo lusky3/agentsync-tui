@@ -226,7 +226,7 @@ func (f *form) submit() (actions.Action, error) {
 		act, err = actions.McpAdd(s)
 	}
 	if err != nil {
-		f.err = firstLine(mask.Text(err.Error()))
+		f.err = mask.FirstLine(mask.Text(err.Error()))
 		return actions.Action{}, err
 	}
 	return act, nil
@@ -245,7 +245,7 @@ func echo(v string) string {
 	trimmed := strings.TrimLeft(v, " ")
 	lead := v[:len(v)-len(trimmed)]
 	if refVisible(trimmed) {
-		return lead + oneLine(mask.Value("", trimmed))
+		return lead + mask.OneLine(mask.Value("", trimmed))
 	}
 	return lead + strings.Repeat("•", utf8.RuneCountInString(trimmed))
 }
@@ -258,11 +258,11 @@ func (f *form) live(i int) string {
 		return "‹" + serverTypes[f.typ] + "›"
 	case fTarget:
 		if serverTypes[f.typ] == "stdio" {
-			return oneLine(mask.FreeTextLive(v))
+			return mask.OneLine(mask.FreeTextLive(v))
 		}
-		return oneLine(mask.Text(v))
+		return mask.OneLine(mask.Text(v))
 	case fArgs:
-		return oneLine(mask.FreeTextLive(v))
+		return mask.OneLine(mask.FreeTextLive(v))
 	case fEnv, fHeader:
 		sep := "="
 		if i == fHeader {
@@ -270,11 +270,11 @@ func (f *form) live(i int) string {
 		}
 		k, val, ok := strings.Cut(v, sep)
 		if !ok {
-			return oneLine(mask.Text(v))
+			return mask.OneLine(mask.Text(v))
 		}
-		return oneLine(mask.Text(k)) + sep + echo(val)
+		return mask.OneLine(mask.Text(k)) + sep + echo(val)
 	}
-	return oneLine(v)
+	return mask.OneLine(v)
 }
 
 func (f *form) view() string {
@@ -286,7 +286,7 @@ func (f *form) view() string {
 	if !actions.ValidID(id) {
 		id = "<id>"
 	}
-	warn := "literal value will be stored in plain text in mcp/" + oneLine(id) +
+	warn := "literal value will be stored in plain text in mcp/" + mask.OneLine(id) +
 		".toml — prefer ${env:NAME} or ${secret:NAME}"
 	out := []string{styleBold.Render("Add MCP server"), ""}
 	for i := 0; i < nFields; i++ {
@@ -312,7 +312,7 @@ func (f *form) view() string {
 			out = append(out, styleDim.Render("           comma-separated agent names; empty = agentsync default"))
 		}
 		for _, e := range list {
-			out = append(out, "           "+oneLine(mask.Text(e.k))+" = "+oneLine(mask.Value(e.k, e.v)))
+			out = append(out, "           "+mask.OneLine(mask.Text(e.k))+" = "+mask.OneLine(mask.Value(e.k, e.v)))
 			if !refVisible(e.v) {
 				out = append(out, styleWarn.Render("           ! "+warn))
 			}

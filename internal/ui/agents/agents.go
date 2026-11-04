@@ -6,7 +6,6 @@ package agents
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -107,11 +106,11 @@ func readList(base context.Context, gen int, r runner.Runner, timeout time.Durat
 	defer cancel()
 	res, err := r.Run(ctx, "agent", "list", "--all")
 	if err != nil {
-		return listMsg{gen: gen, note: oneLine(mask.Text(err.Error()))}
+		return listMsg{gen: gen, note: mask.OneLine(mask.Text(err.Error()))}
 	}
 	if res.ExitCode != 0 {
 		n := "agent list exited " + itoa(res.ExitCode)
-		if l := firstLine(mask.Text(res.Stderr)); l != "" {
+		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
 			n += ": " + l
 		}
 		return listMsg{gen: gen, note: n}
@@ -244,7 +243,7 @@ func (s *Screen) verified(m verifyMsg) tea.Cmd {
 		act, err = actions.AgentEnable(sel.Name)
 	}
 	if err != nil {
-		s.note = "error: " + firstLine(mask.Text(err.Error()))
+		s.note = "error: " + mask.FirstLine(mask.Text(err.Error()))
 		return nil
 	}
 	s.note = ""
@@ -258,20 +257,4 @@ func find(list []model.Agent, name string) (model.Agent, bool) {
 		}
 	}
 	return model.Agent{}, false
-}
-
-// oneLine makes s safe for a single terminal line.
-func oneLine(s string) string {
-	s = mask.Sanitize(s)
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(s)
-}
-
-// firstLine returns the first non-blank line of s, trimmed and sanitised.
-func firstLine(s string) string {
-	for _, l := range strings.Split(mask.Sanitize(s), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return oneLine(l)
-		}
-	}
-	return ""
 }

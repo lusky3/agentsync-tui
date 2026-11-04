@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
 var (
@@ -69,9 +70,9 @@ func (s *Screen) rows() []string {
 			}
 		}
 		if a.Scope != "" {
-			scope = oneLine(a.Scope)
+			scope = mask.OneLine(a.Scope)
 		}
-		line := pad(oneLine(a.Name), 20) + pad(status, 12) + pad(state, 10) + scope
+		line := pad(mask.OneLine(a.Name), 20) + pad(status, 12) + pad(state, 10) + scope
 		switch {
 		case i == s.cursor:
 			line = styleSel.Render("> " + line)

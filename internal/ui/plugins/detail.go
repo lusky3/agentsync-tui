@@ -78,7 +78,7 @@ func (s *Screen) liveField() string {
 			}
 		}
 	}
-	return oneLine(mask.Text(v))
+	return mask.OneLine(mask.Text(v))
 }
 
 // checkOutdated runs `plugin outdated` (network) on demand through the

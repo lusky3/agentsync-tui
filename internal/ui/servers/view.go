@@ -80,7 +80,7 @@ func (s *Screen) listView() string {
 	head := []string{"ID", "TYPE", "TARGET", "ON", "AGENTS"}
 	rows := make([][]string, len(s.servers))
 	for i, srv := range s.servers {
-		rows[i] = []string{oneLine(srv.ID), oneLine(srv.Type), target(srv), onOff(srv), allowlist(srv)}
+		rows[i] = []string{mask.OneLine(srv.ID), mask.OneLine(srv.Type), target(srv), onOff(srv), allowlist(srv)}
 	}
 	caps := []int{28, 5, 48, 3, 20}
 	widths := make([]int, len(head))
@@ -145,7 +145,7 @@ func (s *Screen) stateCell(id string) string {
 	cells := make([]string, len(agents))
 	for i, a := range agents {
 		cls := m[a]
-		txt := oneLine(a) + ":" + oneLine(cls)
+		txt := mask.OneLine(a) + ":" + mask.OneLine(cls)
 		switch {
 		case flagged[cls]:
 			cells[i] = styleBad.Render(txt + "!")
@@ -162,9 +162,9 @@ func (s *Screen) stateCell(id string) string {
 func target(srv source.Server) string {
 	if srv.Type == "stdio" || srv.URL == "" {
 		parts := append([]string{mask.FreeText(srv.Command)}, mask.CommandLine(srv.Args)...)
-		return oneLine(mask.Text(strings.Join(parts, " ")))
+		return mask.OneLine(mask.Text(strings.Join(parts, " ")))
 	}
-	return oneLine(mask.Text(srv.URL))
+	return mask.OneLine(mask.Text(srv.URL))
 }
 
 func onOff(srv source.Server) string {
@@ -182,7 +182,7 @@ func allowlist(srv source.Server) string {
 	}
 	names := make([]string, 0, len(list))
 	for _, v := range list {
-		names = append(names, oneLine(mask.Text(fmt.Sprint(v))))
+		names = append(names, mask.OneLine(mask.Text(fmt.Sprint(v))))
 	}
 	if len(names) == 0 {
 		return "-"
@@ -199,20 +199,20 @@ func (s *Screen) detailView() string {
 	if srv.Disabled {
 		state = "disabled"
 	}
-	out := []string{styleBold.Render(oneLine(srv.ID)) + "  " + styleDim.Render(state), ""}
+	out := []string{styleBold.Render(mask.OneLine(srv.ID)) + "  " + styleDim.Render(state), ""}
 	add := func(k, v string) { out = append(out, fmt.Sprintf("  %-9s %s", k, v)) }
-	add("type:", oneLine(srv.Type))
+	add("type:", mask.OneLine(srv.Type))
 	if srv.Command != "" {
-		add("command:", oneLine(mask.FreeText(srv.Command)))
+		add("command:", mask.OneLine(mask.FreeText(srv.Command)))
 	}
 	if len(srv.Args) > 0 {
 		add("args:", "")
 		for _, a := range mask.CommandLine(srv.Args) {
-			out = append(out, "    "+oneLine(a))
+			out = append(out, "    "+mask.OneLine(a))
 		}
 	}
 	if srv.URL != "" {
-		add("url:", oneLine(mask.Text(srv.URL)))
+		add("url:", mask.OneLine(mask.Text(srv.URL)))
 	}
 	out = appendKV(out, "env:", srv.Env)
 	out = appendKV(out, "headers:", srv.Headers)
@@ -240,7 +240,7 @@ func appendKV(out []string, title string, m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		out = append(out, "    "+oneLine(mask.Text(k))+" = "+oneLine(mask.Value(k, m[k])))
+		out = append(out, "    "+mask.OneLine(mask.Text(k))+" = "+mask.OneLine(mask.Value(k, m[k])))
 	}
 	return out
 }
@@ -273,25 +273,9 @@ func extraLines(extra map[string]any) []string {
 			}
 			v = mask.Text(v)
 		}
-		out = append(out, "    "+oneLine(mask.Text(k))+" = "+oneLine(v))
+		out = append(out, "    "+mask.OneLine(mask.Text(k))+" = "+mask.OneLine(v))
 	}
 	return out
-}
-
-// oneLine makes s safe for a single terminal line.
-func oneLine(s string) string {
-	s = mask.Sanitize(s)
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(s)
-}
-
-// firstLine returns the first non-blank line of s, trimmed and sanitised.
-func firstLine(s string) string {
-	for _, l := range strings.Split(mask.Sanitize(s), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return oneLine(l)
-		}
-	}
-	return ""
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }

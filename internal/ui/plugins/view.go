@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
 var (
@@ -102,9 +103,9 @@ func (s *Screen) pluginRows() []string {
 			state = "enabled"
 		}
 		if o, ok := s.outdated[strings.SplitN(p.Name, "@", 2)[0]]; ok {
-			upd = "↑ " + oneLine(o.To)
+			upd = "↑ " + mask.OneLine(o.To)
 		}
-		line := pad(oneLine(p.Name), 28) + pad(oneLine(p.Version), 12) + pad(state, 10) + upd
+		line := pad(mask.OneLine(p.Name), 28) + pad(mask.OneLine(p.Version), 12) + pad(state, 10) + upd
 		out = append(out, s.row(i == s.pCur, p.Enabled, line))
 	}
 	return out
@@ -119,7 +120,7 @@ func (s *Screen) marketRows() []string {
 	}
 	out := []string{styleBold.Render("  " + pad("MARKETPLACE", 24) + "SOURCE")}
 	for i, m := range s.markets {
-		out = append(out, s.row(i == s.mCur, true, pad(oneLine(m.Name), 24)+m.URL))
+		out = append(out, s.row(i == s.mCur, true, pad(mask.OneLine(m.Name), 24)+m.URL))
 	}
 	return out
 }
@@ -135,7 +136,7 @@ func (s *Screen) row(cursor, on bool, line string) string {
 }
 
 func (s *Screen) detailView() []string {
-	out := []string{styleBold.Render(oneLine(s.detailFor)) + styleDim.Render("  (esc close • j/k scroll)")}
+	out := []string{styleBold.Render(mask.OneLine(s.detailFor)) + styleDim.Render("  (esc close • j/k scroll)")}
 	switch {
 	case s.detailBusy:
 		return append(out, styleDim.Render("loading…"))

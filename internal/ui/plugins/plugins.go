@@ -176,7 +176,7 @@ func runRead(base context.Context, r runner.Runner, timeout time.Duration, args 
 	name := strings.Join(args[:min(len(args), 2)], " ")
 	res, err := r.Run(ctx, args...)
 	if err != nil {
-		return "", name + ": " + oneLine(mask.Text(err.Error()))
+		return "", name + ": " + mask.OneLine(mask.Text(err.Error()))
 	}
 	if res.ExitCode != 0 {
 		n := name + " exited " + strconv.Itoa(res.ExitCode)
@@ -210,7 +210,7 @@ func readMarkets(base context.Context, gen int, r runner.Runner, timeout time.Du
 		return marketsMsg{gen: gen, note: "marketplace list output unreadable"}
 	}
 	for i := range list {
-		list[i].URL = oneLine(mask.Text(list[i].URL)) // masked before it is stored
+		list[i].URL = mask.OneLine(mask.Text(list[i].URL)) // masked before it is stored
 	}
 	return marketsMsg{gen: gen, markets: list}
 }
@@ -331,17 +331,11 @@ func (s *Screen) move(d int) {
 	s.invalidate()
 }
 
-// oneLine makes s safe for a single terminal line.
-func oneLine(s string) string {
-	s = mask.Sanitize(s)
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(s)
-}
-
 // firstLine returns the first non-blank line of s, masked and sanitised.
 func firstLine(s string) string {
 	for _, l := range strings.Split(mask.Text(s), "\n") {
 		if l = strings.TrimSpace(l); l != "" {
-			return oneLine(l)
+			return mask.OneLine(l)
 		}
 	}
 	return ""

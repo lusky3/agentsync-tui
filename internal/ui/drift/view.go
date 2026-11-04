@@ -77,14 +77,14 @@ func (s *Screen) listLines() []string {
 	var body []string
 	selLine, idx := 0, 0
 	for _, a := range s.rep.Agents {
-		body = append(body, styleBold.Render(oneLine(mask.Text(a.Agent))+"  "+counts(a.Items)))
+		body = append(body, styleBold.Render(mask.OneLine(mask.Text(a.Agent))+"  "+counts(a.Items)))
 		for _, it := range s.visible(a) {
 			line := "  " + itemLine(it)
 			if idx == s.cursor {
 				selLine = len(body)
 				line = styleSel.Render("> " + line[2:])
 			}
-			body = append(body, line+"  "+styleDim.Render(oneLine(mask.Text(it.Path))))
+			body = append(body, line+"  "+styleDim.Render(mask.OneLine(mask.Text(it.Path))))
 			idx++
 		}
 	}
@@ -122,7 +122,7 @@ func counts(items []model.StatusItem) string {
 	sort.Strings(rest)
 	parts := make([]string, 0, len(n))
 	for _, c := range append(order, rest...) {
-		parts = append(parts, itoa(n[c])+" "+oneLine(mask.Text(c)))
+		parts = append(parts, itoa(n[c])+" "+mask.OneLine(mask.Text(c)))
 	}
 	if len(parts) == 0 {
 		return "no items"
@@ -132,7 +132,7 @@ func counts(items []model.StatusItem) string {
 
 // itemLine renders the class mark, class and label of one item.
 func itemLine(it model.StatusItem) string {
-	cls := oneLine(mask.Text(it.State))
+	cls := mask.OneLine(mask.Text(it.State))
 	label := pointerLabel(it.Pointer)
 	switch {
 	case flagged[it.State]:
@@ -150,7 +150,7 @@ func pointerLabel(p string) string {
 		p = rest
 	}
 	p = strings.NewReplacer("~1", "/", "~0", "~").Replace(p)
-	return oneLine(mask.Text(p))
+	return mask.OneLine(mask.Text(p))
 }
 
 func (s *Screen) legendLines() []string {
@@ -177,8 +177,8 @@ func (s *Screen) detailPane() []string {
 	body := s.detailBody()
 	start := min(s.scroll, s.maxScroll())
 	end := min(start+s.detailAvail(), len(body))
-	head := styleBold.Render(pointerLabel(s.item.Pointer)) + "  " + styleDim.Render(oneLine(mask.Text(s.item.State)))
-	out := append([]string{head, styleDim.Render(oneLine(mask.Text(s.item.Path)))}, body[start:end]...)
+	head := styleBold.Render(pointerLabel(s.item.Pointer)) + "  " + styleDim.Render(mask.OneLine(mask.Text(s.item.State)))
+	out := append([]string{head, styleDim.Render(mask.OneLine(mask.Text(s.item.Path)))}, body[start:end]...)
 	return append(out, styleDim.Render(detailKeys))
 }
 
@@ -206,7 +206,7 @@ func (s *Screen) detailBody() []string {
 		out = append(out, styleDim.Render("no differing hunk for this item"))
 	default:
 		for _, h := range s.hunks {
-			out = append(out, styleBold.Render("hunk "+oneLine(h.Pointer)))
+			out = append(out, styleBold.Render("hunk "+mask.OneLine(h.Pointer)))
 			out = append(out, side("source (canonical)", h.Source)...)
 			out = append(out, side("dest (on disk)", h.Dest)...)
 		}
@@ -224,7 +224,7 @@ func side(title, content string) []string {
 }
 
 func provLines(p model.Provenance) []string {
-	t := func(v string) string { return oneLine(mask.Text(v)) }
+	t := func(v string) string { return mask.OneLine(mask.Text(v)) }
 	out := []string{styleBold.Render("provenance")}
 	add := func(k, v string) { out = append(out, fmt.Sprintf("  %-10s %s", k, v)) }
 	if p.Scope != "" {
@@ -245,27 +245,11 @@ func provLines(p model.Provenance) []string {
 			add("ownership:", t(it.Ownership))
 			add("drift:", t(it.Drift))
 			for _, ref := range it.Secrets {
-				add("secret:", oneLine(mask.Value("", ref)))
+				add("secret:", mask.OneLine(mask.Value("", ref)))
 			}
 		}
 	}
 	return out
-}
-
-// oneLine makes v safe for a single terminal line.
-func oneLine(v string) string {
-	v = mask.Sanitize(v)
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(v)
-}
-
-// firstLine returns the first non-blank line of v, trimmed and sanitised.
-func firstLine(v string) string {
-	for _, l := range strings.Split(mask.Sanitize(v), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return oneLine(l)
-		}
-	}
-	return ""
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }

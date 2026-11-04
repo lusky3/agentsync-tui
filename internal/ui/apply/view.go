@@ -29,10 +29,6 @@ const (
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
-func oneLine(v string) string {
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(mask.Sanitize(v))
-}
-
 // avail is how many output lines fit under the fixed header and footer.
 func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
 
@@ -56,7 +52,7 @@ func (s *Screen) outLines() []string {
 func (s *Screen) maxScroll() int { return max(len(s.outLines())-s.avail(), 0) }
 
 func (s *Screen) field(label, val string, focused bool) string {
-	v := oneLine(val)
+	v := mask.OneLine(val)
 	if focused {
 		v = styleSel.Render(v + " ")
 	}
@@ -97,16 +93,16 @@ func (s *Screen) View() tea.View {
 		lines = append(lines, s.field("--to:  ", to, s.focus == fTo))
 	}
 	if act, err := s.build(false); err != nil {
-		lines = append(lines, styleBad.Render("  "+oneLine(mask.Text(err.Error()))))
+		lines = append(lines, styleBad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
 	} else {
-		lines = append(lines, styleBold.Render("  will run: ")+oneLine(act.Display()))
+		lines = append(lines, styleBold.Render("  will run: ")+mask.OneLine(act.Display()))
 	}
 	st := styleDim.Render("  no preview yet: preview first")
 	if s.prev[s.mode] != nil {
 		st = styleOK.Render("  preview ok")
 	}
 	if s.msg != "" {
-		st = styleWarn.Render("  " + oneLine(s.msg))
+		st = styleWarn.Render("  " + mask.OneLine(s.msg))
 	}
 	lines = append(lines, st)
 	if s.mode == modeRevert {
@@ -118,7 +114,7 @@ func (s *Screen) View() tea.View {
 	if o := s.out[s.mode]; o != nil {
 		head = styleBold.Render(o.title)
 		if o.note != "" {
-			head += "  " + styleBad.Render(oneLine(o.note))
+			head += "  " + styleBad.Render(mask.OneLine(o.note))
 		}
 	}
 	lines = append(lines, head)

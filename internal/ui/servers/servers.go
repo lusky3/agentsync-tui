@@ -117,7 +117,7 @@ func readStatus(base context.Context, gen int, r runner.Runner) statusMsg {
 	res, err := r.Run(ctx, "status", "--json")
 	switch {
 	case err != nil:
-		return statusMsg{gen: gen, note: firstLine(mask.Text(err.Error()))}
+		return statusMsg{gen: gen, note: mask.FirstLine(mask.Text(err.Error()))}
 	case res.ExitCode != 0:
 		return statusMsg{gen: gen, note: "status exited " + itoa(res.ExitCode)}
 	}
@@ -210,7 +210,7 @@ func loadWarning(err error) string {
 	var names []string
 	for _, e := range j.Unwrap() {
 		name, _, _ := strings.Cut(e.Error(), ": ")
-		names = append(names, oneLine(mask.Text(name)))
+		names = append(names, mask.OneLine(mask.Text(name)))
 	}
 	sort.Strings(names)
 	return itoa(len(names)) + " file(s) unreadable: " + strings.Join(names, ", ")
@@ -303,7 +303,7 @@ func (s *Screen) edit() tea.Cmd {
 	}
 	p, err := source.ServerPath(s.home, sel.ID)
 	if err != nil {
-		s.note = "error: " + firstLine(mask.Text(err.Error()))
+		s.note = "error: " + mask.FirstLine(mask.Text(err.Error()))
 		return nil
 	}
 	return func() tea.Msg { return ui.EditFileMsg{Path: p, After: []actions.Action{actions.Check()}} }
@@ -312,7 +312,7 @@ func (s *Screen) edit() tea.Cmd {
 // do hands a built action to the shell, or shows the builder error.
 func (s *Screen) do(act actions.Action, err error) tea.Cmd {
 	if err != nil {
-		s.note = "error: " + firstLine(mask.Text(err.Error()))
+		s.note = "error: " + mask.FirstLine(mask.Text(err.Error()))
 		return nil
 	}
 	s.note = ""

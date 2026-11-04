@@ -118,7 +118,7 @@ func (s *Screen) Refresh() tea.Cmd {
 func readStatus(base context.Context, gen int, r runner.Runner) statusMsg {
 	res, err := call(base, r, "status", "--json")
 	if err != nil {
-		return statusMsg{gen: gen, note: "status failed: " + firstLine(mask.Text(err.Error()))}
+		return statusMsg{gen: gen, note: "status failed: " + mask.FirstLine(mask.Text(err.Error()))}
 	}
 	// Exit 2 may still carry a valid report; any other non-zero exit is a
 	// failure even if stdout parses (ParseStatus ignores unknown fields).
@@ -128,7 +128,7 @@ func readStatus(base context.Context, gen int, r runner.Runner) statusMsg {
 		if res.ExitCode != 0 {
 			msg += " (exit " + strconv.Itoa(res.ExitCode) + ")"
 		}
-		if l := firstLine(mask.Text(res.Stderr)); l != "" {
+		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
 			msg += ": " + l
 		}
 		return statusMsg{gen: gen, note: msg}
@@ -282,10 +282,10 @@ func (s *Screen) openLegend() tea.Cmd {
 	return func() tea.Msg {
 		res, err := call(base, r, "status", "--legend")
 		if err != nil {
-			return legendMsg{seq: seq, note: "legend unavailable: " + firstLine(mask.Text(err.Error()))}
+			return legendMsg{seq: seq, note: "legend unavailable: " + mask.FirstLine(mask.Text(err.Error()))}
 		}
 		if strings.TrimSpace(res.Stdout) == "" {
-			return legendMsg{seq: seq, note: "legend unavailable: " + firstLine(mask.Text(res.Stderr))}
+			return legendMsg{seq: seq, note: "legend unavailable: " + mask.FirstLine(mask.Text(res.Stderr))}
 		}
 		return legendMsg{seq: seq, text: mask.Text(res.Stdout)}
 	}
@@ -329,12 +329,12 @@ func loadDiff(base context.Context, seq int, r runner.Runner, it model.StatusIte
 	m := detailMsg{seq: seq, kind: kindDiff}
 	res, err := call(base, r, "diff", it.Path, "--json")
 	if err != nil {
-		m.note = "diff unavailable: " + firstLine(mask.Text(err.Error()))
+		m.note = "diff unavailable: " + mask.FirstLine(mask.Text(err.Error()))
 		return m
 	}
 	hunks, perr := model.ParseDiff(res.Stdout)
 	if perr != nil {
-		m.note = "diff unavailable: " + firstLine(mask.Text(res.Stderr))
+		m.note = "diff unavailable: " + mask.FirstLine(mask.Text(res.Stderr))
 		return m
 	}
 	for _, h := range hunks {
@@ -349,12 +349,12 @@ func loadExplain(base context.Context, seq int, r runner.Runner, it model.Status
 	m := detailMsg{seq: seq, kind: kindExplain}
 	res, err := call(base, r, "explain", it.Path+"#"+it.Pointer, "--json")
 	if err != nil {
-		m.note = "provenance unavailable: " + firstLine(mask.Text(err.Error()))
+		m.note = "provenance unavailable: " + mask.FirstLine(mask.Text(err.Error()))
 		return m
 	}
 	p, perr := model.ParseExplain(res.Stdout)
 	if perr != nil {
-		m.note = "provenance unavailable: " + firstLine(mask.Text(res.Stderr))
+		m.note = "provenance unavailable: " + mask.FirstLine(mask.Text(res.Stderr))
 		return m
 	}
 	m.prov = &p

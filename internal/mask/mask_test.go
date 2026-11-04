@@ -390,3 +390,15 @@ func TestHunkNonForcedKeepsStructure(t *testing.T) {
 		t.Errorf("args readability lost: %q", h.Source)
 	}
 }
+
+func TestOneLineAndFirstLine(t *testing.T) {
+	if got := OneLine("a\x1b[31m\tb\nc"); got != "a b c" {
+		t.Errorf("OneLine = %q", got)
+	}
+	cases := map[string]string{"": "", "\n \n": "", "\n  first\x07 line \nsecond": "first line", "x\ty": "x y"}
+	for in, want := range cases {
+		if got := FirstLine(in); got != want {
+			t.Errorf("FirstLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

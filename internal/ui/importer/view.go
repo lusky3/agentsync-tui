@@ -26,10 +26,6 @@ const (
 	headLines = 8
 )
 
-func oneLine(v string) string {
-	return strings.NewReplacer("\n", " ", "\t", " ").Replace(mask.Sanitize(v))
-}
-
 // avail is how many output lines fit under the header and above the footer.
 func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
 
@@ -58,9 +54,9 @@ func (s *Screen) agentLine() string {
 	case len(s.agents) == 0 && s.note == "":
 		return "  agent:     " + styleWarn.Render("no registered agents (add one with: agentsync agent add <name>)")
 	case len(s.agents) == 0:
-		return "  agent:     " + styleBad.Render(oneLine(s.note))
+		return "  agent:     " + styleBad.Render(mask.OneLine(s.note))
 	}
-	line := "  agent:     " + styleBold.Render(oneLine(s.agent))
+	line := "  agent:     " + styleBold.Render(mask.OneLine(s.agent))
 	for i, a := range s.agents {
 		if a.Name == s.agent {
 			line += styleDim.Render("  (" + strconv.Itoa(i+1) + "/" + strconv.Itoa(len(s.agents)) + ")")
@@ -70,7 +66,7 @@ func (s *Screen) agentLine() string {
 		}
 	}
 	if s.note != "" {
-		line += "  " + styleBad.Render(oneLine(s.note))
+		line += "  " + styleBad.Render(mask.OneLine(s.note))
 	}
 	return line
 }
@@ -82,7 +78,7 @@ func (s *Screen) View() tea.View {
 		s.agentLine(),
 		"  component: " + styleBold.Render(compLabel(s.comp)),
 	}
-	name := oneLine(s.name)
+	name := mask.OneLine(s.name)
 	switch {
 	case s.typing:
 		name = styleSel.Render(name + " ")
@@ -95,9 +91,9 @@ func (s *Screen) View() tea.View {
 	case err == errNoAgent:
 		lines = append(lines, styleDim.Render("  will run: (nothing: no agent selected)"))
 	case err != nil:
-		lines = append(lines, styleBad.Render("  "+oneLine(mask.Text(err.Error()))))
+		lines = append(lines, styleBad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
 	default:
-		l := styleBold.Render("  will run: ") + oneLine(act.Display())
+		l := styleBold.Render("  will run: ") + mask.OneLine(act.Display())
 		if act.Network {
 			l += " " + styleWarn.Render("[network]")
 		}
@@ -108,14 +104,14 @@ func (s *Screen) View() tea.View {
 		st = styleOK.Render("  preview ok: press i to import")
 	}
 	if s.msg != "" {
-		st = styleWarn.Render("  " + oneLine(s.msg))
+		st = styleWarn.Render("  " + mask.OneLine(s.msg))
 	}
 	lines = append(lines, st, "")
 	head := styleDim.Render("output")
 	if s.out != nil {
 		head = styleBold.Render(s.out.title)
 		if s.out.note != "" {
-			head += "  " + styleBad.Render(oneLine(s.out.note))
+			head += "  " + styleBad.Render(mask.OneLine(s.out.note))
 		}
 	}
 	lines = append(lines, head)
