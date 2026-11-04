@@ -41,7 +41,6 @@ const (
 const (
 	memoryRoot  = "AGENTS" // memory/AGENTS.md; fragments live in memory/fragments/
 	listTimeout = 30 * time.Second
-	maxStored   = 64 << 10 // cap on stored check output (bytes, after masking)
 	staleNote   = "item changed — refreshed"
 )
 
@@ -63,6 +62,7 @@ type checkResult struct {
 	state  string // "passed", "failed" or "could not run"
 	exit   int
 	lines  []string
+	trunc  bool
 	scroll int
 }
 
@@ -305,36 +305,24 @@ func (s *Screen) onRun(m ui.RunMsg) {
 	case m.Err != nil:
 		r.state, r.lines = "could not run", []string{mask.FirstLine(mask.Text(m.Err.Error()))}
 	case m.Result.ExitCode != 0:
-		r.state, r.lines = "failed", storedLines(m.Result.Stderr, m.Result.Stdout)
+		r.state = "failed"
+		r.lines, r.trunc = storedLines(m.Result.Stderr, m.Result.Stdout)
 	default:
-		r.state, r.lines = "passed", storedLines(m.Result.Stdout, m.Result.Stderr)
+		r.state = "passed"
+		r.lines, r.trunc = storedLines(m.Result.Stdout, m.Result.Stderr)
 	}
 	s.check = r
 }
 
-// storedLines masks and sanitises the streams, then caps the result at
-// maxStored bytes; nothing raw is kept. The raw input is cut at rawCap
-// first, on a line boundary: a secret never straddles a line, so a cut
-// inside one cannot leave a half-masked value behind.
-func storedLines(first, second string) []string {
-	const rawCap = 4 * maxStored
-	in := func(x string) string {
-		if len(x) > rawCap {
-			x = x[:rawCap]
-			if i := strings.LastIndexByte(x, '\n'); i >= 0 {
-				x = x[:i]
-			}
-		}
-		return strings.TrimSpace(mask.Text(x))
+// storedLines masks and sanitises both streams, then caps the result at
+// ui.MaxOutput (ui.CappedStreams: mask first, so a cut cannot leave the
+// prefix of a secret behind); nothing raw is kept.
+func storedLines(first, second string) ([]string, bool) {
+	text, trunc := ui.CappedStreams(strings.TrimSpace(first), strings.TrimSpace(second), true)
+	if text = strings.TrimSpace(text); text == "" {
+		return nil, trunc
 	}
-	text := strings.TrimSpace(in(first) + "\n" + in(second))
-	if len(text) > maxStored {
-		text = strings.ToValidUTF8(text[:maxStored], "")
-	}
-	if text == "" {
-		return nil
-	}
-	return strings.Split(text, "\n")
+	return strings.Split(text, "\n"), trunc
 }
 
 func (s *Screen) scrollBy(n int) {

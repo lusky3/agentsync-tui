@@ -2,7 +2,6 @@ package servers
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,9 +16,6 @@ import (
 
 // flagged classes need attention: the destination differs from canonical.
 var flagged = map[string]bool{"drift": true, "conflict": true, "foreign-collision": true, "orphan-drifted": true}
-
-// sensitiveKey marks Extra keys whose scalar values are masked outright.
-var sensitiveKey = regexp.MustCompile(`(?i)token|secret|pass|key|auth|credential|bearer|cookie|session`)
 
 const listKeys = "enter detail • e enable/disable • x remove • a add • E edit • r refresh"
 
@@ -231,7 +227,7 @@ func appendKV(out []string, title string, m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		out = append(out, "    "+mask.OneLine(mask.Text(k))+" = "+mask.OneLine(mask.Value(k, m[k])))
+		out = append(out, "    "+mask.OneLine(mask.Text(k))+" = "+mask.OneLine(mask.Value(m[k])))
 	}
 	return out
 }
@@ -259,8 +255,8 @@ func extraLines(extra map[string]any) []string {
 			v = "{" + strconv.Itoa(len(x)) + " keys}"
 		default:
 			v = fmt.Sprint(x)
-			if sensitiveKey.MatchString(k) {
-				v = mask.Value(k, v)
+			if mask.SensitiveKey(k) {
+				v = mask.Value(v)
 			}
 			v = mask.Text(v)
 		}

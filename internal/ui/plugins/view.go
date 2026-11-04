@@ -94,7 +94,7 @@ func (s *Screen) pluginRows() []string {
 		if p.Enabled {
 			state = "enabled"
 		}
-		if o, ok := s.outdated[strings.SplitN(p.Name, "@", 2)[0]]; ok {
+		if o, ok := s.outdated[p.ID()]; ok {
 			upd = "↑ " + mask.OneLine(o.To)
 		}
 		line := theme.Pad(mask.OneLine(p.Name), 28) + theme.Pad(mask.OneLine(p.Version), 12) + theme.Pad(state, 10) + upd

@@ -361,7 +361,7 @@ func McpAdd(s AddSpec) (Action, error) {
 				return Action{}, err
 			}
 			pairs[i] = k + "=" + v
-			shown[i] = k + "=" + mask.Value(k, v)
+			shown[i] = k + "=" + mask.Value(v)
 		}
 		argv = append(argv, "--env", strings.Join(pairs, ","))
 		disp = append(disp, "--env", strings.Join(shown, ","))
@@ -375,7 +375,7 @@ func McpAdd(s AddSpec) (Action, error) {
 		}
 		argv = append(argv, "--header", h)
 		name, val, _ := strings.Cut(h, ":")
-		disp = append(disp, "--header", name+": "+mask.Value(name, strings.TrimSpace(val)))
+		disp = append(disp, "--header", name+": "+mask.Value(strings.TrimSpace(val)))
 	}
 	if len(s.Agents) > 0 {
 		if err := checkAgents(s.Agents); err != nil {

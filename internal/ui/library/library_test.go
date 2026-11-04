@@ -525,7 +525,7 @@ func TestCheckResultCappedAndScrollable(t *testing.T) {
 	}
 	s.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
 	s.Update(ui.RunMsg{Action: actions.Check(), Result: runner.Result{ExitCode: 1, Stdout: b.String()}})
-	if n := len(strings.Join(s.check.lines, "\n")); n > maxStored {
+	if n := len(strings.Join(s.check.lines, "\n")); n > ui.MaxOutput {
 		t.Errorf("stored %d bytes > cap", n)
 	}
 	if !strings.Contains(view(s), "line 000") {
@@ -670,31 +670,33 @@ func TestKeyCapturerFalse(t *testing.T) {
 
 func itemOf(n string) model.Item { return model.Item{Name: n} }
 
-// storedLines caps raw input before masking; the cut must fall on a line
-// boundary so a secret straddling the cap cannot survive half-masked.
-func TestStoredLinesCapDoesNotSplitSecret(t *testing.T) {
-	const rawCap = 4 * maxStored
-	line := `"api_key": "CANARYx1secret"` + "\n"
-	// Filler that masks to a fraction of its size, so the masked text stays
-	// under maxStored and the raw cut (22 bytes into line) is what survives.
-	filler := "password=" + strings.Repeat("A", 90) + "\n" // 100 bytes -> 13 after masking
+// storedLines masks before it caps: a secret that straddles the cap must
+// not survive as a bare prefix, and the cut falls on a line boundary.
+func TestStoredLinesMasksBeforeCap(t *testing.T) {
+	filler := strings.Repeat("x", 99) + "\n" // 100 bytes per line
 	var b strings.Builder
-	for i := 0; i < (rawCap-22)/len(filler); i++ {
+	for b.Len() < ui.MaxOutput-20 {
 		b.WriteString(filler)
 	}
-	for b.Len() < rawCap-22 {
-		b.WriteString("x\n")
+	// The secret starts 20 bytes before the cap, so a raw cut would keep
+	// "CANARYx1secr" with no key to mask it by.
+	b.WriteString(`"api_key": "CANARYx1secret_value_that_runs_past_the_cap"` + "\n")
+	lines, trunc := storedLines(b.String(), "")
+	if !trunc {
+		t.Fatal("input over the cap not reported as truncated")
 	}
-	if b.Len() != rawCap-22 {
-		t.Fatalf("filler length %d", b.Len())
+	if n := len(strings.Join(lines, "\n")); n > ui.MaxOutput {
+		t.Errorf("stored %d bytes > cap", n)
 	}
-	b.WriteString(line)
-	for _, l := range storedLines(b.String(), "") {
-		if strings.Contains(l, "CANARY") {
+	for _, l := range lines {
+		if strings.Contains(l, "CANARY") || strings.Contains(l, "secr") {
 			t.Fatalf("leaked across the cap: %q", l)
 		}
+		if len(l) != 99 && l != `"api_key": "`+"••••"+`"` {
+			t.Errorf("cut inside a line: %q", l)
+		}
 	}
-	if got := storedLines("ok\n", ""); len(got) != 1 || got[0] != "ok" {
-		t.Errorf("small input changed: %q", got)
+	if got, tr := storedLines("ok\n", ""); len(got) != 1 || got[0] != "ok" || tr {
+		t.Errorf("small input changed: %q %v", got, tr)
 	}
 }

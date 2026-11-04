@@ -33,9 +33,6 @@ import (
 // readTimeout bounds one report run.
 const readTimeout = 30 * time.Second
 
-// maxOutput caps the stored (masked) report.
-const maxOutput = 64 << 10
-
 // Screen is the reconcile tab.
 type Screen struct {
 	d     ui.Deps
@@ -102,24 +99,21 @@ func readReport(base context.Context, gen int, r runner.Runner) reportMsg {
 	defer cancel()
 	res, err := r.Run(ctx, actions.ReconcileReport().Argv...)
 	if err != nil {
-		m.note = "reconcile report unavailable: " + firstLine(clean(err.Error()))
+		m.note = "reconcile report unavailable: " + mask.FirstLine(err.Error())
 		return m
 	}
-	text := clean(res.Stdout)
+	text, trunc := mask.Capped(res.Stdout, ui.MaxOutput)
 	if strings.TrimSpace(text) == "" {
 		// Nothing to show: a non-zero exit is a failure, exit 0 an empty report.
 		if res.ExitCode != 0 {
 			m.note = "reconcile report failed (exit " + strconv.Itoa(res.ExitCode) + ")"
-			if l := firstLine(clean(res.Stderr)); l != "" {
+			if l := mask.FirstLine(res.Stderr); l != "" {
 				m.note += ": " + l
 			}
 			return m
 		}
 	}
-	if len(text) > maxOutput {
-		text, m.trunc = cutRunes(text, maxOutput), true
-	}
-	m.ok, m.text, m.exit = true, text, res.ExitCode
+	m.ok, m.text, m.trunc, m.exit = true, text, trunc, res.ExitCode
 	return m
 }
 
@@ -157,7 +151,7 @@ func (s *Screen) onRun(m ui.RunMsg) {
 	case errors.Is(m.Err, context.Canceled):
 		s.handed = "interactive reconcile cancelled"
 	case m.Err != nil:
-		s.handed = "interactive reconcile failed: " + firstLine(clean(m.Err.Error()))
+		s.handed = "interactive reconcile failed: " + mask.FirstLine(m.Err.Error())
 	case m.Result.ExitCode != 0:
 		s.handed = "interactive reconcile exited " + strconv.Itoa(m.Result.ExitCode)
 	default:
@@ -184,24 +178,4 @@ func (s *Screen) key(k string) tea.Cmd {
 	}
 	s.scroll = min(s.scroll, s.maxScroll())
 	return nil
-}
-
-// clean masks (before any truncation, so a cut cannot split a secret) then
-// sanitises.
-func clean(v string) string { return mask.Sanitize(mask.Text(v)) }
-
-func firstLine(v string) string {
-	for _, l := range strings.Split(v, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return l
-		}
-	}
-	return ""
-}
-
-func cutRunes(v string, n int) string {
-	for n > 0 && n < len(v) && v[n]&0xC0 == 0x80 {
-		n--
-	}
-	return v[:n]
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
@@ -86,6 +87,9 @@ func (s *Screen) resultPane() []string {
 	end := min(c.scroll+s.paneHeight(), len(c.lines))
 	for _, l := range c.lines[min(c.scroll, end):end] {
 		out = append(out, "  "+mask.OneLine(l))
+	}
+	if c.trunc {
+		out = append(out, theme.Warn.Render("  "+ui.TruncatedMarker))
 	}
 	if len(c.lines) > s.paneHeight() {
 		out = append(out, theme.Dim.Render("  ctrl+d/ctrl+u/pgdn/pgup scroll • "+strconv.Itoa(c.scroll+1)+"/"+strconv.Itoa(len(c.lines))))

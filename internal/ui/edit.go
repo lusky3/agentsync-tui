@@ -48,7 +48,7 @@ type EditOutcomeMsg struct {
 
 // editOutcome broadcasts m (reason sanitised) to every screen.
 func (a *App) editOutcome(m EditOutcomeMsg) tea.Cmd {
-	m.Err = oneLine(mask.Text(m.Err))
+	m.Err = logSafe(mask.Text(m.Err))
 	return tea.Batch(a.broadcast(m)...)
 }
 
@@ -114,7 +114,7 @@ func resolveInside(home, p string) (string, error) {
 
 // editFile handles an EditFileMsg inside Update.
 func (a *App) editFile(m EditFileMsg) tea.Cmd {
-	base := oneLine(mask.Text(filepath.Base(m.Path)))
+	base := logSafe(mask.Text(filepath.Base(m.Path)))
 	switch {
 	case a.running != nil || a.modal != nil:
 		a.setStatus(statusFail, "busy: another action is in progress")
@@ -130,7 +130,7 @@ func (a *App) editFile(m EditFileMsg) tea.Cmd {
 	}
 	argv, err := editorArgv(os.Getenv)
 	if err != nil {
-		a.setStatus(statusFail, "edit refused: "+oneLine(mask.Text(err.Error())))
+		a.setStatus(statusFail, "edit refused: "+logSafe(mask.Text(err.Error())))
 		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: "edit refused: " + err.Error()})
 	}
 	start := time.Now()
@@ -162,8 +162,8 @@ func (a *App) editDone(m editDoneMsg) tea.Cmd {
 	fin := EditOutcomeMsg{Path: m.path, Finished: true}
 	switch {
 	case m.err != nil:
-		a.setStatus(statusFail, "editor error: "+m.base+": "+firstLine(mask.Text(m.err.Error())))
-		fin.Err = "editor error: " + firstLine(mask.Text(m.err.Error()))
+		a.setStatus(statusFail, "editor error: "+m.base+": "+mask.FirstLine(m.err.Error()))
+		fin.Err = "editor error: " + mask.FirstLine(m.err.Error())
 	case m.res.ExitCode != 0:
 		a.setStatus(statusFail, "editor failed (exit "+strconv.Itoa(m.res.ExitCode)+"): "+m.base)
 		fin.Err = "editor failed (exit " + strconv.Itoa(m.res.ExitCode) + ")"

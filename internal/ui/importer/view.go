@@ -24,16 +24,7 @@ func (s *Screen) outLines() []string {
 	if s.out == nil {
 		return nil
 	}
-	var ls []string
-	if s.out.text != "" {
-		for _, l := range strings.Split(strings.TrimRight(s.out.text, "\n"), "\n") {
-			ls = append(ls, strings.ReplaceAll(l, "\t", "  "))
-		}
-	}
-	if s.out.trunc {
-		ls = append(ls, theme.Warn.Render("output truncated"))
-	}
-	return ls
+	return s.out.Lines()
 }
 
 func (s *Screen) maxScroll() int { return max(len(s.outLines())-s.avail(), 0) }
@@ -100,9 +91,9 @@ func (s *Screen) View() tea.View {
 	lines = append(lines, st, "")
 	head := theme.Dim.Render("output")
 	if s.out != nil {
-		head = theme.Bold.Render(s.out.title)
-		if s.out.note != "" {
-			head += "  " + theme.Bad.Render(mask.OneLine(s.out.note))
+		head = theme.Bold.Render(s.out.Title)
+		if s.out.Note != "" {
+			head += "  " + theme.Bad.Render(mask.OneLine(s.out.Note))
 		}
 	}
 	lines = append(lines, head)

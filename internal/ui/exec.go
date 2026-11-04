@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -214,10 +213,10 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 	case errors.As(m.Err, new(timeoutError)):
 		a.setStatus(statusFail, "failed: "+title+": "+m.Err.Error())
 	case m.Err != nil:
-		a.setStatus(statusFail, "error: "+title+": "+firstLine(mask.Text(m.Err.Error())))
+		a.setStatus(statusFail, "error: "+title+": "+mask.FirstLine(m.Err.Error()))
 	case m.Result.ExitCode != 0:
 		msg := "failed (exit " + strconv.Itoa(m.Result.ExitCode) + "): "
-		if l := firstLine(mask.Text(m.Result.Stderr)); l != "" {
+		if l := mask.FirstLine(m.Result.Stderr); l != "" {
 			msg += l
 		} else {
 			msg += title
@@ -235,16 +234,6 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 		cmds = append(cmds, s.Refresh())
 	}
 	return tea.Batch(cmds...)
-}
-
-// firstLine returns the first non-blank line of s, trimmed.
-func firstLine(s string) string {
-	for _, l := range strings.Split(s, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return l
-		}
-	}
-	return ""
 }
 
 // quitGrace bounds how long quitting waits for a cancelled or interrupted

@@ -252,14 +252,14 @@ func TestCapAfterMaskingRuneSafe(t *testing.T) {
 	for pad := 0; pad < 3; pad++ {
 		// The secret starts a few bytes before the cap; pad shifts the cap
 		// into the middle of a 2-byte rune.
-		prefix := strings.Repeat("é", (maxOutput-8)/2) + strings.Repeat("x", pad)
+		prefix := strings.Repeat("é", (ui.MaxOutput-8)/2) + strings.Repeat("x", pad)
 		text := prefix + "password: " + canary + "\n" + strings.Repeat("é", 100)
 		fr := newFake()
 		fr.res["doctor"] = runner.Result{Stdout: text}
 		s := newScreen(fr)
 		refresh(s)
 		got := s.doctor.text
-		if len(got) > maxOutput || !s.doctor.trunc {
+		if len(got) > ui.MaxOutput || !s.doctor.trunc {
 			t.Errorf("pad %d: len %d trunc %v", pad, len(got), s.doctor.trunc)
 		}
 		if !utf8.ValidString(got) {
@@ -448,13 +448,13 @@ func TestRealFixtures(t *testing.T) {
 func TestCapAfterMaskingKeepsTrailingContextSecrets(t *testing.T) {
 	head := "https://user:" + canary
 	for _, back := range []int{0, 3, 6} { // the cap lands this many bytes before the secret's end
-		n := maxOutput - len(head) + back
+		n := ui.MaxOutput - len(head) + back
 		prefix := strings.Repeat("é", n/2) + strings.Repeat("x", n%2)
 		fr := newFake()
 		fr.res["doctor"] = runner.Result{Stdout: prefix + head + "@host/path\n" + strings.Repeat("é", 50)}
 		s := newScreen(fr)
 		refresh(s)
-		if len(s.doctor.text) > maxOutput || !s.doctor.trunc || !utf8.ValidString(s.doctor.text) {
+		if len(s.doctor.text) > ui.MaxOutput || !s.doctor.trunc || !utf8.ValidString(s.doctor.text) {
 			t.Errorf("back %d: len %d trunc %v", back, len(s.doctor.text), s.doctor.trunc)
 		}
 		if strings.Contains(s.doctor.text, "CANARY") {

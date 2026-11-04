@@ -69,7 +69,7 @@ var (
 
 	schemeOnlyRe = regexp.MustCompile(`^\s*(?i:bearer|basic|token)?\s*[:\s]*$`)
 	headerNameRe = regexp.MustCompile(`^([A-Za-z0-9_\-]+:[ \t]+)`)
-	sensitiveRe  = regexp.MustCompile(`(?i)token|secret|password|passwd|api[-_]?key|authorization|credential|bearer|cookie`)
+	sensitiveRe  = regexp.MustCompile(`(?i)token|secret|pass|key|auth|credential|bearer|cookie|session`)
 	secretFlagRe = regexp.MustCompile(`(?i)^-{1,2}(?:h|header|[a-z0-9_\-]*(?:token|key|secret|password|passwd|auth|authorization|bearer|credential)[a-z0-9_\-]*)$`)
 )
 
@@ -87,12 +87,11 @@ func onlyRefs(s string) bool {
 	return strings.Trim(rest, " \t:") == ""
 }
 
-// Value returns val for display. References pass through, literal text
-// containing a reference stays visible apart from token-shaped secrets, and
-// everything else becomes Mask. key is accepted for call-site clarity; the
-// decision never depends on it, so an unrecognised key cannot leak a value.
-func Value(key, val string) string {
-	_ = key
+// Value returns a configuration value for display. References pass through,
+// literal text containing a reference stays visible apart from token-shaped
+// secrets, and everything else becomes Mask. The decision never depends on
+// the key the value belongs to, so an unrecognised key cannot leak a value.
+func Value(val string) string {
 	if strings.TrimSpace(val) == "" {
 		return Sanitize(val)
 	}
@@ -227,7 +226,7 @@ func hunkSide(s, key string, forced, mcp bool) string {
 	var v any
 	if err := dec.Decode(&v); err != nil {
 		if mcp {
-			return Value(key, s)
+			return Value(s)
 		}
 		return Text(s)
 	}
@@ -245,13 +244,18 @@ func hunkSide(s, key string, forced, mcp bool) string {
 	return out
 }
 
-func secretKey(k string) bool {
+// SensitiveKey reports whether k names something whose scalar value must be
+// masked outright: the env/headers tables and any key that reads like a
+// credential. It is the one definition shared by Hunk and the screens.
+func SensitiveKey(k string) bool {
 	switch strings.ToLower(k) {
 	case "env", "environment", "headers":
 		return true
 	}
 	return sensitiveRe.MatchString(k)
 }
+
+func secretKey(k string) bool { return SensitiveKey(k) }
 
 // walk masks a decoded JSON tree. Under a secret-bearing key every scalar
 // (string, number, bool) becomes Mask unless it is a reference; elsewhere
@@ -260,7 +264,7 @@ func walk(v any, key string, forced bool) any {
 	switch x := v.(type) {
 	case string:
 		if forced {
-			return Value(key, x)
+			return Value(x)
 		}
 		return Text(x)
 	case json.Number, bool:
@@ -323,18 +327,49 @@ func walk(v any, key string, forced bool) any {
 }
 
 // OneLine sanitises s and folds newlines and tabs into spaces, for status
-// lines and notes that must stay on one row.
+// lines and notes that must stay on one row. It does not mask: callers pass
+// text that is already masked, or identifiers.
 func OneLine(s string) string {
 	return strings.NewReplacer("\n", " ", "\t", " ").Replace(Sanitize(s))
 }
 
-// FirstLine returns the first non-blank line of s, trimmed and sanitised,
-// or "" when there is none.
+// FirstLine returns the first non-blank line of s, masked (Text), sanitised
+// and trimmed, or "" when there is none. It is the one way an error message
+// or a stderr stream becomes a status note.
 func FirstLine(s string) string {
-	for _, l := range strings.Split(Sanitize(s), "\n") {
+	for _, l := range strings.Split(Text(s), "\n") {
 		if l = strings.TrimSpace(l); l != "" {
 			return OneLine(l)
 		}
 	}
 	return ""
+}
+
+// Capped masks (Text) and sanitises s, then caps it at n bytes. The cap is
+// applied after masking so a cut can never leave the prefix of a secret
+// behind, and it falls on the last line break within the budget (or, when
+// there is none, on a rune boundary). truncated reports whether anything
+// was dropped.
+func Capped(s string, n int) (text string, truncated bool) {
+	s = Sanitize(Text(s))
+	if n <= 0 || len(s) <= n {
+		return s, false
+	}
+	cut := s[:n]
+	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
+		return cut[:i], true
+	}
+	return strings.ToValidUTF8(cutRune(cut), ""), true
+}
+
+// cutRune drops a trailing partial UTF-8 sequence.
+func cutRune(s string) string {
+	n := len(s)
+	for n > 0 && n < len(s)+1 && s[n-1]&0xC0 == 0x80 {
+		n--
+	}
+	if n > 0 && s[n-1] >= 0xC0 { // a lead byte with no continuation
+		n--
+	}
+	return s[:n]
 }

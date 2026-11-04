@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -29,9 +28,6 @@ import (
 // readTimeout bounds the agent list read.
 const readTimeout = 30 * time.Second
 
-// maxOutput caps the stored (masked) output of one run.
-const maxOutput = 64 << 10
-
 const msgPreviewFirst = "preview first"
 
 // components in cycle order; "" is "all" (the agent's full native config).
@@ -42,14 +38,6 @@ func compLabel(c string) string {
 		return "all"
 	}
 	return c
-}
-
-// output is one run's masked result.
-type output struct {
-	title string
-	text  string // masked + sanitised, capped
-	trunc bool
-	note  string // masked error / exit note
 }
 
 // agentsMsg carries a parsed `agent list` (ok=false: unavailable, see note).
@@ -77,7 +65,7 @@ type Screen struct {
 	typing bool   // the name field has focus
 
 	g      gate
-	out    *output
+	out    *ui.Output
 	scroll int
 	msg    string
 
@@ -113,7 +101,7 @@ func readAgents(base context.Context, gen int, r runner.Runner) agentsMsg {
 	defer cancel()
 	res, err := r.Run(ctx, "agent", "list")
 	if err != nil {
-		m.note = "agent list unavailable: " + firstLine(clean(err.Error()))
+		m.note = "agent list unavailable: " + mask.FirstLine(err.Error())
 		return m
 	}
 	list, perr := model.ParseAgentList(res.Stdout)
@@ -122,7 +110,7 @@ func readAgents(base context.Context, gen int, r runner.Runner) agentsMsg {
 		if res.ExitCode != 0 {
 			m.note += " (exit " + strconv.Itoa(res.ExitCode) + ")"
 		}
-		if l := firstLine(clean(res.Stderr)); l != "" {
+		if l := mask.FirstLine(res.Stderr); l != "" {
 			m.note += ": " + l
 		}
 		return m
@@ -361,45 +349,8 @@ func (s *Screen) onEdit(m ui.EditOutcomeMsg) {
 	}
 }
 
-// store keeps only the masked form of the run's output.
+// store keeps only the masked, capped form of the run's output (ui.OutputOf).
 func (s *Screen) store(m ui.RunMsg) {
-	o := &output{title: mask.Sanitize(m.Action.Title)}
-	var b strings.Builder
-	b.WriteString(clean(m.Result.Stdout))
-	if m.Err != nil || m.Result.ExitCode != 0 {
-		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
-			b.WriteString("\n")
-		}
-		b.WriteString(clean(m.Result.Stderr))
-	}
-	if m.Err != nil {
-		o.note = mask.OneLine(clean(m.Err.Error()))
-	} else if m.Result.ExitCode != 0 {
-		o.note = "exit " + strconv.Itoa(m.Result.ExitCode)
-	}
-	o.text = b.String()
-	if len(o.text) > maxOutput {
-		o.text, o.trunc = cutRunes(o.text, maxOutput), true
-	}
-	s.out, s.scroll = o, 0
-}
-
-// clean masks (before any truncation, so a cut cannot split a secret) then
-// sanitises.
-func clean(v string) string { return mask.Sanitize(mask.Text(v)) }
-
-func firstLine(v string) string {
-	for _, l := range strings.Split(v, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return l
-		}
-	}
-	return ""
-}
-
-func cutRunes(v string, n int) string {
-	for n > 0 && n < len(v) && v[n]&0xC0 == 0x80 {
-		n--
-	}
-	return v[:n]
+	o := ui.OutputOf(m)
+	s.out, s.scroll = &o, 0
 }

@@ -58,7 +58,7 @@ func (s *Screen) submitAdd() tea.Cmd {
 		act, err = actions.MarketplaceAdd(strings.TrimSpace(val))
 	}
 	if err != nil {
-		s.inlineE = firstLine(err.Error())
+		s.inlineE = mask.FirstLine(err.Error())
 		return nil
 	}
 	s.typing, s.buf, s.inlineE, s.note = -1, "", "", ""
@@ -116,7 +116,7 @@ func (s *Screen) applyOutdated(m outdatedMsg) {
 	}
 	s.outdated, s.outdatedRaw, s.note = map[string]model.Outdated{}, m.raw, ""
 	for _, o := range m.list {
-		s.outdated[strings.SplitN(o.Name, "@", 2)[0]] = o
+		s.outdated[o.ID()] = o
 	}
 	if !m.parsed {
 		s.note = "outdated output not understood — raw text shown"
@@ -139,7 +139,7 @@ func (s *Screen) openDetail() tea.Cmd {
 		return nil
 	}
 	p, ok := s.selPlugin()
-	if !ok || !actions.ValidID(strings.SplitN(p.Name, "@", 2)[0]) {
+	if !ok || !actions.ValidID(p.ID()) {
 		s.detailOpen = false
 		return nil
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
@@ -25,18 +26,7 @@ const skippedPrefix = "skipped (needs manual review):"
 // avail is how many report lines fit under the header and above the footer.
 func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
 
-func (s *Screen) lines() []string {
-	var ls []string
-	if s.report != "" {
-		for _, l := range strings.Split(strings.TrimRight(s.report, "\n"), "\n") {
-			ls = append(ls, strings.ReplaceAll(l, "\t", "  "))
-		}
-	}
-	if s.trunc {
-		ls = append(ls, theme.Warn.Render("output truncated"))
-	}
-	return ls
-}
+func (s *Screen) lines() []string { return ui.TextLines(s.report, s.trunc) }
 
 func (s *Screen) maxScroll() int { return max(len(s.lines())-s.avail(), 0) }
 

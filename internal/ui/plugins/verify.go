@@ -1,8 +1,6 @@
 package plugins
 
 import (
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
@@ -22,7 +20,7 @@ func (s *Screen) guard() bool {
 
 func (s *Screen) emit(act actions.Action, err error) tea.Cmd {
 	if err != nil {
-		s.note = "error: " + firstLine(mask.Text(err.Error()))
+		s.note = "error: " + mask.FirstLine(err.Error())
 		return nil
 	}
 	s.note = ""
@@ -47,7 +45,7 @@ func (s *Screen) mutate(k string) tea.Cmd {
 		if !ok {
 			return nil
 		}
-		if !actions.ValidID(strings.SplitN(p.Name, "@", 2)[0]) {
+		if !actions.ValidID(p.ID()) {
 			s.note = "invalid plugin name"
 			return nil
 		}

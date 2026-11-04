@@ -6,6 +6,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
@@ -22,14 +24,7 @@ func sectionLines(title string, sec section) []string {
 	case !sec.loaded:
 		ls = append(ls, theme.Dim.Render("loading…"))
 	case sec.ok:
-		if t := strings.TrimRight(sec.text, "\n"); t != "" {
-			for _, l := range strings.Split(t, "\n") {
-				ls = append(ls, strings.ReplaceAll(l, "\t", "  "))
-			}
-		}
-		if sec.trunc {
-			ls = append(ls, theme.Warn.Render("output truncated"))
-		}
+		ls = append(ls, ui.TextLines(sec.text, sec.trunc)...)
 	}
 	return ls
 }
@@ -52,14 +47,12 @@ func verdict(sec section, text string) string {
 	return theme.Dim.Render(text)
 }
 
-func oneLine(v string) string { return strings.Join(strings.Fields(v), " ") }
-
 // View implements tea.Model. Both outputs are stored masked and sanitised.
 func (s *Screen) View() tea.View {
 	status := ""
 	for _, n := range []string{s.doctor.note, s.check.note} {
 		if n != "" {
-			status += oneLine(n) + "  "
+			status += mask.OneLine(n) + "  "
 		}
 	}
 	lines := []string{

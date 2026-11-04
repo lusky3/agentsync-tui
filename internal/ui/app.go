@@ -357,7 +357,7 @@ func (a *App) statusLine() string {
 	if a.status == "" {
 		return " "
 	}
-	return oneLine(a.status)
+	return logSafe(a.status)
 }
 
 // fit pads or clips s to exactly n lines.

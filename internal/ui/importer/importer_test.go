@@ -422,27 +422,27 @@ func TestImportOutputStoredMasked(t *testing.T) {
 		t.Fatal("no output stored")
 	}
 	for _, bad := range []string{"CANARYx1", "\x1b", "\u202e"} {
-		if strings.Contains(o.text, bad) || strings.Contains(h.view(), bad) {
-			t.Fatalf("%q survived (stored %q)", bad, o.text)
+		if strings.Contains(o.Text, bad) || strings.Contains(h.view(), bad) {
+			t.Fatalf("%q survived (stored %q)", bad, o.Text)
 		}
 	}
-	if !strings.Contains(o.text, "would import mcp/x.toml") || !strings.Contains(o.text, "password: ••••") {
-		t.Fatalf("stored = %q", o.text)
+	if !strings.Contains(o.Text, "would import mcp/x.toml") || !strings.Contains(o.Text, "password: ••••") {
+		t.Fatalf("stored = %q", o.Text)
 	}
 	// errors and stderr are masked as well
 	h.press("i")
 	a := h.asked[0]
 	h.asked = nil
 	h.send(ui.RunMsg{Action: a, Result: runner.Result{ExitCode: 2, Stderr: "fail token=CANARYx1"}, Err: errors.New("x secret=CANARYx1")})
-	if strings.Contains(h.s.out.text+h.s.out.note, "CANARYx1") || strings.Contains(h.view(), "CANARYx1") {
+	if strings.Contains(h.s.out.Text+h.s.out.Note, "CANARYx1") || strings.Contains(h.view(), "CANARYx1") {
 		t.Fatalf("error leaked: %+v", h.s.out)
 	}
 	// capped at 64 KiB
 	h = claudeShell(t, strings.Repeat("  → would import mcp/x.toml\n", 5000))
 	h.setComponent("mcp")
 	h.press("p")
-	if len(h.s.out.text) > 64<<10 || !h.s.out.trunc {
-		t.Fatalf("len=%d trunc=%v", len(h.s.out.text), h.s.out.trunc)
+	if len(h.s.out.Text) > 64<<10 || !h.s.out.Truncated {
+		t.Fatalf("len=%d trunc=%v", len(h.s.out.Text), h.s.out.Truncated)
 	}
 	for i := 0; i < 3000; i++ {
 		h.press("pgdown")

@@ -410,7 +410,7 @@ func TestDetailCappedAndScrollable(t *testing.T) {
 	fr.set("plugin explain hello", strings.Repeat("line of output\n", 20000))
 	s := loaded(t, fr)
 	press(s, "enter")
-	if len(s.detail) > maxDetail+64 {
+	if len(s.detail) > ui.MaxOutput+64 {
 		t.Errorf("stored %d bytes", len(s.detail))
 	}
 	if s.scroll != 0 || !strings.Contains(view(s), "more below") {

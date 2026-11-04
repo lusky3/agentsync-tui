@@ -9,7 +9,6 @@
 package apply
 
 import (
-	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,9 +18,6 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
-
-// maxOutput caps the stored (masked) output of one run.
-const maxOutput = 64 << 10
 
 type mode int
 
@@ -42,14 +38,6 @@ const msgPreviewFirst = "preview first"
 
 // preview is a successful dry run, bound to the argv of the real command.
 type preview struct{ key string }
-
-// output is one run's masked result.
-type output struct {
-	title string
-	text  string // masked + sanitised, capped
-	trunc bool
-	note  string // masked error / cancellation note
-}
 
 // pending is an in-flight request, matched back by argv and seq.
 type pending struct {
@@ -74,7 +62,7 @@ type Screen struct {
 	prev   [2]*preview
 	req    [2]*pending // in-flight preview per mode
 	live   [2]string   // argv of the real command last handed to the shell
-	out    [2]*output
+	out    [2]*ui.Output
 	scroll [2]int
 	msg    string
 
@@ -100,7 +88,7 @@ func (s *Screen) Refresh() tea.Cmd { return nil }
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.seq++
-	s.prev, s.req, s.live, s.out, s.scroll = [2]*preview{}, [2]*pending{}, [2]string{}, [2]*output{}, [2]int{}
+	s.prev, s.req, s.live, s.out, s.scroll = [2]*preview{}, [2]*pending{}, [2]string{}, [2]*ui.Output{}, [2]int{}
 	s.msg = ""
 }
 
@@ -336,36 +324,8 @@ func realKey(dry string) string {
 	return strings.Join(out, "\x00")
 }
 
-// store keeps only the masked form of the run's output.
+// store keeps only the masked, capped form of the run's output (ui.OutputOf).
 func (s *Screen) store(md mode, m ui.RunMsg) {
-	o := &output{title: mask.Sanitize(m.Action.Title)}
-	var b strings.Builder
-	b.WriteString(clean(m.Result.Stdout))
-	if m.Err != nil || m.Result.ExitCode != 0 {
-		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
-			b.WriteString("\n")
-		}
-		b.WriteString(clean(m.Result.Stderr))
-	}
-	if m.Err != nil {
-		o.note = mask.OneLine(clean(m.Err.Error()))
-	} else if m.Result.ExitCode != 0 {
-		o.note = "exit " + strconv.Itoa(m.Result.ExitCode)
-	}
-	o.text = b.String()
-	if len(o.text) > maxOutput {
-		o.text, o.trunc = cutRunes(o.text, maxOutput), true
-	}
-	s.out[md], s.scroll[md] = o, 0
-}
-
-// clean masks (before any truncation, so a cut cannot split a secret) then
-// sanitises.
-func clean(v string) string { return mask.Sanitize(mask.Text(v)) }
-
-func cutRunes(v string, n int) string {
-	for n > 0 && n < len(v) && v[n]&0xC0 == 0x80 {
-		n--
-	}
-	return v[:n]
+	o := ui.OutputOf(m)
+	s.out[md], s.scroll[md] = &o, 0
 }

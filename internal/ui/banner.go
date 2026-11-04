@@ -56,7 +56,7 @@ func bannerFor(m versionMsg) banner {
 	case errors.Is(m.err, runner.ErrNotInstalled):
 		return banner{bannerError, installHint}
 	case m.err != nil:
-		return banner{bannerDim, "version check failed: " + firstLine(mask.Text(m.err.Error()))}
+		return banner{bannerDim, "version check failed: " + mask.FirstLine(m.err.Error())}
 	case m.v == "dev":
 		return banner{bannerInfo, "agentsync dev build (version unknown)"}
 	case m.v == "":

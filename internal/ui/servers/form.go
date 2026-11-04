@@ -237,7 +237,7 @@ func (f *form) submit() (actions.Action, error) {
 // mask.Value would hide, so it is safe to echo and is not a stored literal.
 func refVisible(v string) bool {
 	v = strings.TrimSpace(v)
-	return strings.Contains(v, "${") && mask.Value("", v) != mask.Mask
+	return strings.Contains(v, "${") && mask.Value(v) != mask.Mask
 }
 
 // echo renders a value being typed: refs stay visible, anything else is
@@ -246,7 +246,7 @@ func echo(v string) string {
 	trimmed := strings.TrimLeft(v, " ")
 	lead := v[:len(v)-len(trimmed)]
 	if refVisible(trimmed) {
-		return lead + mask.OneLine(mask.Value("", trimmed))
+		return lead + mask.OneLine(mask.Value(trimmed))
 	}
 	return lead + strings.Repeat("•", utf8.RuneCountInString(trimmed))
 }
@@ -313,7 +313,7 @@ func (f *form) view() string {
 			out = append(out, theme.Dim.Render("           comma-separated agent names; empty = agentsync default"))
 		}
 		for _, e := range list {
-			out = append(out, "           "+mask.OneLine(mask.Text(e.k))+" = "+mask.OneLine(mask.Value(e.k, e.v)))
+			out = append(out, "           "+mask.OneLine(mask.Text(e.k))+" = "+mask.OneLine(mask.Value(e.v)))
 			if !refVisible(e.v) {
 				out = append(out, theme.Warn.Render("           ! "+warn))
 			}

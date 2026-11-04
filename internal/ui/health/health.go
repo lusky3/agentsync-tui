@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -23,9 +22,6 @@ import (
 
 // readTimeout bounds one read-only CLI call.
 const readTimeout = 30 * time.Second
-
-// maxOutput caps each stored (masked) section.
-const maxOutput = 64 << 10
 
 // section is one command's last good result.
 type section struct {
@@ -112,21 +108,12 @@ func readOne(parent context.Context, gen int, r runner.Runner, kind string, argv
 		return m
 	}
 	if err != nil {
-		m.note = kind + " unavailable: " + firstLine(clean(err.Error()))
+		m.note = kind + " unavailable: " + mask.FirstLine(err.Error())
 		return m
 	}
 	// Problems are reported on stderr as often as on stdout: show both.
-	text := clean(res.Stdout)
-	if e := clean(res.Stderr); strings.TrimSpace(e) != "" {
-		if text != "" && !strings.HasSuffix(text, "\n") {
-			text += "\n"
-		}
-		text += e
-	}
-	if len(text) > maxOutput {
-		text, m.trunc = cutRunes(text, maxOutput), true
-	}
-	m.ok, m.text, m.exit = true, text, res.ExitCode
+	m.text, m.trunc = ui.CappedStreams(res.Stdout, res.Stderr, true)
+	m.ok, m.exit = true, res.ExitCode
 	return m
 }
 
@@ -171,26 +158,6 @@ func (s *Screen) key(k string) tea.Cmd {
 	}
 	s.scroll = min(s.scroll, s.maxScroll())
 	return nil
-}
-
-// clean masks (before any truncation, so a cut cannot split a secret) then
-// sanitises.
-func clean(v string) string { return mask.Sanitize(mask.Text(v)) }
-
-func firstLine(v string) string {
-	for _, l := range strings.Split(v, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return l
-		}
-	}
-	return ""
-}
-
-func cutRunes(v string, n int) string {
-	for n > 0 && n < len(v) && v[n]&0xC0 == 0x80 {
-		n--
-	}
-	return v[:n]
 }
 
 // summary derives the one-word verdict from the exit code alone.

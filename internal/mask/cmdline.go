@@ -150,7 +150,7 @@ func assignment(w string) (name, val string, ok bool) {
 // ("Authorization: Bearer ${env:T}") keeps its reference visible, the same
 // rule flagValue applies to the space-separated "--header Name: ..." form.
 func assignedValue(name, val string) string {
-	if v := Value(name, val); v != Mask {
+	if v := Value(val); v != Mask {
 		return v
 	}
 	if refRe.MatchString(val) && schemeOnlyRe.MatchString(refRe.ReplaceAllString(headerNameRe.ReplaceAllString(val, ""), "")) {

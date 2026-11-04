@@ -26,10 +26,7 @@ const (
 	listTimeout    = 30 * time.Second
 	verifyTimeout  = 5 * time.Second
 	explainTimeout = 15 * time.Second
-	// maxDetail caps stored `plugin explain` / outdated text.
-	maxDetail = 64 << 10
-
-	staleNote = "list changed — refreshed"
+	staleNote      = "list changed — refreshed"
 )
 
 const (
@@ -180,7 +177,7 @@ func runRead(base context.Context, r runner.Runner, timeout time.Duration, args 
 	}
 	if res.ExitCode != 0 {
 		n := name + " exited " + strconv.Itoa(res.ExitCode)
-		if l := firstLine(res.Stderr); l != "" {
+		if l := mask.FirstLine(res.Stderr); l != "" {
 			n += ": " + l
 		}
 		return "", n
@@ -331,22 +328,13 @@ func (s *Screen) move(d int) {
 	s.invalidate()
 }
 
-// firstLine returns the first non-blank line of s, masked and sanitised.
-func firstLine(s string) string {
-	for _, l := range strings.Split(mask.Text(s), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return mask.OneLine(l)
-		}
-	}
-	return ""
-}
-
-// capText masks then caps stored command output (never the other way
-// round: cutting first could leave a prefix of a secret).
+// capText masks then caps stored command output (mask.Capped: never the
+// other way round, cutting first could leave a prefix of a secret), with
+// the truncation marker as its last line.
 func capText(s string) string {
-	s = mask.Sanitize(mask.Text(s))
-	if len(s) > maxDetail {
-		s = strings.ToValidUTF8(s[:maxDetail], "") + "\n… (truncated)"
+	t, trunc := mask.Capped(s, ui.MaxOutput)
+	if trunc {
+		t += "\n… " + ui.TruncatedMarker
 	}
-	return s
+	return t
 }

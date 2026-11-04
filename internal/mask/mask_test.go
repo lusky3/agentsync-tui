@@ -3,6 +3,7 @@ package mask
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/lusky3/agentsync-tui/internal/model"
 )
@@ -73,24 +74,24 @@ func TestArgsPassesPlainThrough(t *testing.T) {
 
 func TestValueKeepsRefs(t *testing.T) {
 	for _, r := range []string{"${secret:GG}", "${env:HOME_TOKEN}", "${GG}"} {
-		if got := Value("token", r); got != r {
+		if got := Value(r); got != r {
 			t.Errorf("Value(%q)=%q", r, got)
 		}
 		if !IsRef(r) {
 			t.Errorf("IsRef(%q) false", r)
 		}
 	}
-	if got := Value("token", "abcdef123456"); got != "••••" {
+	if got := Value("abcdef123456"); got != "••••" {
 		t.Errorf("got %q", got)
 	}
-	if got := Value("h", "Bearer ${GG_TOKEN}"); got != "Bearer ${GG_TOKEN}" {
+	if got := Value("Bearer ${GG_TOKEN}"); got != "Bearer ${GG_TOKEN}" {
 		t.Errorf("mixed ref changed: %q", got)
 	}
-	if got := Value("h", "Basic ${USER}:${PASS}"); got != "Basic ${USER}:${PASS}" {
+	if got := Value("Basic ${USER}:${PASS}"); got != "Basic ${USER}:${PASS}" {
 		t.Errorf("scheme+refs changed: %q", got)
 	}
 	for _, s := range []string{"Basic ${USER}:FAKElit5", "${X} FAKElit6", "prefix-${X}"} {
-		if got := Value("h", s); got != "••••" {
+		if got := Value(s); got != "••••" {
 			t.Errorf("Value(%q)=%q", s, got)
 		}
 	}
@@ -197,7 +198,7 @@ func TestNoCanarySurvivesAnyEntryPoint(t *testing.T) {
 		"https://host/mcp?x=1&api_key=CANARYQ",
 	}
 	for _, c := range shapes {
-		noCanary(t, "Value", Value("anything", c))
+		noCanary(t, "Value", Value(c))
 		noCanary(t, "Text", Text("pre "+c+" post"))
 		noCanary(t, "Text-bearer", Text("Authorization: Bearer "+c))
 		for _, a := range Args([]string{"-y", c, "--header", "Authorization: Bearer " + c, "--token", c, "--token=" + c}) {
@@ -400,5 +401,44 @@ func TestOneLineAndFirstLine(t *testing.T) {
 		if got := FirstLine(in); got != want {
 			t.Errorf("FirstLine(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// FirstLine is how error text and stderr become status notes: it must mask
+// as well as sanitise, so a secret on the first line of an error never
+// reaches the status line.
+func TestFirstLineMasks(t *testing.T) {
+	in := "\n token=CANARYfl0123456789abcdefghij \nghp_CANARYfl2"
+	got := FirstLine(in)
+	if strings.Contains(got, "CANARY") || got != "token="+Mask {
+		t.Errorf("FirstLine = %q", got)
+	}
+	if got := FirstLine("ghp_CANARYfl3 first"); strings.Contains(got, "CANARY") {
+		t.Errorf("token shape leaked: %q", got)
+	}
+}
+
+func TestCapped(t *testing.T) {
+	if got, tr := Capped("short", 100); got != "short" || tr {
+		t.Errorf("no cap: %q %v", got, tr)
+	}
+	// Masking happens before the cut: a secret straddling the cap leaves no prefix.
+	secret := "password=CANARYcap0123456789abcdefghijklmnop"
+	got, tr := Capped("a\n"+secret, 12)
+	if !tr || strings.Contains(got, "CANARY") || got != "a" {
+		t.Errorf("cut before masking or wrong boundary: %q %v", got, tr)
+	}
+	// With a newline inside the budget the cut lands on it.
+	got, tr = Capped("line1\nline2\nline3", 9)
+	if !tr || got != "line1" {
+		t.Errorf("line boundary: %q %v", got, tr)
+	}
+	// Without one the cut is rune-safe.
+	got, tr = Capped("ééééé", 5)
+	if !tr || !utf8.ValidString(got) || got != "éé" {
+		t.Errorf("rune boundary: %q %v", got, tr)
+	}
+	if got, tr := Capped("abc", 0); got != "abc" || tr {
+		t.Errorf("zero cap must mean no cap: %q %v", got, tr)
 	}
 }

@@ -29,16 +29,18 @@ type entry struct {
 
 func (e entry) String() string {
 	return fmt.Sprintf("%s  %-13s %7s  %s", e.Time.Format("15:04:05"), e.Outcome,
-		e.Duration.Round(time.Millisecond), oneLine(e.Display))
+		e.Duration.Round(time.Millisecond), logSafe(e.Display))
 }
 
 func (e entry) fileLine() string {
 	return strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Outcome,
-		e.Duration.Round(time.Millisecond).String(), oneLine(e.Display)}, "\t") + "\n"
+		e.Duration.Round(time.Millisecond).String(), logSafe(e.Display)}, "\t") + "\n"
 }
 
-// oneLine makes s safe for one terminal/log line.
-func oneLine(s string) string {
+// logSafe makes s safe for one terminal/log line: it sanitises and escapes
+// line breaks as a literal \n (it does not fold them away, so a log line
+// still shows that the text had one).
+func logSafe(s string) string {
 	s = mask.Sanitize(s)
 	return strings.NewReplacer("\n", `\n`, "\t", " ").Replace(s)
 }

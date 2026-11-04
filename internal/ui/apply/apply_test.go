@@ -339,12 +339,12 @@ func TestOutputStoredMasked(t *testing.T) {
 		t.Fatal("no output stored")
 	}
 	for _, bad := range []string{"CANARYx1", "\x1b", "abcdefghijklmnopqrstuvwxyz0123456789"} {
-		if strings.Contains(o.text, bad) || strings.Contains(h.view(), bad) {
-			t.Fatalf("%q survived (stored %q)", bad, o.text)
+		if strings.Contains(o.Text, bad) || strings.Contains(h.view(), bad) {
+			t.Fatalf("%q survived (stored %q)", bad, o.Text)
 		}
 	}
-	if !strings.Contains(o.text, "wrote /x/.claude.json") || !strings.Contains(o.text, "red") {
-		t.Fatalf("lost content: %q", o.text)
+	if !strings.Contains(o.Text, "wrote /x/.claude.json") || !strings.Contains(o.Text, "red") {
+		t.Fatalf("lost content: %q", o.Text)
 	}
 }
 
@@ -352,8 +352,8 @@ func TestOutputCappedAt64KiB(t *testing.T) {
 	h := newShell(t, okRunner(strings.Repeat("line of plan output\n", 10000)))
 	h.press("p")
 	o := h.s.out[modeApply]
-	if len(o.text) > 64<<10 || !o.trunc {
-		t.Fatalf("len=%d trunc=%v", len(o.text), o.trunc)
+	if len(o.Text) > 64<<10 || !o.Truncated {
+		t.Fatalf("len=%d trunc=%v", len(o.Text), o.Truncated)
 	}
 	h.press("ctrl+d", "ctrl+d", "ctrl+d", "ctrl+d", "ctrl+d", "ctrl+d", "ctrl+d", "ctrl+d")
 	for i := 0; i < 2000; i++ {

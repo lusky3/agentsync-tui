@@ -236,7 +236,7 @@ func provLines(p model.Provenance) []string {
 			add("ownership:", t(it.Ownership))
 			add("drift:", t(it.Drift))
 			for _, ref := range it.Secrets {
-				add("secret:", mask.OneLine(mask.Value("", ref)))
+				add("secret:", mask.OneLine(mask.Value(ref)))
 			}
 		}
 	}
