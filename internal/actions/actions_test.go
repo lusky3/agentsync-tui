@@ -400,3 +400,24 @@ func TestNoGlobalFlagsInArgv(t *testing.T) {
 		}
 	}
 }
+
+func TestMcpAddRejectsBackslashInArgs(t *testing.T) {
+	for _, args := range [][]string{{`a\`, "b"}, {`a\,b`}} {
+		if _, err := McpAdd(AddSpec{ID: "x", Type: "stdio", Command: "c", Args: args}); err == nil {
+			t.Errorf("args %q should error (CLI escape scheme undocumented)", args)
+		}
+	}
+}
+
+func TestMarketplaceAddHidesCredentials(t *testing.T) {
+	a, err := MarketplaceAdd("https://user:CANARYTOKEN123456@host.example/repo.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(a.Title, "CANARY") {
+		t.Errorf("Title leaks: %q", a.Title)
+	}
+	if strings.Contains(a.Display(), "CANARY") {
+		t.Errorf("Display leaks: %q", a.Display())
+	}
+}

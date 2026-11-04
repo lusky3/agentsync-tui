@@ -124,7 +124,7 @@ func MarketplaceAdd(src string) (Action, error) {
 	if err := checkText("marketplace source", src, 2048); err != nil {
 		return Action{}, err
 	}
-	return Action{Title: "Add marketplace " + src, Argv: []string{"marketplace", "add", src}, Network: true}, nil
+	return Action{Title: "Add marketplace", Argv: []string{"marketplace", "add", src}, Network: true}, nil
 }
 
 func MarketplaceRemove(name string) (Action, error) {
@@ -289,6 +289,11 @@ func McpAdd(s AddSpec) (Action, error) {
 		for i, a := range s.Args {
 			if err := checkNoControl("arg", a); err != nil {
 				return Action{}, err
+			}
+			// The CLI's backslash escaping is undocumented: refuse rather than
+			// let a literal backslash change argument boundaries.
+			if strings.Contains(a, `\`) {
+				return Action{}, errors.New("arg contains a backslash, which the CLI cannot express safely")
 			}
 			esc[i] = strings.ReplaceAll(a, ",", `\,`)
 		}
