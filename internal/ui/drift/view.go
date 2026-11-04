@@ -53,7 +53,7 @@ func (s *Screen) listLines() []string {
 		return []string{styleDim.Render("loading…"), styleDim.Render(listKeys)}
 	}
 	foot := []string{styleDim.Render(listKeys)}
-	if s.note != "" {
+	if s.note != "" && len(s.rep.Agents) == 0 {
 		return append([]string{styleDim.Render(s.note)}, foot...)
 	}
 	if len(s.rep.Agents) == 0 {
@@ -70,6 +70,9 @@ func (s *Screen) listLines() []string {
 		summary = styleOK.Render(summary)
 	}
 	head := []string{summary + styleDim.Render("  filter: "+filter), ""}
+	if s.note != "" { // failed refresh: last good report stays visible
+		head = append([]string{styleDim.Render(s.note)}, head...)
+	}
 
 	var body []string
 	selLine, idx := 0, 0

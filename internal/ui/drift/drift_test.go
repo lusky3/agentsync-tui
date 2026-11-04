@@ -428,16 +428,10 @@ func TestStaleDetailResultDropped(t *testing.T) {
 		t.Fatalf("fresh result should show:\n%s", view(s))
 	}
 	// A result for the previous seq must not overwrite the current one.
-	old := detailMsg{gen: s.gen, seq: s.seq - 1, kind: kindDiff, note: "OLDNOTE"}
+	old := detailMsg{seq: s.seq - 1, kind: kindDiff, note: "OLDNOTE"}
 	s.Update(old)
 	if strings.Contains(view(s), "OLDNOTE") {
 		t.Error("stale detail applied")
-	}
-	// A refresh also invalidates in-flight detail.
-	stale := detailMsg{gen: s.gen - 1, seq: s.seq, kind: kindDiff, note: "GENNOTE"}
-	s.Update(stale)
-	if strings.Contains(view(s), "GENNOTE") {
-		t.Error("detail from before refresh applied")
 	}
 }
 
@@ -501,5 +495,100 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	}
 	if len(old.called()) != 1 {
 		t.Errorf("old runner used after switch: %v", old.called())
+	}
+}
+
+func TestNonZeroExitWithJSONIsFailure(t *testing.T) {
+	r := &fakeRunner{res: map[string]runner.Result{
+		"status --json": {Stdout: `{"error":"boom"}`, ExitCode: 1, Stderr: "error: boom"},
+	}}
+	s := newLoaded(t, r)
+	v := view(s)
+	if !strings.Contains(v, "status failed") || !strings.Contains(v, "boom") {
+		t.Errorf("want failure note:\n%s", v)
+	}
+	if strings.Contains(v, "no agents registered") {
+		t.Errorf("misleading empty state:\n%s", v)
+	}
+}
+
+func TestFailedRefreshKeepsLoadedReport(t *testing.T) {
+	r := statusRunner(multiStatus)
+	s := newLoaded(t, r)
+	r.res["status --json"] = runner.Result{Stdout: `{"error":"x"}`, ExitCode: 1, Stderr: "error: boom"}
+	drive(s, s.Refresh())
+	v := view(s)
+	if !strings.Contains(v, "status failed") || !strings.Contains(v, "d1") {
+		t.Errorf("want note and the previous report:\n%s", v)
+	}
+}
+
+func TestRefreshDuringDetailLoadKeepsDetail(t *testing.T) {
+	s := newLoaded(t, detailRunner(hunkJSON(`{"command":"x"}`, `{"command":"INFLIGHT"}`), `{}`))
+	_, cmd := s.Update(key("enter"))
+	s.Refresh() // e.g. an action finished; bumps gen while detail is loading
+	drive(s, cmd)
+	if !strings.Contains(view(s), "INFLIGHT") {
+		t.Errorf("detail dropped by refresh:\n%s", view(s))
+	}
+}
+
+func TestRefreshDuringLegendLoadKeepsLegend(t *testing.T) {
+	r := statusRunner(multiStatus)
+	r.res["status --legend"] = runner.Result{Stdout: "clean  in sync\n"}
+	s := newLoaded(t, r)
+	_, cmd := s.Update(key("g"))
+	s.Refresh()
+	drive(s, cmd)
+	if !strings.Contains(view(s), "in sync") {
+		t.Errorf("legend dropped by refresh:\n%s", view(s))
+	}
+}
+
+func TestStaleStatusResultDropped(t *testing.T) {
+	s := newLoaded(t, statusRunner(multiStatus))
+	oldGen := s.gen
+	s.SetScope(statusRunner(`{"agents":[{"agent":"newagent","items":[]}]}`), runner.ScopeProject)
+	stale := readStatus(oldGen, statusRunner(multiStatus))
+	s.Update(stale)
+	if strings.Contains(view(s), "antigravity") || s.loaded {
+		t.Errorf("status from before scope switch applied:\n%s", view(s))
+	}
+	cmd := s.Refresh()
+	old := statusMsg{gen: s.gen - 1, note: "OLDSTATUSNOTE"}
+	drive(s, cmd)
+	s.Update(old)
+	if strings.Contains(view(s), "OLDSTATUSNOTE") {
+		t.Error("older-generation status applied after newer refresh")
+	}
+}
+
+func TestSetScopeClosesOverlaysAndDropsInFlight(t *testing.T) {
+	r := detailRunner(hunkJSON(`{"command":"x"}`, `{"command":"SCOPEMARK"}`), `{}`)
+	s := newLoaded(t, r)
+	_, cmd := s.Update(key("enter"))
+	s.SetScope(statusRunner(multiStatus), runner.ScopeProject)
+	drive(s, cmd)
+	if s.detail || strings.Contains(view(s), "SCOPEMARK") {
+		t.Error("detail from before scope switch applied")
+	}
+}
+
+func TestHunkFromOtherFileHidden(t *testing.T) {
+	d := `{"hunks":[{"path":"/h/other.json","pointer":"` + hPtr + `","source":"{\"x\":\"OTHERFILE\"}","dest":"{}"}]}`
+	s := newLoaded(t, detailRunner(d, `{}`))
+	press(s, "enter")
+	if strings.Contains(view(s), "OTHERFILE") {
+		t.Errorf("same-pointer hunk from another file shown:\n%s", view(s))
+	}
+}
+
+func TestHashInPathNotDiffable(t *testing.T) {
+	item := `[{"path":"/h/a#b.json","pointer":"` + hPtr + `","class":"drift"}]`
+	r := statusRunner(`{"agents":[{"agent":"a","items":` + item + `}]}`)
+	s := newLoaded(t, r)
+	press(s, "enter")
+	if len(r.called()) != 1 || !strings.Contains(view(s), "path not diffable") {
+		t.Errorf("calls %v\n%s", r.called(), view(s))
 	}
 }

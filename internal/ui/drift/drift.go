@@ -53,6 +53,7 @@ type Screen struct {
 	provDone bool
 	scroll   int
 
+	lseq       int // legend generation; bumped on every open/close/scope switch
 	legend     bool
 	legendText string
 	legendNote string
@@ -69,16 +70,16 @@ type statusMsg struct {
 
 // detailMsg carries one half of the detail pane. hunks are masked already.
 type detailMsg struct {
-	gen, seq int
-	kind     string
-	hunks    []model.Hunk
-	prov     *model.Provenance
-	note     string
+	seq   int
+	kind  string
+	hunks []model.Hunk
+	prov  *model.Provenance
+	note  string
 }
 
 // legendMsg carries the `status --legend` text.
 type legendMsg struct {
-	gen  int
+	seq  int
 	text string
 	note string
 }
@@ -99,6 +100,7 @@ func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
 	s.run, s.scope = r, sc
 	s.gen++
 	s.seq++
+	s.lseq++
 	s.loaded, s.rep, s.note, s.cursor = false, model.StatusReport{}, "", 0
 	s.detail, s.legend = false, false
 }
@@ -118,9 +120,10 @@ func readStatus(gen int, r runner.Runner) statusMsg {
 	if err != nil {
 		return statusMsg{gen: gen, note: "status failed: " + firstLine(mask.Text(err.Error()))}
 	}
-	// Exit 2 may still carry a valid report; only an unreadable body is a failure.
+	// Exit 2 may still carry a valid report; any other non-zero exit is a
+	// failure even if stdout parses (ParseStatus ignores unknown fields).
 	rep, perr := model.ParseStatus(res.Stdout)
-	if perr != nil {
+	if perr != nil || (res.ExitCode != 0 && res.ExitCode != 2) {
 		msg := "status failed"
 		if res.ExitCode != 0 {
 			msg += " (exit " + strconv.Itoa(res.ExitCode) + ")"
@@ -149,15 +152,18 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.width, s.height = msg.Width, msg.Height
 	case statusMsg:
 		if msg.gen == s.gen {
-			s.loaded, s.rep, s.note = true, msg.rep, msg.note
+			s.loaded, s.note = true, msg.note
+			if msg.note == "" { // a failed refresh keeps the last good report
+				s.rep = msg.rep
+			}
 			s.clamp()
 		}
 	case detailMsg:
-		if msg.gen == s.gen && msg.seq == s.seq && s.detail {
+		if msg.seq == s.seq && s.detail {
 			s.applyDetail(msg)
 		}
 	case legendMsg:
-		if msg.gen == s.gen && s.legend {
+		if msg.seq == s.lseq && s.legend {
 			s.legendText, s.legendNote = msg.text, msg.note
 		}
 	case tea.KeyPressMsg:
@@ -180,6 +186,7 @@ func (s *Screen) key(k string) tea.Cmd {
 	case s.legend:
 		if k == "esc" || k == "g" || k == "q" {
 			s.legend = false
+			s.lseq++
 		}
 	case s.detail:
 		s.detailKey(k)
@@ -269,17 +276,18 @@ func (s *Screen) clamp() {
 }
 
 func (s *Screen) openLegend() tea.Cmd {
+	s.lseq++
 	s.legend, s.legendText, s.legendNote = true, "", ""
-	gen, r := s.gen, s.run
+	seq, r := s.lseq, s.run
 	return func() tea.Msg {
 		res, err := call(r, "status", "--legend")
 		if err != nil {
-			return legendMsg{gen: gen, note: "legend unavailable: " + firstLine(mask.Text(err.Error()))}
+			return legendMsg{seq: seq, note: "legend unavailable: " + firstLine(mask.Text(err.Error()))}
 		}
 		if strings.TrimSpace(res.Stdout) == "" {
-			return legendMsg{gen: gen, note: "legend unavailable: " + firstLine(mask.Text(res.Stderr))}
+			return legendMsg{seq: seq, note: "legend unavailable: " + firstLine(mask.Text(res.Stderr))}
 		}
-		return legendMsg{gen: gen, text: mask.Text(res.Stdout)}
+		return legendMsg{seq: seq, text: mask.Text(res.Stdout)}
 	}
 }
 
@@ -295,7 +303,7 @@ func safeArg(v string) bool {
 // diffable: only absolute, clean paths and clean pointers reach the CLI, so
 // neither can be read as a flag or smuggle control bytes.
 func diffable(it model.StatusItem) bool {
-	return strings.HasPrefix(it.Path, "/") && safeArg(it.Path) && safeArg(it.Pointer)
+	return strings.HasPrefix(it.Path, "/") && !strings.Contains(it.Path, "#") && safeArg(it.Path) && safeArg(it.Pointer)
 }
 
 func (s *Screen) openDetail() tea.Cmd {
@@ -311,14 +319,14 @@ func (s *Screen) openDetail() tea.Cmd {
 	if !s.diffable {
 		return nil
 	}
-	gen, seq, r := s.gen, s.seq, s.run
-	diff := func() tea.Msg { return loadDiff(gen, seq, r, it) }
-	explain := func() tea.Msg { return loadExplain(gen, seq, r, it) }
+	seq, r := s.seq, s.run
+	diff := func() tea.Msg { return loadDiff(seq, r, it) }
+	explain := func() tea.Msg { return loadExplain(seq, r, it) }
 	return tea.Batch(diff, explain)
 }
 
-func loadDiff(gen, seq int, r runner.Runner, it model.StatusItem) detailMsg {
-	m := detailMsg{gen: gen, seq: seq, kind: kindDiff}
+func loadDiff(seq int, r runner.Runner, it model.StatusItem) detailMsg {
+	m := detailMsg{seq: seq, kind: kindDiff}
 	res, err := call(r, "diff", it.Path, "--json")
 	if err != nil {
 		m.note = "diff unavailable: " + firstLine(mask.Text(err.Error()))
@@ -330,15 +338,15 @@ func loadDiff(gen, seq int, r runner.Runner, it model.StatusItem) detailMsg {
 		return m
 	}
 	for _, h := range hunks {
-		if h.Pointer == it.Pointer {
+		if h.Pointer == it.Pointer && h.Path == it.Path {
 			m.hunks = append(m.hunks, mask.Hunk(h))
 		}
 	}
 	return m
 }
 
-func loadExplain(gen, seq int, r runner.Runner, it model.StatusItem) detailMsg {
-	m := detailMsg{gen: gen, seq: seq, kind: kindExplain}
+func loadExplain(seq int, r runner.Runner, it model.StatusItem) detailMsg {
+	m := detailMsg{seq: seq, kind: kindExplain}
 	res, err := call(r, "explain", it.Path+"#"+it.Pointer, "--json")
 	if err != nil {
 		m.note = "provenance unavailable: " + firstLine(mask.Text(err.Error()))
