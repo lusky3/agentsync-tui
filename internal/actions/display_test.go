@@ -38,6 +38,13 @@ func TestMcpAddDisplayMasksLiterals(t *testing.T) {
 		{"args env ref visible", AddSpec{Args: []string{"-e", "API_KEY=${env:A}"}}, []string{"API_KEY=${env:A}"}},
 		{"command --password", AddSpec{Command: "mytool --password " + dCanary}, []string{"mytool", "--password"}},
 		{"command --api-key=", AddSpec{Command: "mytool --api-key=" + dCanary}, []string{"mytool", "--api-key="}},
+		{"command sh -c password", AddSpec{Command: "sh -c 'mytool --password " + dCanary + "'"}, []string{"sh", "-c", "mytool", "--password"}},
+		{"command sh -c api-key=", AddSpec{Command: "sh -c 'mytool --api-key=" + dShort + "'"}, []string{"--api-key="}},
+		{"command bash -c env", AddSpec{Command: `bash -c "DB_PASS=` + dCanary + ` mytool"`}, []string{"DB_PASS="}},
+		{"command nested twice", AddSpec{Command: `sh -c "sh -c 'mytool --password ` + dCanary + `'"`}, nil},
+		{"command unparseable", AddSpec{Command: `mytool --password "` + dCanary}, nil},
+		{"command nested ref", AddSpec{Command: "sh -c 'mytool --token ${env:T}'"}, []string{"${env:T}"}},
+		{"args camelCase key", AddSpec{Args: []string{"--accessKey", dCanary, "--privateKey", dCanary}}, []string{"--accessKey"}},
 		{"command sh -c bearer", AddSpec{Command: `sh -c 'curl -H "Authorization: Bearer ` + dCanary + `"'`}, []string{"sh", "-c"}},
 	}
 	for _, tt := range tests {
@@ -88,5 +95,24 @@ func TestMcpAddDisplayKeepsBenignArgsReadable(t *testing.T) {
 	}
 	if d := a.Display(); !strings.Contains(d, "--args -y,@upstash/context7-mcp,--port,8080,-p,3000") {
 		t.Errorf("benign args masked: %s", d)
+	}
+}
+
+// TestMcpAddCommandArgvIsNotMasked pins what runs: the real command reaches
+// Argv; only Display() is masked.
+func TestMcpAddCommandArgvIsNotMasked(t *testing.T) {
+	cmd := "sh -c 'mytool --password " + dCanary + "'"
+	a, err := McpAdd(AddSpec{ID: "s", Type: "stdio", Command: cmd, Args: []string{"--token", dCanary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := argAfter(t, a.Argv, "--command"); got != cmd {
+		t.Errorf("argv command changed: %q", got)
+	}
+	if got := argAfter(t, a.Argv, "--args"); got != "--token,"+dCanary {
+		t.Errorf("argv args changed: %q", got)
+	}
+	if strings.Contains(a.Display(), "CANARY") {
+		t.Errorf("display leaks: %s", a.Display())
 	}
 }

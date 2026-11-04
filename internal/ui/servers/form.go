@@ -258,11 +258,11 @@ func (f *form) live(i int) string {
 		return "‹" + serverTypes[f.typ] + "›"
 	case fTarget:
 		if serverTypes[f.typ] == "stdio" {
-			return oneLine(mask.FreeText(v))
+			return oneLine(mask.FreeTextLive(v))
 		}
 		return oneLine(mask.Text(v))
 	case fArgs:
-		return oneLine(mask.FreeText(v))
+		return oneLine(mask.FreeTextLive(v))
 	case fEnv, fHeader:
 		sep := "="
 		if i == fHeader {

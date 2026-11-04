@@ -126,7 +126,8 @@ func TestLiveArgsEchoMasksWithUnterminatedQuote(t *testing.T) {
 	typeText(s, "npx")
 	press(s, "tab")
 	for _, in := range []string{`--api-key "` + canary, `--api-key '` + canary, `--token=` + canary + `\`,
-		"-e DB_PASS=" + canary, "-e MY_PAT=" + canary, "--pat " + canary, "--api-key=" + canary, "--mode=" + canary} {
+		"-e DB_PASS=" + canary, "-e MY_PAT=" + canary, "--pat " + canary, "--api-key=" + canary, "--mode=" + canary,
+		`"--password ` + canary, `--privateKey ` + canary} {
 		press(s, "ctrl+u")
 		typeText(s, in)
 		if v := view(s); strings.Contains(v, "CANARY") {
@@ -142,7 +143,8 @@ func TestLiveCommandEchoMasks(t *testing.T) {
 	typeText(s, "srv")
 	press(s, "tab", "tab")
 	for _, in := range []string{"mytool --password " + canary, "mytool --api-key=" + canary,
-		`sh -c 'curl -H "Authorization: Bearer ` + canary + `"'`, `mytool --password "` + canary} {
+		`sh -c 'curl -H "Authorization: Bearer ` + canary + `"'`, `mytool --password "` + canary,
+		`sh -c 'mytool --password ` + canary + `'`, `sh -c "mytool --password ` + canary, `mytool --accessKey ` + canary} {
 		press(s, "ctrl+u")
 		typeText(s, in)
 		if v := view(s); strings.Contains(v, "CANARY") {
@@ -181,7 +183,7 @@ func TestAddFormFreeTextSecretsNeverReachModalOrLog(t *testing.T) {
 	appPress(app, "a")
 	appType(app, "srv")
 	appPress(app, "tab", "tab")
-	appType(app, "mytool --password "+canary)
+	appType(app, "sh -c 'mytool --password "+canary+"'")
 	appPress(app, "tab")
 	appType(app, "-e DB_PASS="+canary+" -e MY_PAT="+canary+" --pat "+canary)
 	appPress(app, "ctrl+s")
