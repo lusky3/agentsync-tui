@@ -6,39 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/runner"
+	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
-
-// fakeRunner answers by the space-joined argv; unknown commands fail the test.
-type fakeRunner struct {
-	mu    sync.Mutex
-	calls []string
-	res   map[string]runner.Result
-	err   error
-}
-
-func (f *fakeRunner) Run(_ context.Context, args ...string) (runner.Result, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, strings.Join(args, " "))
-	if f.err != nil {
-		return runner.Result{}, f.err
-	}
-	return f.res[strings.Join(args, " ")], nil
-}
-
-func (f *fakeRunner) called() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.calls...)
-}
 
 func fixture(t *testing.T, name string) string {
 	t.Helper()
@@ -122,8 +98,8 @@ const multiStatus = `{"agents":[
   {"path":"/h/c.json","pointer":"/other~1x","class":"orphan"}]}
 ]}`
 
-func statusRunner(status string) *fakeRunner {
-	return &fakeRunner{res: map[string]runner.Result{"status --json": {Stdout: status}}}
+func statusRunner(status string) *runnertest.Fake {
+	return runnertest.New().On("status --json", runner.Result{Stdout: status}, nil)
 }
 
 func TestInitEqualsRefresh(t *testing.T) {
@@ -133,7 +109,7 @@ func TestInitEqualsRefresh(t *testing.T) {
 	if !strings.Contains(view(s), "antigravity") {
 		t.Fatalf("Init did not load:\n%s", view(s))
 	}
-	if got := r.called(); len(got) != 1 || got[0] != "status --json" {
+	if got := r.Calls(); len(got) != 1 || got[0] != "status --json" {
 		t.Fatalf("calls = %v", got)
 	}
 }
@@ -228,9 +204,7 @@ func TestNoAgentsEmptyState(t *testing.T) {
 }
 
 func TestExitCode2IsNotAnError(t *testing.T) {
-	r := &fakeRunner{res: map[string]runner.Result{
-		"status --json": {Stdout: multiStatus, ExitCode: 2, Stderr: "ℹ INFO scope: user"},
-	}}
+	r := runnertest.New().On("status --json", runner.Result{Stdout: multiStatus, ExitCode: 2, Stderr: "ℹ INFO scope: user"}, nil)
 	s := newLoaded(t, r)
 	v := view(s)
 	if !strings.Contains(v, "d1") || strings.Contains(v, "unavailable") || strings.Contains(v, "failed") {
@@ -239,9 +213,7 @@ func TestExitCode2IsNotAnError(t *testing.T) {
 }
 
 func TestStatusFailureShowsNote(t *testing.T) {
-	r := &fakeRunner{res: map[string]runner.Result{
-		"status --json": {ExitCode: 1, Stderr: "\x1b[2Jboom token=CANARYx1CANARYx1CANARYx1CANARYx1\nsecond"},
-	}}
+	r := runnertest.New().On("status --json", runner.Result{ExitCode: 1, Stderr: "\x1b[2Jboom token=CANARYx1CANARYx1CANARYx1CANARYx1\nsecond"}, nil)
 	s := newLoaded(t, r)
 	v := view(s)
 	if !strings.Contains(v, "status exited 1") || !strings.Contains(v, "boom") {
@@ -252,7 +224,7 @@ func TestStatusFailureShowsNote(t *testing.T) {
 	}
 	// Spawn errors and a missing binary are notes too, never crashes.
 	for _, e := range []error{errors.New("spawn: nope"), runner.ErrNotInstalled} {
-		s = newLoaded(t, &fakeRunner{err: e})
+		s = newLoaded(t, runnertest.New().Fail(e))
 		if !strings.Contains(view(s), "status unavailable") {
 			t.Errorf("err %v: %s", e, view(s))
 		}
@@ -273,12 +245,11 @@ func TestItemPathMasked(t *testing.T) {
 	}
 }
 
-func detailRunner(diff, explain string) *fakeRunner {
-	return &fakeRunner{res: map[string]runner.Result{
-		"status --json":                             {Stdout: `{"agents":[{"agent":"antigravity","items":[{"path":"` + hPath + `","pointer":"` + hPtr + `","class":"drift"}]}]}`},
-		"diff " + hPath + " --json":                 {Stdout: diff},
-		"explain " + hPath + "#" + hPtr + " --json": {Stdout: explain},
-	}}
+func detailRunner(diff, explain string) *runnertest.Fake {
+	return runnertest.New().
+		On("status --json", runner.Result{Stdout: `{"agents":[{"agent":"antigravity","items":[{"path":"` + hPath + `","pointer":"` + hPtr + `","class":"drift"}]}]}`}, nil).
+		On("diff "+hPath+" --json", runner.Result{Stdout: diff}, nil).
+		On("explain "+hPath+"#"+hPtr+" --json", runner.Result{Stdout: explain}, nil)
 }
 
 func TestDetailFixtures(t *testing.T) {
@@ -375,7 +346,7 @@ func TestDetailArgumentSafety(t *testing.T) {
 			r := statusRunner(`{"agents":[{"agent":"a","items":` + item + `}]}`)
 			s := newLoaded(t, r)
 			press(s, "enter")
-			if got := r.called(); len(got) != 1 {
+			if got := r.Calls(); len(got) != 1 {
 				t.Fatalf("extra commands run: %v", got)
 			}
 			if !strings.Contains(view(s), "path not diffable") {
@@ -437,7 +408,7 @@ func TestStaleDetailResultDropped(t *testing.T) {
 
 func TestLegendRendered(t *testing.T) {
 	r := statusRunner(multiStatus)
-	r.res["status --legend"] = runner.Result{Stdout: "clean      in sync\n\x1b[2Jdrift      edited outside\n"}
+	r.On("status --legend", runner.Result{Stdout: "clean      in sync\n\x1b[2Jdrift      edited outside\n"}, nil)
 	s := newLoaded(t, r)
 	press(s, "g")
 	v := view(s)
@@ -493,15 +464,13 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	if !strings.Contains(view(s), "newagent") {
 		t.Errorf("new runner not used:\n%s", view(s))
 	}
-	if len(old.called()) != 1 {
-		t.Errorf("old runner used after switch: %v", old.called())
+	if len(old.Calls()) != 1 {
+		t.Errorf("old runner used after switch: %v", old.Calls())
 	}
 }
 
 func TestNonZeroExitWithJSONIsFailure(t *testing.T) {
-	r := &fakeRunner{res: map[string]runner.Result{
-		"status --json": {Stdout: `{"error":"boom"}`, ExitCode: 1, Stderr: "error: boom"},
-	}}
+	r := runnertest.New().On("status --json", runner.Result{Stdout: `{"error":"boom"}`, ExitCode: 1, Stderr: "error: boom"}, nil)
 	s := newLoaded(t, r)
 	v := view(s)
 	if !strings.Contains(v, "status exited 1") || !strings.Contains(v, "boom") {
@@ -515,7 +484,7 @@ func TestNonZeroExitWithJSONIsFailure(t *testing.T) {
 func TestFailedRefreshKeepsLoadedReport(t *testing.T) {
 	r := statusRunner(multiStatus)
 	s := newLoaded(t, r)
-	r.res["status --json"] = runner.Result{Stdout: `{"error":"x"}`, ExitCode: 1, Stderr: "error: boom"}
+	r.On("status --json", runner.Result{Stdout: `{"error":"x"}`, ExitCode: 1, Stderr: "error: boom"}, nil)
 	drive(s, s.Refresh())
 	v := view(s)
 	if !strings.Contains(v, "status exited 1") || !strings.Contains(v, "d1") {
@@ -535,7 +504,7 @@ func TestRefreshDuringDetailLoadKeepsDetail(t *testing.T) {
 
 func TestRefreshDuringLegendLoadKeepsLegend(t *testing.T) {
 	r := statusRunner(multiStatus)
-	r.res["status --legend"] = runner.Result{Stdout: "clean  in sync\n"}
+	r.On("status --legend", runner.Result{Stdout: "clean  in sync\n"}, nil)
 	s := newLoaded(t, r)
 	_, cmd := s.Update(key("g"))
 	s.Refresh()
@@ -588,7 +557,7 @@ func TestHashInPathNotDiffable(t *testing.T) {
 	r := statusRunner(`{"agents":[{"agent":"a","items":` + item + `}]}`)
 	s := newLoaded(t, r)
 	press(s, "enter")
-	if len(r.called()) != 1 || !strings.Contains(view(s), "path not diffable") {
-		t.Errorf("calls %v\n%s", r.called(), view(s))
+	if len(r.Calls()) != 1 || !strings.Contains(view(s), "path not diffable") {
+		t.Errorf("calls %v\n%s", r.Calls(), view(s))
 	}
 }

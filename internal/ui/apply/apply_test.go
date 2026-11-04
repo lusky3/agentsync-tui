@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,39 +12,20 @@ import (
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/runner"
+	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
-
-// fakeRunner answers by joined argv; unknown commands get def.
-type fakeRunner struct {
-	mu    sync.Mutex
-	calls []string
-	by    map[string]runner.Result
-	def   runner.Result
-	err   error
-}
-
-func (f *fakeRunner) Run(_ context.Context, args ...string) (runner.Result, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	k := strings.Join(args, " ")
-	f.calls = append(f.calls, k)
-	if r, ok := f.by[k]; ok {
-		return r, f.err
-	}
-	return f.def, f.err
-}
 
 // shell stands in for ui.App: ReadOnly actions run at once, everything else
 // is held as "asked" (the confirm modal) until confirm is called.
 type shell struct {
 	t     *testing.T
 	s     *Screen
-	r     *fakeRunner
+	r     *runnertest.Fake
 	asked []actions.Action
 }
 
-func newShell(t *testing.T, r *fakeRunner) *shell {
+func newShell(t *testing.T, r *runnertest.Fake) *shell {
 	t.Helper()
 	s := New(ui.Deps{Runner: r, Scope: runner.ScopeUser})
 	s.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -125,15 +105,9 @@ func (h *shell) typeText(focusKey, v string) {
 
 func (h *shell) view() string { return ansi.Strip(h.s.View().Content) }
 
-func (h *shell) calls() []string {
-	h.r.mu.Lock()
-	defer h.r.mu.Unlock()
-	return append([]string(nil), h.r.calls...)
-}
+func (h *shell) calls() []string { return h.r.Calls() }
 
-func okRunner(stdout string) *fakeRunner {
-	return &fakeRunner{def: runner.Result{Stdout: stdout}}
-}
+func okRunner(stdout string) *runnertest.Fake { return runnertest.OK(stdout) }
 
 func fixture(t *testing.T, name string) string {
 	t.Helper()
@@ -289,7 +263,7 @@ func TestForeignRunMsgIgnored(t *testing.T) {
 }
 
 func TestApplyFailureShowsMaskedStderr(t *testing.T) {
-	h := newShell(t, &fakeRunner{def: runner.Result{ExitCode: 1, Stderr: "boom token=CANARYx1\n"}})
+	h := newShell(t, runnertest.New().Default(runner.Result{ExitCode: 1, Stderr: "boom token=CANARYx1\n"}, nil))
 	h.press("p")
 	v := h.view()
 	if strings.Contains(v, "CANARYx1") || !strings.Contains(v, "boom") || !strings.Contains(v, "exit 1") {
@@ -488,7 +462,7 @@ func TestRevertAgentOrAllExclusive(t *testing.T) {
 
 func TestRevertNoticeShown(t *testing.T) {
 	notice := "revert recorded a new commit; the next 'agentsync apply' re-renders from the canonical source\n"
-	r := &fakeRunner{by: map[string]runner.Result{"revert claude": {Stdout: notice}}, def: runner.Result{Stdout: "dry"}}
+	r := runnertest.OK("dry").On("revert claude", runner.Result{Stdout: notice}, nil)
 	h := newShell(t, r)
 	h.press("m")
 	h.typeText("e", "claude")
@@ -506,10 +480,9 @@ func TestRevertNoticeShown(t *testing.T) {
 
 func TestRealFixtures(t *testing.T) {
 	// real agentsync output captured from a hermetic home
-	h := newShell(t, &fakeRunner{by: map[string]runner.Result{
-		"revert claude --dry-run": {ExitCode: 1, Stderr: fixture(t, "revert-agent-dry.stderr")},
-		"revert --all --dry-run":  {Stdout: fixture(t, "revert-all-dry.stdout")},
-	}})
+	h := newShell(t, runnertest.New().
+		On("revert claude --dry-run", runner.Result{ExitCode: 1, Stderr: fixture(t, "revert-agent-dry.stderr")}, nil).
+		On("revert --all --dry-run", runner.Result{Stdout: fixture(t, "revert-all-dry.stdout")}, nil))
 	h.press("m")
 	h.typeText("e", "claude")
 	h.press("p")

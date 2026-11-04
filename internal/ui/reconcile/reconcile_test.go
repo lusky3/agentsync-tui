@@ -1,11 +1,9 @@
 package reconcile
 
 import (
-	"context"
 	"errors"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,36 +11,11 @@ import (
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/runner"
+	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
-type fakeRunner struct {
-	mu    sync.Mutex
-	calls []string
-	res   runner.Result
-	err   error
-}
-
-func (f *fakeRunner) Run(_ context.Context, args ...string) (runner.Result, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, strings.Join(args, " "))
-	return f.res, f.err
-}
-
-func (f *fakeRunner) set(res runner.Result, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.res, f.err = res, err
-}
-
-func (f *fakeRunner) got() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.calls...)
-}
-
-func okRunner(stdout string) *fakeRunner { return &fakeRunner{res: runner.Result{Stdout: stdout}} }
+func okRunner(stdout string) *runnertest.Fake { return runnertest.OK(stdout) }
 
 func fixture(t *testing.T, name string) string {
 	t.Helper()
@@ -120,7 +93,7 @@ func TestReconcileShowsAutoSafeReport(t *testing.T) {
 	r := okRunner(fixture(t, "auto-safe-drift.stdout"))
 	h := newHarness(t, r)
 	h.refresh()
-	if got := r.got(); len(got) != 1 || got[0] != "reconcile --auto-safe" {
+	if got := r.Calls(); len(got) != 1 || got[0] != "reconcile --auto-safe" {
 		t.Fatalf("calls = %q", got)
 	}
 	v := h.view()
@@ -132,13 +105,13 @@ func TestReconcileShowsAutoSafeReport(t *testing.T) {
 			t.Fatalf("missing %q:\n%s", want, v)
 		}
 	}
-	r.set(runner.Result{Stdout: fixture(t, "auto-safe-clean.stdout")}, nil)
+	r.Default(runner.Result{Stdout: fixture(t, "auto-safe-clean.stdout")}, nil)
 	h.refresh()
 	if v := h.view(); !strings.Contains(v, "nothing to reconcile") || strings.Contains(v, "fsdemo") {
 		t.Fatalf("clean report:\n%s", v)
 	}
 	// a non-zero exit that still carries a report is a normal report
-	r.set(runner.Result{Stdout: fixture(t, "auto-safe-drift.stdout"), ExitCode: 3}, nil)
+	r.Default(runner.Result{Stdout: fixture(t, "auto-safe-drift.stdout"), ExitCode: 3}, nil)
 	h.refresh()
 	if v := h.view(); !strings.Contains(v, "fsdemo") || !strings.Contains(v, "exit 3") {
 		t.Fatalf("non-zero report:\n%s", v)
@@ -185,7 +158,7 @@ func TestNoBulkResolveKeys(t *testing.T) {
 		r := okRunner(fixture(t, "auto-safe-drift.stdout"))
 		h := newHarness(t, r)
 		h.refresh()
-		before := len(r.got())
+		before := len(r.Calls())
 		h.press(k)
 		for _, d := range h.dos {
 			for _, arg := range d.Action.Argv {
@@ -194,15 +167,15 @@ func TestNoBulkResolveKeys(t *testing.T) {
 				}
 			}
 		}
-		for _, c := range r.got() {
+		for _, c := range r.Calls() {
 			if strings.Contains(c, "--auto-writeback") || strings.Contains(c, "--auto-override") {
 				t.Fatalf("key %q ran %q", k, c)
 			}
 		}
 		switch k {
 		case "W", "O", "S", "w", "o":
-			if len(h.dos) != 0 || len(r.got()) != before {
-				t.Fatalf("key %q did something: dos=%v calls=%v", k, h.dos, r.got())
+			if len(h.dos) != 0 || len(r.Calls()) != before {
+				t.Fatalf("key %q did something: dos=%v calls=%v", k, h.dos, r.Calls())
 			}
 		case "x":
 			if len(h.dos) != 1 || !h.dos[0].Action.Interactive {
@@ -233,8 +206,8 @@ func TestRefreshDoesNotEmitDoMsg(t *testing.T) {
 	if len(h.dos) != 0 {
 		t.Fatalf("Refresh/Init emitted DoMsg: %+v", h.dos)
 	}
-	if len(r.got()) != 2 {
-		t.Fatalf("report did not run through the runner: %q", r.got())
+	if len(r.Calls()) != 2 {
+		t.Fatalf("report did not run through the runner: %q", r.Calls())
 	}
 }
 
@@ -242,20 +215,20 @@ func TestReconcileFailedRefreshKeepsLastReport(t *testing.T) {
 	r := okRunner(fixture(t, "auto-safe-drift.stdout"))
 	h := newHarness(t, r)
 	h.refresh()
-	r.set(runner.Result{ExitCode: 1, Stderr: "✗ ERROR  boom token=CANARYx1\n"}, nil)
+	r.Default(runner.Result{ExitCode: 1, Stderr: "✗ ERROR  boom token=CANARYx1\n"}, nil)
 	h.refresh()
 	v := h.view()
 	if !strings.Contains(v, "fsdemo") || !strings.Contains(v, "boom") || strings.Contains(v, "CANARYx1") {
 		t.Fatalf("failed refresh:\n%s", v)
 	}
-	r.set(runner.Result{}, runner.ErrNotInstalled)
+	r.Default(runner.Result{}, runner.ErrNotInstalled)
 	h.refresh()
 	v = h.view()
 	if !strings.Contains(v, "fsdemo") || !strings.Contains(v, "not installed") {
 		t.Fatalf("spawn failure:\n%s", v)
 	}
 	// with no previous report the note is shown on its own
-	h = newHarness(t, &fakeRunner{err: errors.New("spawn failed")})
+	h = newHarness(t, runnertest.New().Fail(errors.New("spawn failed")))
 	h.refresh()
 	if v := h.view(); !strings.Contains(v, "spawn failed") {
 		t.Fatalf("no note:\n%s", v)
@@ -327,8 +300,8 @@ func TestReconcileScopeAwareSwapsRunner(t *testing.T) {
 	var _ ui.Screen = h.s
 	h.s.SetScope(r2, runner.ScopeProject, "")
 	h.refresh()
-	if len(r1.got()) != 0 || len(r2.got()) != 1 {
-		t.Fatalf("r1=%q r2=%q", r1.got(), r2.got())
+	if len(r1.Calls()) != 0 || len(r2.Calls()) != 1 {
+		t.Fatalf("r1=%q r2=%q", r1.Calls(), r2.Calls())
 	}
 	if h.s.CapturesKeys() {
 		t.Fatal("reconcile screen has no text input")
@@ -342,7 +315,7 @@ func TestReconcileInitEqualsRefresh(t *testing.T) {
 	vi := h.view()
 	h2 := newHarness(t, okRunner(fixture(t, "auto-safe-drift.stdout")))
 	h2.refresh()
-	if vi != h2.view() || strings.Join(r.got(), "|") != "reconcile --auto-safe" {
+	if vi != h2.view() || strings.Join(r.Calls(), "|") != "reconcile --auto-safe" {
 		t.Fatalf("Init differs from Refresh:\n%s\n---\n%s", vi, h2.view())
 	}
 }
@@ -351,7 +324,7 @@ func TestReconcileStaleResultDropped(t *testing.T) {
 	r := okRunner("skipped (needs manual review): /old#/a (drift)\n")
 	h := newHarness(t, r)
 	oldMsg := h.s.Refresh()() // older generation, finished but not yet delivered
-	r.set(runner.Result{Stdout: "nothing to reconcile\n"}, nil)
+	r.Default(runner.Result{Stdout: "nothing to reconcile\n"}, nil)
 	h.refresh()
 	h.s.Update(oldMsg) // the older generation reports last
 	if v := h.view(); strings.Contains(v, "/old") || !strings.Contains(v, "nothing to reconcile") {
