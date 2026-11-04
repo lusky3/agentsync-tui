@@ -65,7 +65,7 @@ func TestTextSecretKeyValueUnchanged(t *testing.T) {
 		"password: \nnext line",
 		`"token": ""`,
 		"Plan: 1 ops total across 1 agent(s)",
-		"https://example.com/path?mode=fast",
+		"https://example.com/path/mode",
 	} {
 		if got := Text(in); got != in {
 			t.Errorf("Text(%q) = %q, want unchanged", in, got)

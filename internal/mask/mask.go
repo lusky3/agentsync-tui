@@ -25,38 +25,56 @@ const refPat = `\$\{(?:secret:|env:)?[A-Za-z_][A-Za-z0-9_.\-]*\}`
 // The key must not sit inside a reference: "${secret:NAME}" is not a pair.
 const secretKeyPat = `(?:^|[^{]|[^$]\{)(?:token|secret|password|passwd|pwd|api[-_]?key|credential|private[-_]?key|access[-_]?key)`
 
+// wordKeyPat matches keys that are secrets only as whole words: "auth" and
+// "pat" (personal access token), so AUTH=, github_pat= and PAT: are masked
+// while oauth=, compat= and path= are not.
+const wordKeyPat = `(?:^|[^A-Za-z0-9{])(?:auth|pat)`
+
+// rule is one Text rule: group 1 is kept, group 2 masked. bare marks the
+// bare-value KV rule, whose trailing closers belong to the surrounding text.
+type rule struct {
+	re   *regexp.Regexp
+	bare bool
+}
+
+// kvRules builds the three KV rules for a key pattern: a secret-named key
+// (token, password, api_key, apiKey, ...) ending the word, then ':' or '=',
+// then a value: bare (one word, or one ${ref}), "double"- or 'single'-quoted
+// (JSON/YAML shapes). The key is not masked; plurals ("passwords: 3") and
+// prose ("token expired") have no ':'/'=' directly after the word and stay
+// as is. A bare value that starts with a reference keeps the conservative
+// class (so "A=${env:A},B=${env:B}" shows both refs); a literal value runs
+// to the next whitespace so a separator cannot end the masked region early
+// ("password=ab,x"). Text re-appends trailing closers unmasked so
+// "(token=x)" keeps its shape.
+func kvRules(keyPat string) []rule {
+	return []rule{
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*)(\$\{[^}\s]*\}(?:\$\{[^}\s]*\}|[^\s"',;)}\]])*|(?:[^\s"'$]|\$[^{\s])[^\s]*)`), bare: true},
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`)},
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`)},
+	}
+}
+
 var (
 	refRe    = regexp.MustCompile(refPat)
 	wholeRef = regexp.MustCompile(`^` + refPat + `$`)
 
 	// Each Text rule keeps group 1 and masks group 2 unless
 	// that group consists only of references.
-	textRules = []*regexp.Regexp{
+	textRules = append([]rule{
 		// Authorization-style headers with any scheme.
-		regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"']+)`),
-		regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["']?)([^\s"']+)`),
-		regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"']+)`),
+		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"']+)`)},
+		{re: regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["']?)([^\s"']+)`)},
+		// Cookie headers: the whole cookie string is the secret.
+		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*:\s*["']?)([^\n"']+)`)},
+		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"']+)`)},
 		// userinfo in URLs.
-		regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)([^/\s@"']+)@`),
+		{re: regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)([^/\s@"']+)@`)},
 		// credential-looking query parameters.
-		regexp.MustCompile(`(?i)([?&;][A-Za-z0-9_.\-]*(?:token|key|secret|password|passwd|auth|sig|signature)=)([^&\s"'#]+)`),
+		{re: regexp.MustCompile(`(?i)([?&;][A-Za-z0-9_.\-]*(?:token|key|secret|password|passwd|auth|sig|signature)=)([^&\s"'#]+)`)},
 		// key/token/secret/password followed by = or : and a long opaque run.
-		regexp.MustCompile(`(?i)((?:token|key|secret|password)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-]{24,})`),
-		// A secret-named key (token, password, api_key, apiKey, ...) ending
-		// the word, then ':' or '=', then a value: bare (one word, or one
-		// ${ref}), "double"- or 'single'-quoted (JSON/YAML shapes). The key
-		// is not masked; plurals ("passwords: 3") and prose ("token
-		// expired") have no ':'/'=' directly after the word and stay as is.
-		bareKVRe,
-		regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`),
-		regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`),
-	}
-	// bareKVRe is the bare-value rule above. A value that starts with a
-	// reference keeps the conservative class (so "A=${env:A},B=${env:B}"
-	// shows both refs); a literal value runs to the next whitespace so a
-	// separator cannot end the masked region early ("password=ab,x"). Text
-	// re-appends trailing closers unmasked so "(token=x)" keeps its shape.
-	bareKVRe = regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*)(\$\{[^}\s]*\}(?:\$\{[^}\s]*\}|[^\s"',;)}\]])*|(?:[^\s"'$]|\$[^{\s])[^\s]*)`)
+		{re: regexp.MustCompile(`(?i)((?:token|key|secret|password)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-]{24,})`)},
+	}, append(kvRules(secretKeyPat), kvRules(wordKeyPat)...)...)
 	// Known token shapes: the whole match is the secret.
 	shapeRes = []*regexp.Regexp{
 		regexp.MustCompile(`gg_pat_[^\s"']+`),
@@ -71,7 +89,7 @@ var (
 	schemeOnlyRe = regexp.MustCompile(`^\s*(?i:bearer|basic|token)?\s*[:\s]*$`)
 	headerNameRe = regexp.MustCompile(`^([A-Za-z0-9_\-]+:[ \t]+)`)
 	sensitiveRe  = regexp.MustCompile(`(?i)token|secret|pass|key|auth|credential|bearer|cookie|session`)
-	secretFlagRe = regexp.MustCompile(`(?i)^-{1,2}(?:h|header|[a-z0-9_\-]*(?:token|key|secret|password|passwd|auth|authorization|bearer|credential)[a-z0-9_\-]*)$`)
+	secretFlagRe = regexp.MustCompile(`(?i)^-{1,2}(?:h|header|pat|auth|[a-z0-9_\-]*(?:token|key|secret|password|passwd|auth|authorization|bearer|credential)[a-z0-9_\-]*)$`)
 )
 
 // IsRef reports whether s is exactly one reference: ${secret:NAME},
@@ -110,7 +128,11 @@ func Value(val string) string {
 // characters cannot split a token past the rules.
 func Text(s string) string {
 	s = Sanitize(s)
-	for _, re := range textRules {
+	// URLs first: their path, query and fragment are masked by structure,
+	// and the KV rules then see only placeholders where values were.
+	s = urlRe.ReplaceAllStringFunc(s, maskURL)
+	for _, r := range textRules {
+		re := r.re
 		s = re.ReplaceAllStringFunc(s, func(m string) string {
 			sub := re.FindStringSubmatch(m)
 			secret := sub[2]
@@ -118,7 +140,7 @@ func Text(s string) string {
 				return m
 			}
 			tail := ""
-			if re == bareKVRe {
+			if r.bare {
 				// Trailing closers belong to the surrounding text.
 				keep := strings.TrimRight(secret, `,;)}]"'`)
 				if keep == "" {

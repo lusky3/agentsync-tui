@@ -147,7 +147,7 @@ func TestSanitizeStripsAnsiAndControl(t *testing.T) {
 func TestTextLeavesPlainURLsAlone(t *testing.T) {
 	for _, s := range []string{
 		"https://mcp.example/mcp",
-		"https://example.com/a/b?x=1&y=2",
+		"https://example.com/a/b?x&y", // query keys stay; values are masked (TestURLMasksCredentialBearingParts)
 		"npx -y mcp-remote task-runner risk-free",
 		"git@github.com:lusky3/repo.git",
 	} {
