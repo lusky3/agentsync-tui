@@ -43,9 +43,10 @@ func TestParseListHappyPath(t *testing.T) {
 			}
 		})
 	}
+	// a line with more than one field is prose, not an item with detail
 	got, err := ParseList("alpha  some detail   here\nbeta\n")
-	if err != nil || len(got) != 2 || got[0].Detail != "some detail here" || got[1].Detail != "" {
-		t.Errorf("detail: %+v %v", got, err)
+	if err != nil || !reflect.DeepEqual(names(got), []string{"beta"}) {
+		t.Errorf("prose line kept: %+v %v", got, err)
 	}
 }
 
@@ -67,15 +68,12 @@ func TestParseListEmptyMarker(t *testing.T) {
 func TestParseListTolerantOfJunk(t *testing.T) {
 	in := "\n\n  a-one   x=1 y=2 \r\n\t\nb.two\n(a parenthesised note)\n  \n"
 	got, err := ParseList(in)
-	if err != nil || !reflect.DeepEqual(names(got), []string{"a-one", "b.two"}) {
+	if err != nil || !reflect.DeepEqual(names(got), []string{"b.two"}) {
 		t.Fatalf("%v %v", got, err)
 	}
-	if got[0].Detail != "x=1 y=2" {
-		t.Errorf("detail %q", got[0].Detail)
-	}
 	// duplicates keep the first
-	got, _ = ParseList("x one\nx two\n")
-	if len(got) != 1 || got[0].Detail != "one" {
+	got, _ = ParseList("x\nx\n")
+	if len(got) != 1 || got[0].Name != "x" {
 		t.Errorf("dup: %+v", got)
 	}
 	// non-empty input with nothing recognisable is an error
@@ -100,7 +98,7 @@ func TestParseListHostileDropped(t *testing.T) {
 		"ok2 detail\x1b]0;title\x07",
 		"bad\xffutf",
 		strings.Repeat("a", 129),
-		"fine detail",
+		"fine",
 	}, "\n")
 	got, err := ParseList(in)
 	if err != nil {
@@ -111,5 +109,19 @@ func TestParseListHostileDropped(t *testing.T) {
 	}
 	if _, err := ParseList("-rf\n../x\n"); err == nil {
 		t.Error("all-hostile input must be an error")
+	}
+}
+
+// agentsync prints exactly one name per line (component_list.go:
+// Fprintln(w, Sanitize(n))), so a line with more than one field is prose,
+// not an item: a "Name Description" header or "No skills found" must not
+// yield the items "Name" or "No".
+func TestParseListRejectsProse(t *testing.T) {
+	if got, err := ParseList("No skills found\n"); err == nil || len(got) != 0 {
+		t.Fatalf("prose parsed as items: %v, %v", got, err)
+	}
+	got, err := ParseList("Name Description\ngreet\n  plan-it  \n")
+	if err != nil || !reflect.DeepEqual(names(got), []string{"greet", "plan-it"}) {
+		t.Fatalf("got %v, %v", got, err)
 	}
 }

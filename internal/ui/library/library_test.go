@@ -342,15 +342,9 @@ func TestListFailureKeepsLastList(t *testing.T) {
 }
 
 func TestOutputStoredMasked(t *testing.T) {
-	fr := stdoutRunner("alpha token=" + canary + "\nbeta\n")
+	fr := stdoutRunner("alpha\nbeta\n")
 	s, _ := loaded(t, Skill, fr, "alpha", "beta")
-	for _, it := range s.items {
-		noCanary(t, "stored detail", it.Name+it.Detail)
-	}
 	noCanary(t, "view", view(s))
-	if !strings.Contains(s.items[0].Detail, "token=") {
-		t.Errorf("detail %q", s.items[0].Detail)
-	}
 	startEdit(t, s)
 	s.Update(ui.RunMsg{Action: actions.Check(), Result: runner.Result{Stdout: "password=" + canary + "\nline2", Stderr: "token=" + canary}})
 	if s.check == nil {

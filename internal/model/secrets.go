@@ -29,12 +29,15 @@ func IsBackendNotConfigured(text string) bool {
 // A fresh home exits 1 with `set backend = "age" in agentsync.toml
 // [secrets]` on stderr (see IsBackendNotConfigured), not on stdout.
 //
-// Only the first token of each line is considered, cut at the first '=' or
-// ':' so that a line shaped like KEY=VALUE or KEY: VALUE can never yield
-// anything but the key; trailing columns are ignored. Tokens that are not
-// valid key names (control characters, ANSI, bidi, a leading '-', '../'),
-// a bare "Heading:" line, parenthesised notes and blank lines are dropped. Non-blank
-// input that yields no key and holds no note is an error.
+// The CLI prints exactly one key per line, so a line with more than one
+// whitespace-separated field is prose (a header row, "No secrets stored")
+// and never yields a key. A single token is cut at the first '=' or ':' so
+// that a line shaped like KEY=VALUE or KEY:VALUE can never yield anything
+// but the key. Tokens that are not valid key names (control characters,
+// ANSI, bidi, a leading '-', '../'), a bare "Heading:" line, parenthesised
+// notes and blank lines are dropped. Non-blank input that yields no key and
+// holds no note is an error, so unreadable output is reported rather than
+// shown as an empty or junk list.
 func ParseSecretKeys(stdout string) ([]string, error) {
 	var keys []string
 	recognised, nonBlank := false, false
@@ -49,8 +52,8 @@ func ParseSecretKeys(stdout string) ([]string, error) {
 			continue
 		}
 		f := strings.Fields(line)
-		if len(f) == 1 && strings.HasSuffix(f[0], ":") {
-			continue // a "Keys:" style heading with nothing after it
+		if len(f) != 1 || strings.HasSuffix(f[0], ":") {
+			continue // prose, or a "Keys:" style heading with nothing after it
 		}
 		tok := f[0]
 		if i := strings.IndexAny(tok, "=:"); i >= 0 {

@@ -174,9 +174,6 @@ func readList(ctx context.Context, id uint64, gen int, kind Kind, r runner.Runne
 	if err != nil {
 		return listMsg{id: id, gen: gen, note: word + " list output unreadable"}
 	}
-	for i := range items {
-		items[i].Detail = mask.OneLine(mask.Text(items[i].Detail))
-	}
 	return listMsg{id: id, gen: gen, items: items}
 }
 

@@ -9,27 +9,27 @@ import (
 )
 
 // Item is one entry of a library listing (skill, subagent, command, hook or
-// LSP server). Name is a validated identifier; Detail is the rest of the line
-// with control characters already excluded (callers still mask it).
+// LSP server). Name is a validated identifier.
 type Item struct {
-	Name   string
-	Detail string
+	Name string
 }
 
 // ParseList parses `agentsync skill|subagent|command|hook|lsp list` output.
 //
-// Formats seen with agentsync (dev build, 2026-11): one item name per line,
-// optionally followed by detail tokens (none seen yet):
+// Formats seen with agentsync (v0.17.0, component_list.go): exactly one
+// item name per line:
 //
 //	greet
 //	plan-it
 //	(no skills; author one by creating skills/<name>/SKILL.md ...)   (empty list)
 //
-// Blank lines and parenthesised notes are skipped. A line holding a control
-// character, escape sequence, bidi/zero-width rune or invalid UTF-8, or whose
-// first token is not a valid identifier (leading '-', '/', '..', too long),
-// is dropped. Duplicate names keep the first. Non-blank input from which
-// nothing parses and which holds no parenthesised note is an error.
+// Blank lines and parenthesised notes are skipped. A line with more than one
+// whitespace-separated field is prose (a header row, "No skills found") and
+// never yields an item. A line holding a control character, escape
+// sequence, bidi/zero-width rune or invalid UTF-8, or whose token is not a
+// valid identifier (leading '-', '/', '..', too long), is dropped. Duplicate
+// names keep the first. Non-blank input from which nothing parses and which
+// holds no parenthesised note is an error.
 func ParseList(stdout string) ([]Item, error) {
 	var out []Item
 	seen := map[string]bool{}
@@ -48,7 +48,7 @@ func ParseList(stdout string) ([]Item, error) {
 			recognised = true
 			continue
 		}
-		if !ident.Valid(f[0]) {
+		if len(f) != 1 || !ident.Valid(f[0]) {
 			continue
 		}
 		recognised = true
@@ -56,7 +56,7 @@ func ParseList(stdout string) ([]Item, error) {
 			continue
 		}
 		seen[f[0]] = true
-		out = append(out, Item{Name: f[0], Detail: strings.Join(f[1:], " ")})
+		out = append(out, Item{Name: f[0]})
 	}
 	if nonBlank && !recognised {
 		return nil, errors.New("list: no items in output")

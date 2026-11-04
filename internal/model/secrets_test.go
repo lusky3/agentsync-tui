@@ -48,12 +48,14 @@ func TestFreshHomeFailureRecognised(t *testing.T) {
 }
 
 func TestParseSecretKeysTolerantOfJunk(t *testing.T) {
-	in := "\n  Secrets:\n\nA_ONE   (updated 2026-01-01)\n\tB.two\t extra\t cols\n(1 more)\n"
+	// headings, notes and blank lines are skipped; multi-column lines are
+	// prose (the CLI prints one key per line) and never yield a key
+	in := "\n  Secrets:\n\nA_ONE   (updated 2026-01-01)\n\tB.two\t extra\t cols\n\tC_THREE\t\n(1 more)\n"
 	got, err := ParseSecretKeys(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"A_ONE", "B.two"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"C_THREE"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
 	}
 	if _, err := ParseSecretKeys("!!! ??? ###\n"); err == nil {
@@ -82,8 +84,8 @@ func TestParseSecretKeysDropsHostileNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// "sp ace" is the key "sp" with a trailing column: a valid key.
-	if want := []string{"GOOD", "sp", "ALSO_GOOD"}; !reflect.DeepEqual(got, want) {
+	// "sp ace" has two fields: prose, not the key "sp".
+	if want := []string{"GOOD", "ALSO_GOOD"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
@@ -94,7 +96,9 @@ func TestParseSecretKeysNeverReturnsValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"GITHUB_TOKEN", "API_KEY", "OTHER_KEY", "Q"}; !reflect.DeepEqual(got, want) {
+	// KEY=VALUE and Q="VALUE" are one field each and yield the key; the
+	// two-field lines are prose and yield nothing. Either way no value leaks.
+	if want := []string{"GITHUB_TOKEN", "Q"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
 	}
 	if j := strings.Join(got, "\n"); strings.Contains(j, "CANARY") {
@@ -162,4 +166,18 @@ func readFile(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// agentsync prints exactly one key per line (secrets.go: Fprintln(w,
+// Sanitize(k))), so a line with more than one field is prose, not a key:
+// "No secrets stored" must not yield the key "No", and output made only of
+// such lines is unreadable rather than empty.
+func TestParseSecretKeysRejectsProse(t *testing.T) {
+	if got, err := ParseSecretKeys("No secrets stored\n"); err == nil || len(got) != 0 {
+		t.Fatalf("prose parsed as keys: %q, %v", got, err)
+	}
+	got, err := ParseSecretKeys("Name Description\nAPI_KEY\nkeys: 1 total\n")
+	if err != nil || !reflect.DeepEqual(got, []string{"API_KEY"}) {
+		t.Fatalf("got %q, %v", got, err)
+	}
 }

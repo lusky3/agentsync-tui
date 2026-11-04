@@ -56,9 +56,6 @@ func (s *Screen) rows() []string {
 	out := make([]string, 0, len(s.items))
 	for i, it := range s.items {
 		line := it.Name
-		if it.Detail != "" {
-			line += "  " + theme.Dim.Render(mask.OneLine(mask.Text(it.Detail)))
-		}
 		if i == s.list.Cursor {
 			out = append(out, theme.Sel.Render("> "+ansi.Strip(line)))
 		} else {
