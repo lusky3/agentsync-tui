@@ -1,0 +1,1 @@
+(no skills; author one by creating skills/<name>/SKILL.md (a skill is a DIRECTORY — bundled scripts/, references/ and assets/ ride along), or capture one with `agentsync import <agent>:skill`)

@@ -1,0 +1,1 @@
+(no subagents; author one by creating subagents/<name>.md, or capture one with `agentsync import <agent>:subagent`)

@@ -1,0 +1,1 @@
+(no slash commands; author one by creating commands/<name>.md, or capture one with `agentsync import <agent>:command`)

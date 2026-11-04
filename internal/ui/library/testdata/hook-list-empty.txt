@@ -1,0 +1,1 @@
+(no hooks; author one by creating hooks/<event>.toml, or capture one with `agentsync import <agent>:hook`)

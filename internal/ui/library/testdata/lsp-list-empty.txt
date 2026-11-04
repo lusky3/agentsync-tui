@@ -1,0 +1,1 @@
+(no LSP servers; author one by creating lsp/<id>.toml, or capture one with `agentsync import <agent>:lsp`)
