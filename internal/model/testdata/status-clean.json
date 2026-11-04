@@ -1,0 +1,22 @@
+{
+  "agents": [
+    {
+      "agent": "antigravity",
+      "items": [
+        {
+          "path": "/tmp/TestCapture1159252381/001/home/.gemini/config/mcp_config.json",
+          "pointer": "/mcpServers/http-srv",
+          "class": "clean"
+        },
+        {
+          "path": "/tmp/TestCapture1159252381/001/home/.gemini/config/mcp_config.json",
+          "pointer": "/mcpServers/stdio-srv",
+          "class": "clean"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "clean": 2
+  }
+}

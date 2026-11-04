@@ -1,0 +1,10 @@
+{
+  "hunks": [
+    {
+      "path": "/tmp/TestCapture1159252381/001/home/.gemini/config/mcp_config.json",
+      "pointer": "/mcpServers/stdio-srv",
+      "source": "{\n  \"args\": [\n    \"-y\",\n    \"fake-mcp\"\n  ],\n  \"command\": \"npx\",\n  \"env\": {\n    \"API_KEY\": \"${env:FAKE_KEY}\"\n  }\n}",
+      "dest": "{\n  \"args\": [\n    \"-y\",\n    \"fake-mcp\"\n  ],\n  \"command\": \"npx\",\n  \"disabled\": true,\n  \"env\": {\n    \"API_KEY\": \"${env:FAKE_KEY}\"\n  }\n}"
+    }
+  ]
+}

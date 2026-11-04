@@ -1,0 +1,27 @@
+{
+  "path": "/tmp/TestCapture1159252381/001/home/.gemini/config/mcp_config.json",
+  "pointer": "/mcpServers/stdio-srv",
+  "scope": "user",
+  "unmanaged": false,
+  "owners": [
+    {
+      "agent": "antigravity",
+      "items": [
+        {
+          "pointer": "/mcpServers/stdio-srv",
+          "ownership": "managed",
+          "component": "mcp",
+          "name": "stdio-srv",
+          "source": {
+            "file": "mcp/stdio-srv.toml",
+            "multiple": false
+          },
+          "drift": "drift",
+          "secrets": [
+            "${env:FAKE_KEY}"
+          ]
+        }
+      ]
+    }
+  ]
+}
