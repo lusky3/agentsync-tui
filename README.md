@@ -55,8 +55,9 @@ next shown; `r` refreshes it on demand. A refresh, a scope switch and quitting
 cancel the reads they supersede. The Reconcile tab's `reconcile --auto-safe`
 takes agentsync's write lock, so it runs only while that tab is on show.
 
-Stopping a command sends it SIGINT and, if it is still running 10 seconds
-later, SIGKILL. `ctrl+c` cancels a running read at once. A running write needs
+Stopping a command sends SIGINT to agentsync's process group (so a helper it
+spawned, such as git, is interrupted too) and, if anything is still running
+10 seconds later, SIGKILL. `ctrl+c` cancels a running read at once. A running write needs
 `ctrl+c` twice within 3 seconds; `q` during a write quits once the write has
 finished (or, after a `ctrl+c`, once it has stopped). agentsync v0.17.0 does
 not handle SIGINT itself, so an interrupted write still stops where it is:
@@ -134,7 +135,9 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   no `secret get`, and values are entered in agentsync's own prompt or in your
   editor via `secret edit`.
 - Other output that can carry resolved values (diffs, `explain`, command
-  output, logs) is masked on a best-effort basis. The masking is heuristic: it
+  output, logs) is masked on a best-effort basis. Each output stream is kept
+  up to 4 MiB (then marked truncated) before it is masked, and a screen stores
+  at most 64 KiB of the masked text. The masking is heuristic: it
   covers known secret-looking flags, env values, headers and token shapes, but
   a literal secret in a free-form argument or command line cannot always be
   recognized, and a rotated secret inside a diff cannot be masked (upstream

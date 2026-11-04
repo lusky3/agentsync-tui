@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,6 +51,50 @@ type Exec struct {
 // before it is killed.
 const InterruptGrace = 10 * time.Second
 
+// MaxStream caps what Run keeps of each of stdout and stderr, in bytes; a
+// stream that was cut ends with TruncatedMark. The screens store far less
+// (ui.MaxOutput) after masking, so this bounds the masking cost, not what
+// is shown.
+const MaxStream = 4 << 20
+
+// TruncatedMark ends a stream that MaxStream cut.
+const TruncatedMark = "\n[agentsync-tui: output truncated at 4 MiB]"
+
+// waitDelay is the effective SIGINT-to-SIGKILL grace: a zero or negative
+// grace (a zero Exec) falls back to InterruptGrace so a child that ignores
+// SIGINT is still killed.
+func (e *Exec) waitDelay() time.Duration {
+	if e.grace <= 0 {
+		return InterruptGrace
+	}
+	return e.grace
+}
+
+// capWriter keeps the first n bytes written and notes whether more came.
+type capWriter struct {
+	buf       bytes.Buffer
+	n         int
+	truncated bool
+}
+
+func (w *capWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := w.n - w.buf.Len(); n > room {
+		w.truncated = true
+		p = p[:max(room, 0)]
+	}
+	w.buf.Write(p)
+	return n, nil // the excess is consumed, never reported short
+}
+
+// String returns what was kept, with TruncatedMark when anything was cut.
+func (w *capWriter) String() string {
+	if w.truncated {
+		return w.buf.String() + TruncatedMark
+	}
+	return w.buf.String()
+}
+
 // NewExec returns an Exec for bin. projectDir is used only with ScopeProject.
 func NewExec(bin string, scope Scope, projectDir string) *Exec {
 	return &Exec{bin: bin, scope: scope, projectDir: projectDir, grace: InterruptGrace}
@@ -92,29 +137,35 @@ func (e *Exec) scopeArgs(args []string) []string {
 func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 	full := append(append(append([]string{}, args...), e.scopeArgs(args)...), "--no-input", "--color", "never")
 	cmd := exec.CommandContext(ctx, e.bin, full...)
+	setProcessGroup(cmd) // signals reach the helpers agentsync spawns too
+	grace := e.waitDelay()
 	// On cancel, interrupt rather than kill: a write such as `plugin upgrade
 	// --all` then gets the chance to finish or roll back. Only if it is
-	// still running grace later is it killed (WaitDelay). agentsync v0.17.0
+	// still running grace later is it killed: the whole group by the timer,
+	// agentsync itself and its pipes by WaitDelay. agentsync v0.17.0
 	// installs no SIGINT handler outside `secret edit`, so today it exits at
 	// once on SIGINT, much as on SIGKILL: its single-file writes are atomic
 	// and its flock dies with it, but a multi-file run can still stop
 	// halfway. Where SIGINT cannot be delivered, kill at once.
+	var killTimer atomic.Pointer[time.Timer]
 	cmd.Cancel = func() error {
-		if err := cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return cmd.Process.Kill()
+		if err := signalGroup(cmd, os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return signalGroup(cmd, os.Kill)
 		}
+		killTimer.Store(time.AfterFunc(grace, func() { _ = signalGroup(cmd, os.Kill) }))
 		return nil
 	}
-	cmd.WaitDelay = e.grace
-	if cmd.WaitDelay <= 0 {
-		cmd.WaitDelay = InterruptGrace // a zero Exec must still kill eventually
-	}
+	cmd.WaitDelay = grace
 	cmd.Env = e.Env
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
+	out, errb := &capWriter{n: MaxStream}, &capWriter{n: MaxStream}
+	cmd.Stdout, cmd.Stderr = out, errb
 	err := cmd.Run()
+	if t := killTimer.Load(); t != nil {
+		t.Stop()
+	}
 	res := Result{Stdout: out.String(), Stderr: errb.String()}
 	if ctx.Err() != nil {
+		_ = signalGroup(cmd, os.Kill) // nothing of a cancelled run survives it
 		return res, ctx.Err()
 	}
 	var ee *exec.ExitError

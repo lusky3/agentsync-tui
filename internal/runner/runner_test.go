@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -218,5 +219,41 @@ func TestCheckVersionAgainstRealBinary(t *testing.T) {
 	}
 	if _, _, err := CheckVersion(context.Background(), r); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A zero or negative grace falls back to InterruptGrace, so a zero Exec
+// still kills a child that ignores SIGINT.
+func TestWaitDelayFallsBackToInterruptGrace(t *testing.T) {
+	for _, c := range []struct {
+		grace, want time.Duration
+	}{
+		{0, InterruptGrace},
+		{-1, InterruptGrace},
+		{5 * time.Second, 5 * time.Second},
+	} {
+		e := Exec{grace: c.grace}
+		if got := e.waitDelay(); got != c.want {
+			t.Errorf("grace %v: waitDelay %v, want %v", c.grace, got, c.want)
+		}
+	}
+}
+
+// Each stream is capped at MaxStream bytes and ends with TruncatedMark when
+// it was cut, so masking cost is bounded whatever the command prints.
+func TestOutputCappedPerStream(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "flood.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nhead -c "+strconv.Itoa(MaxStream+1<<20)+" /dev/zero | tr '\\0' x\nhead -c 10 /dev/zero | tr '\\0' e >&2\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewExec(script, ScopeUser, "").Run(context.Background(), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(res.Stdout, TruncatedMark) || len(res.Stdout) > MaxStream+len(TruncatedMark) {
+		t.Errorf("stdout len %d, suffix %q", len(res.Stdout), res.Stdout[max(len(res.Stdout)-40, 0):])
+	}
+	if res.Stderr != "eeeeeeeeee" {
+		t.Errorf("stderr %q: a stream under the cap must not be marked", res.Stderr)
 	}
 }
