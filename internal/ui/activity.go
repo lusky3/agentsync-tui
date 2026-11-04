@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,13 @@ import (
 
 // ringSize is how many activity entries are kept in memory.
 const ringSize = 200
+
+// logRotateBytes is the size at which the activity-log file is rotated
+// (renamed to .1, older files shifting up); logKeep is how many rotated
+// files are kept. A variable so tests can rotate early.
+var logRotateBytes int64 = 1 << 20
+
+const logKeep = 3
 
 // entry is one activity-log record. It deliberately holds ONLY the masked
 // command line, the outcome (exit code or error kind) and timing: never
@@ -106,17 +114,96 @@ func (l *activityLog) entries() []entry {
 	return append(append([]entry(nil), l.ring[l.next:]...), l.ring[:l.next]...)
 }
 
+// appendLine appends one line to the log file at path, creating the file and
+// its directory as needed. It never follows a symlink at either (the file is
+// opened with O_NOFOLLOW where the platform has it, and both are checked
+// with Lstat first), it tightens a pre-existing directory to 0700 and file
+// to 0600 before writing, and it rotates the file once it has reached
+// logRotateBytes (path.1 … path.logKeep, newest first).
 func appendLine(path, line string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err := ownedDir(dir); err != nil {
+		return err
+	}
+	f, err := openLog(path)
 	if err != nil {
 		return err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	if fi.Size() >= logRotateBytes {
+		_ = f.Close()
+		if err := rotate(path); err != nil {
+			return err
+		}
+		if f, err = openLog(path); err != nil {
+			return err
+		}
 	}
 	if _, err := f.WriteString(line); err != nil {
 		_ = f.Close()
 		return err
 	}
 	return f.Close()
+}
+
+// ownedDir refuses a symlinked log directory and tightens its mode to 0700.
+func ownedDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return errors.New("activity log directory is not a directory")
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return os.Chmod(dir, 0o700)
+	}
+	return nil
+}
+
+// openLog opens (creating if needed) the log file for appending, refusing a
+// symlink or anything but a regular file, and tightens its mode to 0600.
+func openLog(path string) (*os.File, error) {
+	if fi, err := os.Lstat(path); err == nil && (fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular()) {
+		return nil, errors.New("activity log is not a regular file")
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|openNoFollow, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = errors.New("activity log is not a regular file")
+	}
+	if err == nil && fi.Mode().Perm()&0o077 != 0 {
+		err = f.Chmod(0o600)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// rotate shifts path.(logKeep-1) → path.logKeep, …, path → path.1, dropping
+// the oldest.
+func rotate(path string) error {
+	for i := logKeep; i >= 1; i-- {
+		from := path
+		if i > 1 {
+			from = path + "." + strconv.Itoa(i-1)
+		}
+		to := path + "." + strconv.Itoa(i)
+		if err := os.Rename(from, to); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
