@@ -1,7 +1,5 @@
 # agentsync-tui Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** A terminal UI that manages everything `agentsync` manages (MCP servers, drift, apply/revert, reconcile, import, agents, plugins, marketplaces, secrets, library items, health) by driving the `agentsync` CLI.
 
 **Architecture:** A Go Bubble Tea app that treats the `agentsync` CLI as its API. Reads come from `--json` output (`status`, `diff`, `explain`), from text output parsed against captured fixtures (everything else), and from the canonical `~/.agentsync/mcp/*.toml` files (read-only). Every mutation is an `Action` (an exact argv) shown to the user, confirmed, executed through one `Runner`, and logged with secrets masked. Interactive CLI flows (reconcile, secret prompts, `$EDITOR`) hand the terminal over with `tea.ExecProcess`.
@@ -21,7 +19,7 @@ Verified against agentsync v0.17.0:
 - `skill|hook|command|subagent|lsp` have **no `add`** by design: items are files created by hand or captured with `import`.
 - Global flags: `--no-input`, `--color`, `--scope user|project`, `--project <path>`.
 - Open upstream bugs the TUI must not trip over: #239 (`reconcile` override writes `${env:…}`/`${secret:…}` literally into live files), #255 (bulk `[W]` writes back ForeignCollision items), #256 (reconcile diff labels reversed), #254 (diff/reconcile cannot mask a rotated secret), #218 (control bytes can reach the terminal).
-- Motivating live example: 21 drift hunks on an AGY config, including `disabled` flags that exist only on the AGY side.
+- Motivating live example: 21 drift hunks on an Antigravity config, including `disabled` flags that exist only on the Antigravity side.
 
 Not yet known (each is resolved by a named discovery step, with a fixture captured from a **hermetic** agentsync home): `status --json` item field names; `agent list --all` and the other text formats; where `mcp disable` records its state; whether `mcp add` on an existing ID errors or overwrites; `agentsync version` output format.
 

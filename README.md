@@ -70,8 +70,11 @@ Long views scroll with `ctrl+d`/`ctrl+u` or `pgdown`/`pgup`; the plugin detail v
 - Every change the TUI itself makes goes through an `agentsync` command. The
   command line is shown (masked, best-effort) and you confirm it before it
   runs. Read-only commands (dry-run previews, `check`) run without a prompt,
-  and screens read state directly with `list`, `status`, `diff`, `explain` and
-  `doctor`. The TUI writes no agentsync files directly.
+  and screens read state directly with `list`, `status`, `diff`, `explain`,
+  `doctor`, `check`, `version`, `status --legend`, `plugin outdated`,
+  `reconcile --auto-safe` and similar read-only calls. Quitting cancels any of
+  these still in flight (the child process is killed). The TUI writes no
+  agentsync files directly.
 - The one exception is `E` (edit) on MCP servers and on Skills, Subagents,
   Commands, Hooks, LSP and Memory: it opens the canonical file in `$VISUAL`,
   then `$EDITOR`, falling back to `vi`, immediately and with no confirm dialog.
