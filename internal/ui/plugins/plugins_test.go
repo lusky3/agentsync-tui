@@ -271,8 +271,8 @@ func TestRemoveIsDestructiveWithWarning(t *testing.T) {
 	if !reflect.DeepEqual(act.Argv, []string{"plugin", "remove", "hello"}) || !act.Destructive {
 		t.Errorf("act = %+v", act)
 	}
-	if !strings.Contains(act.Warning, "cached files") || ui.Verb(act) != "remove" {
-		t.Errorf("warning %q verb %q", act.Warning, ui.Verb(act))
+	if !strings.Contains(act.Warning, "cached files") || act.ConfirmVerb() != "remove" {
+		t.Errorf("warning %q verb %q", act.Warning, act.ConfirmVerb())
 	}
 }
 
@@ -359,8 +359,8 @@ func TestMarketplaceRemoveIsDestructive(t *testing.T) {
 	if !reflect.DeepEqual(act.Argv, []string{"marketplace", "remove", "localmkt"}) || !act.Destructive {
 		t.Errorf("act = %+v", act)
 	}
-	if !strings.Contains(act.Warning, "cached files") || ui.Verb(act) != "remove" {
-		t.Errorf("warning %q verb %q", act.Warning, ui.Verb(act))
+	if !strings.Contains(act.Warning, "cached files") || act.ConfirmVerb() != "remove" {
+		t.Errorf("warning %q verb %q", act.Warning, act.ConfirmVerb())
 	}
 	if got := press(s, "e"); len(got) != 0 {
 		t.Error("e is plugin-only")

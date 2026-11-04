@@ -17,27 +17,6 @@ import (
 // maxConfirmInput caps the typed-confirmation buffer.
 const maxConfirmInput = 64
 
-// Verb is the word a user must type to confirm a destructive action: the
-// subcommand for grouped commands (mcp/agent/plugin/marketplace/secret),
-// otherwise the command itself.
-func Verb(act actions.Action) string {
-	if len(act.Argv) == 0 {
-		return ""
-	}
-	for _, a := range act.Argv {
-		if a == "--purge" {
-			return "purge" // a purge must not share the word of a plain disable
-		}
-	}
-	switch act.Argv[0] {
-	case "mcp", "agent", "plugin", "marketplace", "secret":
-		if len(act.Argv) > 1 {
-			return act.Argv[1]
-		}
-	}
-	return act.Argv[0]
-}
-
 // modal is the confirm dialog for one pending action.
 type modal struct {
 	act     actions.Action
@@ -51,7 +30,7 @@ type modal struct {
 func newModal(act actions.Action, scope runner.Scope, project string) *modal {
 	m := &modal{act: act, scope: scope, project: project}
 	if act.Destructive {
-		m.verb = Verb(act)
+		m.verb = act.ConfirmVerb()
 		if m.verb == "" {
 			m.verb = "yes"
 		}

@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -68,21 +69,21 @@ func (s *Screen) View() tea.View {
 		name = theme.Dim.Render("(every item; press n to name one)")
 	}
 	lines = append(lines, "  name:      "+name)
-	act, err := s.build(false)
+	p, err := s.pair()
 	switch {
-	case err == errNoAgent:
+	case errors.Is(err, errNoAgent):
 		lines = append(lines, theme.Dim.Render("  will run: (nothing: no agent selected)"))
 	case err != nil:
 		lines = append(lines, theme.Bad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
 	default:
-		l := theme.Bold.Render("  will run: ") + mask.OneLine(act.Display())
-		if act.Network {
+		l := theme.Bold.Render("  will run: ") + mask.OneLine(p.Real.Display())
+		if p.Real.Network {
 			l += " " + theme.Warn.Render("[network]")
 		}
 		lines = append(lines, l)
 	}
 	st := theme.Dim.Render("  no preview yet: " + msgPreviewFirst)
-	if err == nil && s.g.allows(act, s.scope) {
+	if err == nil && s.g.Allows(p.Real, s.scope) {
 		st = theme.OK.Render("  preview ok: press i to import")
 	}
 	if s.msg != "" {

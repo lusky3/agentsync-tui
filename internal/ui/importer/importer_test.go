@@ -595,20 +595,19 @@ func TestImportAgentReloadChangingSelectionInvalidatesGate(t *testing.T) {
 	h := claudeShell(t, "plan")
 	h.setComponent("mcp")
 	h.press("p")
-	if h.s.g.ok == "" {
+	if !h.s.g.Pending() {
 		t.Fatal("preview did not arm the gate")
 	}
-	seq := h.s.g.seq
 	h.reloadAgents("antigravity enabled=true scope=user\n")
-	if h.s.g.ok != "" || h.s.g.seq == seq {
-		t.Fatalf("gate not invalidated: ok=%q seq %d -> %d", h.s.g.ok, seq, h.s.g.seq)
+	if h.s.g.Pending() {
+		t.Fatal("gate not invalidated by the selection change")
 	}
 	// a harmless reload does not
 	h = claudeShell(t, "plan")
 	h.setComponent("mcp")
 	h.press("p")
 	h.reloadAgents(agentsTwo)
-	if h.s.g.ok == "" {
+	if !h.s.g.Pending() {
 		t.Fatal("harmless reload invalidated the gate")
 	}
 }

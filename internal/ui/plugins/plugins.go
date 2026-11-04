@@ -311,7 +311,7 @@ func (s *Screen) key(k string) tea.Cmd {
 		}
 	case "U":
 		if s.pane == panePlugins && s.guard() {
-			return s.emit(actions.PluginUpgradeAll())
+			return s.emit(actions.PluginUpgradeAll(), nil)
 		}
 	case "e", "x", "u":
 		return s.mutate(k)

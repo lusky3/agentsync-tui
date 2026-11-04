@@ -3,8 +3,9 @@ package actions
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
@@ -22,8 +23,9 @@ func checkID(kind, s string) error {
 	return nil
 }
 
-// checkText rejects empty values, control characters and (optionally) a
-// leading dash, for free-form values that land in argv.
+// checkText rejects empty or over-long values, a leading dash (it would
+// read as a flag) and control characters, for free-form values that land in
+// argv.
 func checkText(kind, s string, max int) error {
 	if s == "" || len(s) > max || strings.HasPrefix(s, "-") {
 		return fmt.Errorf("invalid %s", kind)
@@ -57,26 +59,32 @@ func sub(title, kind, id string, destructive bool, argv ...string) (Action, erro
 	return Action{Title: title + " " + id, Argv: append(argv, id), Destructive: destructive}, nil
 }
 
+// McpEnable builds `mcp enable <id>`.
 func McpEnable(id string) (Action, error) {
 	return sub("Enable MCP server", "server id", id, false, "mcp", "enable")
 }
 
+// McpDisable builds `mcp disable <id>`.
 func McpDisable(id string) (Action, error) {
 	return sub("Disable MCP server", "server id", id, false, "mcp", "disable")
 }
 
+// McpRemove builds the destructive `mcp remove <id>`.
 func McpRemove(id string) (Action, error) {
 	return sub("Remove MCP server", "server id", id, true, "mcp", "remove")
 }
 
+// AgentAdd builds `agent add <name>`.
 func AgentAdd(name string) (Action, error) {
 	return sub("Add agent", "agent name", name, false, "agent", "add")
 }
 
+// AgentEnable builds `agent enable <name>`.
 func AgentEnable(name string) (Action, error) {
 	return sub("Enable agent", "agent name", name, false, "agent", "enable")
 }
 
+// AgentDisable builds `agent disable <name>` (destination files are kept).
 func AgentDisable(name string) (Action, error) {
 	return sub("Disable agent", "agent name", name, false, "agent", "disable")
 }
@@ -112,18 +120,22 @@ func PluginAdd(name string) (Action, error) {
 	return Action{Title: "Add plugin " + name, Argv: []string{"plugin", "add", name}, Network: true}, nil
 }
 
+// PluginEnable builds `plugin enable <id>`.
 func PluginEnable(name string) (Action, error) {
 	return sub("Enable plugin", "plugin id", name, false, "plugin", "enable")
 }
 
+// PluginDisable builds `plugin disable <id>`.
 func PluginDisable(name string) (Action, error) {
 	return sub("Disable plugin", "plugin id", name, false, "plugin", "disable")
 }
 
+// PluginRemove builds the destructive `plugin remove <id>`.
 func PluginRemove(name string) (Action, error) {
 	return sub("Remove plugin", "plugin id", name, true, "plugin", "remove")
 }
 
+// PluginUpgrade builds `plugin upgrade <id>` (network).
 func PluginUpgrade(name string) (Action, error) {
 	a, err := sub("Upgrade plugin", "plugin id", name, false, "plugin", "upgrade")
 	if err != nil {
@@ -134,13 +146,14 @@ func PluginUpgrade(name string) (Action, error) {
 }
 
 // PluginUpgradeAll upgrades every plugin with a pending version bump and
-// re-applies once (`plugin upgrade --all`).
-func PluginUpgradeAll() (Action, error) {
+// re-applies once (`plugin upgrade --all`, network). Like every builder
+// without an input to validate it cannot fail.
+func PluginUpgradeAll() Action {
 	return Action{
 		Title:   "Upgrade every plugin with a pending bump, then re-apply",
 		Argv:    []string{"plugin", "upgrade", "--all"},
 		Network: true,
-	}, nil
+	}
 }
 
 // MarketplaceAdd takes a URL or local path.
@@ -151,6 +164,7 @@ func MarketplaceAdd(src string) (Action, error) {
 	return Action{Title: "Add marketplace", Argv: []string{"marketplace", "add", src}, Network: true}, nil
 }
 
+// MarketplaceRemove builds the destructive `marketplace remove <name>`.
 func MarketplaceRemove(name string) (Action, error) {
 	return sub("Remove marketplace", "marketplace name", name, true, "marketplace", "remove")
 }
@@ -165,10 +179,13 @@ func SecretSet(key string) (Action, error) {
 	return a, nil
 }
 
-func SecretEdit() (Action, error) {
-	return Action{Title: "Edit secrets", Argv: []string{"secret", "edit"}, Interactive: true}, nil
+// SecretEdit hands the terminal to `secret edit` (agentsync opens the
+// editor; the TUI never sees the values).
+func SecretEdit() Action {
+	return Action{Title: "Edit secrets", Argv: []string{"secret", "edit"}, Interactive: true}
 }
 
+// SecretRemove builds the destructive `secret remove <key>`.
 func SecretRemove(key string) (Action, error) {
 	return sub("Remove secret", "secret key", key, true, "secret", "remove")
 }
@@ -183,9 +200,12 @@ func ReconcileReport() Action {
 	return Action{Title: "Report drift needing reconcile", Argv: []string{"reconcile", "--auto-safe"}, ReadOnly: true}
 }
 
+// Check builds the read-only `check`.
 func Check() Action {
 	return Action{Title: "Check configuration", Argv: []string{"check"}, ReadOnly: true}
 }
+
+// Doctor builds the read-only `doctor`.
 func Doctor() Action { return Action{Title: "Run doctor", Argv: []string{"doctor"}, ReadOnly: true} }
 
 // Apply renders canonical config and writes destination files (unless dry).
@@ -203,6 +223,33 @@ func Apply(dry bool, agents ...string) (Action, error) {
 		argv = append(argv, "--agents", strings.Join(agents, ","))
 	}
 	return Action{Title: title, Argv: argv, ReadOnly: dry}, nil
+}
+
+// ApplyPair returns the apply dry run and the real apply for agents.
+func ApplyPair(agents ...string) (Previewed, error) {
+	return pair(func(dry bool) (Action, error) { return Apply(dry, agents...) })
+}
+
+// RevertPair returns the revert dry run and the real revert.
+func RevertPair(agent, to string, all bool) (Previewed, error) {
+	return pair(func(dry bool) (Action, error) { return Revert(agent, to, all, dry) })
+}
+
+// ImportPair returns the import dry run and the real import.
+func ImportPair(agent, component, name string) (Previewed, error) {
+	return pair(func(dry bool) (Action, error) { return Import(agent, component, name, dry) })
+}
+
+func pair(build func(dry bool) (Action, error)) (Previewed, error) {
+	dry, err := build(true)
+	if err != nil {
+		return Previewed{}, err
+	}
+	real, err := build(false)
+	if err != nil {
+		return Previewed{}, err
+	}
+	return Previewed{Preview: dry, Real: real}, nil
 }
 
 // Revert restores an agent's destination to a prior checkpoint. Exactly one of
@@ -281,108 +328,139 @@ type AddSpec struct {
 	Agents                 []string
 }
 
+// cmdline builds argv and its masked display copy in lockstep: every token
+// is added through add, so the two can never drift.
+type cmdline struct{ argv, disp []string }
+
+func (c *cmdline) add(flag, real, shown string) {
+	c.argv = append(c.argv, flag, real)
+	c.disp = append(c.disp, flag, shown)
+}
+
 // McpAdd always passes --type explicitly: the CLI defaults to stdio, and an
 // http add without it fails.
 func McpAdd(s AddSpec) (Action, error) {
 	if err := checkID("server id", s.ID); err != nil {
 		return Action{}, err
 	}
-	argv := []string{"mcp", "add", s.ID, "--type", s.Type}
-	// disp mirrors argv token for token, with every caller-supplied value
-	// masked by what it is (Display renders it; argv is never masked).
-	disp := append([]string(nil), argv...)
+	head := []string{"mcp", "add", s.ID, "--type", s.Type}
+	c := &cmdline{argv: head, disp: append([]string(nil), head...)}
+	for _, step := range []func(*cmdline, AddSpec) error{addTarget, addArgs, addEnv, addHeaders, addAgents} {
+		if err := step(c, s); err != nil {
+			return Action{}, err
+		}
+	}
+	return Action{Title: "Add MCP server " + s.ID, Argv: c.argv, display: c.disp}, nil
+}
+
+// addTarget adds --command (stdio) or --url (http, sse).
+func addTarget(c *cmdline, s AddSpec) error {
 	switch s.Type {
 	case "stdio":
 		if s.URL != "" {
-			return Action{}, errors.New("stdio server must not have a URL")
+			return errors.New("stdio server must not have a URL")
 		}
 		if err := checkText("command", s.Command, 4096); err != nil {
-			return Action{}, err
+			return err
 		}
-		argv = append(argv, "--command", s.Command)
-		disp = append(disp, "--command", mask.FreeText(s.Command))
+		c.add("--command", s.Command, mask.FreeText(s.Command))
 	case "http", "sse":
 		if s.Command != "" {
-			return Action{}, fmt.Errorf("%s server must not have a command", s.Type)
+			return fmt.Errorf("%s server must not have a command", s.Type)
 		}
 		if err := checkText("url", s.URL, 2048); err != nil {
-			return Action{}, err
+			return err
 		}
-		argv = append(argv, "--url", s.URL)
-		disp = append(disp, "--url", mask.Text(s.URL))
+		c.add("--url", s.URL, mask.Text(s.URL))
 	default:
-		return Action{}, fmt.Errorf("invalid server type %q", s.Type)
+		return fmt.Errorf("invalid server type %q", s.Type)
 	}
-	if len(s.Args) > 0 {
-		esc := make([]string, len(s.Args))
-		for i, a := range s.Args {
-			if err := checkNoControl("arg", a); err != nil {
-				return Action{}, err
-			}
-			// The CLI's backslash escaping is undocumented: refuse rather than
-			// let a literal backslash change argument boundaries.
-			if strings.Contains(a, `\`) {
-				return Action{}, errors.New("arg contains a backslash, which the CLI cannot express safely")
-			}
-			esc[i] = strings.ReplaceAll(a, ",", `\,`)
-		}
-		argv = append(argv, "--args", strings.Join(esc, ","))
-		masked := mask.CommandLine(s.Args)
-		for i := range masked {
-			masked[i] = strings.ReplaceAll(masked[i], ",", `\,`)
-		}
-		disp = append(disp, "--args", strings.Join(masked, ","))
+	return nil
+}
+
+// addArgs adds --args as one comma-separated token, commas escaped.
+func addArgs(c *cmdline, s AddSpec) error {
+	if len(s.Args) == 0 {
+		return nil
 	}
-	if len(s.Env) > 0 {
-		keys := make([]string, 0, len(s.Env))
-		for k := range s.Env {
-			keys = append(keys, k)
+	esc := make([]string, len(s.Args))
+	for i, a := range s.Args {
+		if err := checkNoControl("arg", a); err != nil {
+			return err
 		}
-		sort.Strings(keys)
-		pairs := make([]string, len(keys))
-		shown := make([]string, len(keys))
-		for i, k := range keys {
-			v := s.Env[k]
-			if !envKeyRe.MatchString(k) {
-				return Action{}, fmt.Errorf("invalid env key %q", k)
-			}
-			// The CLI's escaping for env values is undocumented: refuse rather than guess.
-			if strings.Contains(v, ",") {
-				return Action{}, fmt.Errorf("env value for %s contains a comma, which the CLI cannot express", k)
-			}
-			// The CLI's splitter reads `\,` as a literal comma, so a value ending
-			// in a backslash would swallow the separator and merge it with the
-			// next entry: the confirm dialog would show two entries while the
-			// file stores one. Refuse every backslash, as for --args.
-			if strings.Contains(v, `\`) {
-				return Action{}, fmt.Errorf("env value for %s contains a backslash, which the CLI cannot express safely", k)
-			}
-			if err := checkNoControl("env value", v); err != nil {
-				return Action{}, err
-			}
-			pairs[i] = k + "=" + v
-			shown[i] = k + "=" + mask.Value(v)
+		// The CLI's backslash escaping is undocumented: refuse rather than
+		// let a literal backslash change argument boundaries.
+		if strings.Contains(a, `\`) {
+			return errors.New("arg contains a backslash, which the CLI cannot express safely")
 		}
-		argv = append(argv, "--env", strings.Join(pairs, ","))
-		disp = append(disp, "--env", strings.Join(shown, ","))
+		esc[i] = strings.ReplaceAll(a, ",", `\,`)
 	}
+	masked := mask.CommandLine(s.Args)
+	for i := range masked {
+		masked[i] = strings.ReplaceAll(masked[i], ",", `\,`)
+	}
+	c.add("--args", strings.Join(esc, ","), strings.Join(masked, ","))
+	return nil
+}
+
+// addEnv adds --env as sorted KEY=VALUE pairs, values masked for display.
+func addEnv(c *cmdline, s AddSpec) error {
+	if len(s.Env) == 0 {
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(s.Env))
+	pairs := make([]string, len(keys))
+	shown := make([]string, len(keys))
+	for i, k := range keys {
+		v := s.Env[k]
+		if !envKeyRe.MatchString(k) {
+			return fmt.Errorf("invalid env key %q", k)
+		}
+		// The CLI's escaping for env values is undocumented: refuse rather than guess.
+		if strings.Contains(v, ",") {
+			return fmt.Errorf("env value for %s contains a comma, which the CLI cannot express", k)
+		}
+		// The CLI's splitter reads `\,` as a literal comma, so a value ending
+		// in a backslash would swallow the separator and merge it with the
+		// next entry: the confirm dialog would show two entries while the
+		// file stores one. Refuse every backslash, as for --args.
+		if strings.Contains(v, `\`) {
+			return fmt.Errorf("env value for %s contains a backslash, which the CLI cannot express safely", k)
+		}
+		if err := checkNoControl("env value", v); err != nil {
+			return err
+		}
+		pairs[i] = k + "=" + v
+		shown[i] = k + "=" + mask.Value(v)
+	}
+	c.add("--env", strings.Join(pairs, ","), strings.Join(shown, ","))
+	return nil
+}
+
+// addHeaders adds one --header per "Name: Value", values masked for display.
+func addHeaders(c *cmdline, s AddSpec) error {
 	for _, h := range s.Headers {
 		if !strings.Contains(h, ":") || strings.HasPrefix(h, "-") || strings.HasPrefix(h, ":") {
-			return Action{}, fmt.Errorf("invalid header (want \"Name: Value\")")
+			return fmt.Errorf("invalid header (want \"Name: Value\")")
 		}
 		if err := checkNoControl("header", h); err != nil {
-			return Action{}, err
+			return err
 		}
-		argv = append(argv, "--header", h)
 		name, val, _ := strings.Cut(h, ":")
-		disp = append(disp, "--header", name+": "+mask.Value(strings.TrimSpace(val)))
+		c.add("--header", h, name+": "+mask.Value(strings.TrimSpace(val)))
 	}
-	if len(s.Agents) > 0 {
-		if err := checkAgents(s.Agents); err != nil {
-			return Action{}, err
-		}
-		argv = append(argv, "--agents", strings.Join(s.Agents, ","))
-		disp = append(disp, "--agents", strings.Join(s.Agents, ","))
+	return nil
+}
+
+// addAgents adds --agents as a comma-separated allowlist.
+func addAgents(c *cmdline, s AddSpec) error {
+	if len(s.Agents) == 0 {
+		return nil
 	}
-	return Action{Title: "Add MCP server " + s.ID, Argv: argv, display: disp}, nil
+	if err := checkAgents(s.Agents); err != nil {
+		return err
+	}
+	list := strings.Join(s.Agents, ",")
+	c.add("--agents", list, list)
+	return nil
 }

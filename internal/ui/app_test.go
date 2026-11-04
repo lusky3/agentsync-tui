@@ -282,30 +282,6 @@ func mustAct(a actions.Action, err error) actions.Action {
 
 // ---- tests ----------------------------------------------------------------
 
-func TestVerb(t *testing.T) {
-	cases := []struct {
-		argv []string
-		want string
-	}{
-		{[]string{"mcp", "remove", "x"}, "remove"},
-		{[]string{"agent", "remove", "claude"}, "remove"},
-		{[]string{"plugin", "remove", "p"}, "remove"},
-		{[]string{"marketplace", "remove", "m"}, "remove"},
-		{[]string{"secret", "remove", "K"}, "remove"},
-		{[]string{"revert", "--all"}, "revert"},
-		{[]string{"agent", "disable", "claude", "--purge"}, "purge"},
-		{[]string{"agent", "disable", "claude"}, "disable"},
-		{[]string{"apply"}, "apply"},
-		{[]string{"mcp"}, "mcp"},
-		{nil, ""},
-	}
-	for _, c := range cases {
-		if got := Verb(actions.Action{Argv: c.argv}); got != c.want {
-			t.Errorf("Verb(%q) = %q, want %q", c.argv, got, c.want)
-		}
-	}
-}
-
 func TestPurgeActionIsDestructiveWithPurgeVerb(t *testing.T) {
 	a, err := actions.AgentDisablePurge("claude")
 	if err != nil || !a.Destructive {
@@ -416,7 +392,7 @@ func TestConfirmModalCancelDoesNotRun(t *testing.T) {
 	fr := newFakeRunner()
 	h := start(t, baseDeps(fr), newScreen("A", "a"))
 	act := mustAct(actions.McpEnable("x"))
-	h.tm.Send(h.p.Do(act)())
+	h.tm.Send(Do(act)())
 	h.tm.Send(key("esc"))
 	app := h.final()
 	if n := fr.nCalls(); n != 0 {
@@ -1130,7 +1106,7 @@ func (f *fakeRunner) ctxErr(i int) error {
 // startWrite confirms and starts `plugin upgrade --all`, a network write.
 func startWrite(t *testing.T, h *harness) {
 	t.Helper()
-	act := mustAct(actions.PluginUpgradeAll())
+	act := actions.PluginUpgradeAll()
 	if act.ReadOnly {
 		t.Fatal("precondition: a write")
 	}
@@ -1169,7 +1145,7 @@ func TestCtrlCOnWriteNeedsConfirmation(t *testing.T) {
 // (TestCtrlCCancelsRunningAction).
 func TestCtrlCOnWriteConfirmationExpires(t *testing.T) {
 	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
-	app.Update(DoMsg{Action: mustAct(actions.PluginUpgradeAll())})
+	app.Update(DoMsg{Action: actions.PluginUpgradeAll()})
 	app.Update(key("y")) // starts; the run cmd is never executed
 	if app.running == nil {
 		t.Fatal("precondition: write running")
@@ -1244,7 +1220,7 @@ func TestQuitDuringWriteFallsBackAfterInterrupt(t *testing.T) {
 		t.Fatalf("quitGrace %v must exceed runner.InterruptGrace %v", quitGrace, runner.InterruptGrace)
 	}
 	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
-	app.Update(DoMsg{Action: mustAct(actions.PluginUpgradeAll())})
+	app.Update(DoMsg{Action: actions.PluginUpgradeAll()})
 	app.Update(key("y"))
 	if _, cmd := app.Update(key("q")); cmd != nil || app.running == nil {
 		t.Fatal("q during a write must neither stop it nor schedule a quit deadline")

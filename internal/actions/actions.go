@@ -12,6 +12,7 @@ package actions
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/lusky3/agentsync-tui/internal/ident"
@@ -45,6 +46,35 @@ type Action struct {
 func ValidID(s string) bool { return ident.Valid(s) }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+// ConfirmVerb is the word a user must type to confirm a destructive action:
+// "purge" for a purge (so it cannot share the word of a plain disable), the
+// subcommand for grouped commands (mcp/agent/plugin/marketplace/secret),
+// otherwise the command itself; "" for an empty Argv.
+func (a Action) ConfirmVerb() string {
+	if len(a.Argv) == 0 {
+		return ""
+	}
+	if slices.Contains(a.Argv, "--purge") {
+		return "purge"
+	}
+	switch a.Argv[0] {
+	case "mcp", "agent", "plugin", "marketplace", "secret":
+		if len(a.Argv) > 1 {
+			return a.Argv[1]
+		}
+	}
+	return a.Argv[0]
+}
+
+// Key is the argv joined with NUL: the identity of an action for matching a
+// RunMsg back to the request that caused it.
+func (a Action) Key() string { return strings.Join(a.Argv, "\x00") }
+
+// Previewed is a mutation with its dry run: Preview is ReadOnly and carries
+// --dry-run, Real is the same command without it. Builders return the pair
+// so the preview gate never has to edit argv.
+type Previewed struct{ Preview, Real Action }
 
 // Display returns the masked, POSIX shell-quoted command line shown to the
 // user. It is never used for execution.

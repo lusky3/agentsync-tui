@@ -70,13 +70,14 @@ func (s *Screen) View() tea.View {
 		}
 		lines = append(lines, s.field("--to:  ", to, s.focus == fTo))
 	}
-	if act, err := s.build(false); err != nil {
+	p, err := s.pair()
+	if err != nil {
 		lines = append(lines, theme.Bad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
 	} else {
-		lines = append(lines, theme.Bold.Render("  will run: ")+mask.OneLine(act.Display()))
+		lines = append(lines, theme.Bold.Render("  will run: ")+mask.OneLine(p.Real.Display()))
 	}
 	st := theme.Dim.Render("  no preview yet: preview first")
-	if s.prev[s.mode] != nil {
+	if err == nil && s.gates[s.mode].Allows(p.Real, s.scope) {
 		st = theme.OK.Render("  preview ok")
 	}
 	if s.msg != "" {

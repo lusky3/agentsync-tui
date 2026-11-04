@@ -346,8 +346,8 @@ func TestRemoveIsDestructiveWithWarning(t *testing.T) {
 	s, _ := loadedWith(t, fixture(t, "secret-list.txt"), srv)
 	moveTo(t, s, "API_KEY")
 	act := onlyAction(t, press(s, "x"))
-	if !act.Destructive || !reflect.DeepEqual(act.Argv, []string{"secret", "remove", "API_KEY"}) || ui.Verb(act) != "remove" {
-		t.Fatalf("action = %+v verb %q", act, ui.Verb(act))
+	if !act.Destructive || !reflect.DeepEqual(act.Argv, []string{"secret", "remove", "API_KEY"}) || act.ConfirmVerb() != "remove" {
+		t.Fatalf("action = %+v verb %q", act, act.ConfirmVerb())
 	}
 	for _, want := range []string{"${secret:API_KEY}", "alpha, beta"} {
 		if !strings.Contains(act.Warning, want) {

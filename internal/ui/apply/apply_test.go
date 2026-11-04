@@ -644,7 +644,32 @@ func TestForeignMutationClearsPreviewMessage(t *testing.T) {
 	if h.s.msg == "running preview…" || !strings.Contains(h.s.msg, "preview") {
 		t.Errorf("msg after a foreign mutation: %q", h.s.msg)
 	}
-	if h.s.req[h.s.mode] != nil {
+	if h.s.gates[h.s.mode].Pending() {
 		t.Error("preview request still pending")
+	}
+}
+
+// The preview is bound to the scope it was requested in (gate.Gate), not
+// only to the argv: even if the screen's scope changed without SetScope
+// dropping the preview, the real command is refused in the other scope.
+func TestPreviewBoundToScope(t *testing.T) {
+	h := newShell(t, okRunner("x"))
+	h.s.agents = "claude"
+	h.press("p")
+	if !strings.Contains(h.s.msg, "preview ok") {
+		t.Fatalf("precondition: %q", h.s.msg)
+	}
+	h.s.scope = runner.ScopeProject // defence in depth: no SetScope reset
+	h.press("a")
+	if len(h.asked) != 0 || h.s.msg != msgPreviewFirst {
+		t.Fatalf("real apply offered in another scope: asked=%v msg=%q", h.asked, h.s.msg)
+	}
+	if strings.Contains(h.view(), "preview ok") {
+		t.Error("view still claims the preview is good in the other scope")
+	}
+	h.s.scope = runner.ScopeUser
+	h.press("a")
+	if len(h.asked) != 1 {
+		t.Fatalf("real apply not offered back in the preview's scope: %v", h.asked)
 	}
 }

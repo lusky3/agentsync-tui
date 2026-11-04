@@ -298,7 +298,7 @@ func (s *Screen) key(k string) tea.Cmd {
 	case "u":
 		return s.emit(actions.SecretSet(s.selected()))
 	case "E":
-		return s.emit(actions.SecretEdit())
+		return s.emit(actions.SecretEdit(), nil)
 	case "x":
 		return s.remove()
 	}

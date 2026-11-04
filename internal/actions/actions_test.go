@@ -322,7 +322,7 @@ func TestMarketplaceAdd(t *testing.T) {
 
 func TestSecretFlags(t *testing.T) {
 	s, _ := SecretSet("K")
-	e, _ := SecretEdit()
+	e := SecretEdit()
 	if !s.Interactive || !e.Interactive || !reflect.DeepEqual(s.Argv, []string{"secret", "set", "K"}) || !reflect.DeepEqual(e.Argv, []string{"secret", "edit"}) {
 		t.Fatal("secret interactive")
 	}
@@ -369,7 +369,7 @@ func TestNoSecretGetBuilder(t *testing.T) {
 		a, _ := f("k")
 		all = append(all, a)
 	}
-	e, _ := SecretEdit()
+	e := SecretEdit()
 	all = append(all, e, Reconcile(), ReconcileReport(), Check(), Doctor())
 	for _, dry := range []bool{true, false} {
 		a, _ := Apply(dry, "claude")
@@ -447,10 +447,7 @@ func TestAgentDisablePurgeBuilder(t *testing.T) {
 }
 
 func TestPluginUpgradeAll(t *testing.T) {
-	a, err := PluginUpgradeAll()
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := PluginUpgradeAll()
 	if !reflect.DeepEqual(a.Argv, []string{"plugin", "upgrade", "--all"}) {
 		t.Errorf("argv = %q", a.Argv)
 	}
@@ -502,5 +499,29 @@ func TestMcpAddRejectsBackslashInCommaJoinedValues(t *testing.T) {
 	// A plain value still passes.
 	if _, err := McpAdd(AddSpec{ID: "a", Type: "stdio", Command: "c", Env: map[string]string{"K": "v/1"}}); err != nil {
 		t.Errorf("plain env value rejected: %v", err)
+	}
+}
+
+func TestConfirmVerb(t *testing.T) {
+	cases := []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"mcp", "remove", "x"}, "remove"},
+		{[]string{"agent", "remove", "claude"}, "remove"},
+		{[]string{"plugin", "remove", "p"}, "remove"},
+		{[]string{"marketplace", "remove", "m"}, "remove"},
+		{[]string{"secret", "remove", "K"}, "remove"},
+		{[]string{"revert", "--all"}, "revert"},
+		{[]string{"agent", "disable", "claude", "--purge"}, "purge"},
+		{[]string{"agent", "disable", "claude"}, "disable"},
+		{[]string{"apply"}, "apply"},
+		{[]string{"mcp"}, "mcp"},
+		{nil, ""},
+	}
+	for _, c := range cases {
+		if got := (Action{Argv: c.argv}).ConfirmVerb(); got != c.want {
+			t.Errorf("ConfirmVerb(%q) = %q, want %q", c.argv, got, c.want)
+		}
 	}
 }

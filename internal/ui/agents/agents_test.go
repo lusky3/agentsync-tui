@@ -176,8 +176,8 @@ func TestRemoveIsDestructive(t *testing.T) {
 	if !act.Destructive || !reflect.DeepEqual(act.Argv, []string{"agent", "remove", "claude"}) {
 		t.Fatalf("act = %+v", act)
 	}
-	if ui.Verb(act) != "remove" {
-		t.Fatalf("verb = %q", ui.Verb(act))
+	if act.ConfirmVerb() != "remove" {
+		t.Fatalf("verb = %q", act.ConfirmVerb())
 	}
 	moveTo(t, s, "amp")
 	if msgs := press(s, "x"); len(msgs) != 0 {
@@ -190,7 +190,7 @@ func TestPurgeActionCarriesWarningAndScreenHasNoStaleHeader(t *testing.T) {
 	moveTo(t, s, "claude")
 	act := onlyAction(t, press(s, "D"))
 	want, _ := actions.AgentDisablePurge("claude")
-	if !reflect.DeepEqual(act, want) || ui.Verb(act) != "purge" || act.Warning == "" {
+	if !reflect.DeepEqual(act, want) || act.ConfirmVerb() != "purge" || act.Warning == "" {
 		t.Fatalf("act = %+v", act)
 	}
 	// The warning lives in the confirm modal; a screen-side header would be

@@ -84,11 +84,23 @@ type running struct {
 // armed: a second ctrl+c inside it interrupts the write.
 const interruptConfirm = 3 * time.Second
 
-// Do returns a Cmd that runs act through the shell: non-ReadOnly actions go
-// through the confirm modal first; every action is logged and the active
-// screen is refreshed afterwards.
-func (a *App) Do(act actions.Action) tea.Cmd {
+// Do returns the Cmd a screen uses to hand act to the shell: non-ReadOnly
+// actions go through the confirm modal first; every action is logged and
+// the active screen is refreshed afterwards.
+func Do(act actions.Action) tea.Cmd {
 	return func() tea.Msg { return DoMsg{Action: act} }
+}
+
+// DoOr is Do for a builder result: a builder error is written to *note as
+// "error: <first line, masked>" and nothing is handed over; otherwise the
+// note is cleared.
+func DoOr(act actions.Action, err error, note *string) tea.Cmd {
+	if err != nil {
+		*note = "error: " + mask.FirstLine(err.Error())
+		return nil
+	}
+	*note = ""
+	return Do(act)
 }
 
 // request handles a DoMsg inside Update.

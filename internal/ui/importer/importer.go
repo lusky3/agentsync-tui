@@ -23,6 +23,7 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/model"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
+	"github.com/lusky3/agentsync-tui/internal/ui/gate"
 )
 
 // readTimeout bounds the agent list read.
@@ -64,7 +65,7 @@ type Screen struct {
 	name   string // optional item name
 	typing bool   // the name field has focus
 
-	g      gate
+	g      gate.Gate
 	out    *ui.Output
 	scroll int
 	msg    string
@@ -130,8 +131,7 @@ func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.agen++
 	s.loaded, s.agents, s.note = false, nil, ""
-	s.g.invalidate()
-	s.g.live = ""
+	s.g.Reset()
 	s.out, s.scroll, s.msg = nil, 0, ""
 }
 
@@ -141,12 +141,12 @@ func (s *Screen) CapturesKeys() bool { return s.typing }
 func (s *Screen) agentName() string { return s.agent }
 func (s *Screen) component() string { return s.comp }
 
-// build returns the real (non-dry) or dry-run action for the current inputs.
-func (s *Screen) build(dry bool) (actions.Action, error) {
+// pair returns the dry run and the real import for the current inputs.
+func (s *Screen) pair() (actions.Previewed, error) {
 	if s.agent == "" {
-		return actions.Action{}, errNoAgent
+		return actions.Previewed{}, errNoAgent
 	}
-	return actions.Import(s.agent, s.comp, s.name, dry)
+	return actions.ImportPair(s.agent, s.comp, s.name)
 }
 
 var errNoAgent = errors.New("no agent selected")
@@ -227,7 +227,7 @@ func (s *Screen) typed(k tea.KeyPressMsg) {
 
 // edited runs after any input change or cycle.
 func (s *Screen) edited() {
-	s.g.invalidate()
+	s.g.Invalidate()
 	s.msg = ""
 }
 
@@ -286,52 +286,50 @@ func (s *Screen) cycleComp(d int) {
 	s.edited()
 }
 
-func doCmd(a actions.Action) tea.Cmd { return func() tea.Msg { return ui.DoMsg{Action: a} } }
-
 // preview emits the dry run for the current inputs.
 func (s *Screen) preview() tea.Cmd {
-	act, err := s.build(true)
+	p, err := s.pair()
 	if err != nil {
 		s.msg = ""
 		return nil // the builder error is rendered inline
 	}
-	s.g.request(act)
+	s.g.Request(p, s.scope)
 	s.msg = "running preview…"
-	return doCmd(act)
+	return ui.Do(p.Preview)
 }
 
 // commit emits the real import, only behind a successful matching preview.
 func (s *Screen) commit() tea.Cmd {
-	act, err := s.build(false)
+	p, err := s.pair()
 	if err != nil {
 		return nil
 	}
-	if !s.g.allows(act, s.scope) {
+	if !s.g.Allows(p.Real, s.scope) {
 		s.msg = msgPreviewFirst
 		return nil
 	}
-	s.g.arm(act)
+	s.g.Arm(p.Real)
 	s.msg = "waiting for confirmation"
-	return doCmd(act)
+	return ui.Do(p.Real)
 }
 
 // onRun applies a finished action matched to this screen by argv.
 func (s *Screen) onRun(m ui.RunMsg) {
-	switch s.g.observe(m, s.scope) {
-	case previewOK:
+	switch s.g.Observe(m) {
+	case gate.PreviewOK:
 		s.store(m)
 		s.msg = "preview ok: press i to import"
-	case previewFail:
+	case gate.PreviewFail:
 		s.store(m)
 		s.msg = "preview failed; fix the selector and preview first"
-	case ranReal:
+	case gate.RanReal:
 		s.store(m)
 		if m.Err == nil && m.Result.ExitCode == 0 {
 			s.msg = "import done; preview first before another import"
 		} else {
 			s.msg = "import did not succeed; preview first to retry"
 		}
-	case dropped:
+	case gate.Dropped:
 		s.msg = ""
 	}
 }
@@ -344,7 +342,7 @@ func (s *Screen) onEdit(m ui.EditOutcomeMsg) {
 	if !m.Started && !m.Finished {
 		return
 	}
-	if s.g.editInvalidate() {
+	if s.g.Drop() {
 		s.msg = "preview invalidated by an edit — preview again"
 	}
 }

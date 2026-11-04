@@ -67,7 +67,7 @@ func TestDefaultBoundsNetworkReadsOnly(t *testing.T) {
 	}{
 		{"network read", networkRead(t), true},
 		{"local read", actions.Check(), false},
-		{"network write", mustAct(actions.PluginUpgradeAll()), false},
+		{"network write", actions.PluginUpgradeAll(), false},
 		{"local write", mustAct(actions.McpEnable("x")), false},
 	}
 	for _, c := range cases {
@@ -81,7 +81,7 @@ func TestDefaultBoundsNetworkReadsOnly(t *testing.T) {
 
 // --write-timeout bounds every write; --read-timeout 0 lifts the read bound.
 func TestConfiguredTimeouts(t *testing.T) {
-	for _, act := range []actions.Action{mustAct(actions.McpEnable("x")), mustAct(actions.PluginUpgradeAll())} {
+	for _, act := range []actions.Action{mustAct(actions.McpEnable("x")), actions.PluginUpgradeAll()} {
 		d := baseDeps(newFakeRunner())
 		d.Timeouts = &Timeouts{Write: time.Hour}
 		if !deadlineOf(t, d, act) {
@@ -127,7 +127,7 @@ func TestWriteTimeoutIsLogged(t *testing.T) {
 	d.Timeouts = &Timeouts{Write: 50 * time.Millisecond}
 	d.LogPath = filepath.Join(t.TempDir(), "activity.log")
 	h := start(t, d, newScreen("A", "a"))
-	h.tm.Send(DoMsg{Action: mustAct(actions.PluginUpgradeAll())})
+	h.tm.Send(DoMsg{Action: actions.PluginUpgradeAll()})
 	h.pressAndWait(key("y"))
 	h.waitRun()
 	app := h.final()
