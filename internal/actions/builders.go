@@ -171,11 +171,26 @@ func MarketplaceRemove(name string) (Action, error) {
 
 // SecretSet hands over to agentsync's own prompt; no value is ever in argv.
 func SecretSet(key string) (Action, error) {
-	a, err := sub("Set secret", "secret key", key, false, "secret", "set")
+	a, err := secretKeyAction("Set secret", key, false, "secret", "set")
 	if err != nil {
 		return Action{}, err
 	}
 	a.Interactive = true
+	return a, nil
+}
+
+// secretKeyAction is sub for a vault key. A key that is shaped like a
+// value (mask.TokenShaped: a secret once typed into the name field, or
+// stored by another tool) is shown as the mask in the title and the display
+// copy, so it reaches neither the confirm dialog nor the activity log; argv
+// still carries it.
+func secretKeyAction(title, key string, destructive bool, argv ...string) (Action, error) {
+	a, err := sub(title, "secret key", key, destructive, argv...)
+	if err != nil || !mask.TokenShaped(key) {
+		return a, err
+	}
+	a.Title = title + " " + mask.Mask
+	a.display = append(append([]string(nil), argv...), mask.Mask)
 	return a, nil
 }
 
@@ -187,7 +202,7 @@ func SecretEdit() Action {
 
 // SecretRemove builds the destructive `secret remove <key>`.
 func SecretRemove(key string) (Action, error) {
-	return sub("Remove secret", "secret key", key, true, "secret", "remove")
+	return secretKeyAction("Remove secret", key, true, "secret", "remove")
 }
 
 // Reconcile is the interactive per-item resolver; it never carries --auto-*.

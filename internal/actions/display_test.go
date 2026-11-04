@@ -127,3 +127,30 @@ func TestMcpAddCommandArgvIsNotMasked(t *testing.T) {
 		t.Errorf("display leaks: %s", a.Display())
 	}
 }
+
+// A vault key that is shaped like a value (no known token prefix, so Text
+// leaves it alone) is masked in the display of secret set and remove, and
+// the Warning never carries it.
+func TestSecretActionsMaskValueShapedKeys(t *testing.T) {
+	const key = "CANARYx1f3a9c2d7e8b1"
+	set, err := SecretSet(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm, err := SecretRemove(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []Action{set, rm} {
+		if a.Argv[2] != key {
+			t.Errorf("argv %q", a.Argv)
+		}
+		if strings.Contains(a.Display(), "CANARY") || strings.Contains(a.Warning, "CANARY") {
+			t.Errorf("display %q warning %q", a.Display(), a.Warning)
+		}
+	}
+	plain, _ := SecretSet("GITHUB_TOKEN")
+	if plain.Display() != "agentsync secret set GITHUB_TOKEN" {
+		t.Errorf("plain name changed: %q", plain.Display())
+	}
+}

@@ -95,7 +95,7 @@ const maxNameLen = 64
 // value: within the length cap and unchanged by mask.Text (token shapes such
 // as ghp_…, sk-…, AKIA… are rewritten by it).
 func plausibleName(s string) bool {
-	return len(s) <= maxNameLen && mask.Text(s) == s
+	return len(s) <= maxNameLen && mask.Text(s) == s && !mask.TokenShaped(s)
 }
 
 func keyRune(r rune) bool {

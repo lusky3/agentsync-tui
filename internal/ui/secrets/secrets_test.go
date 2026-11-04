@@ -821,3 +821,43 @@ func TestRemoveWarningCapsUsers(t *testing.T) {
 		t.Errorf("five users must be listed in full: %q", w5)
 	}
 }
+
+// A high-entropy value with no known token prefix typed (or auto-typed)
+// into the key field is refused by shape, so it can never become a key name
+// in argv, the confirm dialog, the activity log or the vault; ordinary key
+// names still submit.
+func TestValueShapedNameRefused(t *testing.T) {
+	for _, v := range []string{
+		"CANARYx1f3a9c2d7e8b1",
+		"a1b2c3d4e5f60718293a4b5c6d7e8f90",
+		"CANARYx1-AbCdEf_GhIjKlMnOp",
+	} {
+		s, _ := loaded(t)
+		press(s, "n")
+		s.input.Value = v // bypass the per-rune lock: the submit check must refuse on its own
+		if msgs := press(s, "enter"); len(msgs) != 0 || !s.locked || s.input.Value != "" {
+			t.Errorf("%q: emitted %v locked %v value %q", v, msgs, s.locked, s.input.Value)
+		}
+		if !strings.Contains(view(s), "looks like a secret value") {
+			t.Errorf("%q: no shape notice:\n%s", v, view(s))
+		}
+		s, _ = loaded(t)
+		press(s, "n")
+		typeStr(s, v)
+		if !s.locked || s.input.Value != "" {
+			t.Errorf("%q typed rune by rune was kept: locked %v value %q", v, s.locked, s.input.Value)
+		}
+	}
+	for _, name := range []string{"GITHUB_TOKEN", "s3_bucket_2024", "db.password", "Slack-Bot-Token-2024"} {
+		s, _ := loaded(t)
+		press(s, "n")
+		typeStr(s, name)
+		if s.locked {
+			t.Fatalf("%q refused while typing", name)
+		}
+		act := onlyAction(t, press(s, "enter"))
+		if !reflect.DeepEqual(act.Argv, []string{"secret", "set", name}) {
+			t.Errorf("%q: argv %q", name, act.Argv)
+		}
+	}
+}
