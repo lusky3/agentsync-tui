@@ -38,7 +38,7 @@ agentsync-tui --debug-log ./tui-debug.log   # keep masked samples of unparseable
 `--read-timeout` bounds the network reads: import previews of plugins or a
 whole agent, and the plugins screen's `plugin outdated`. Local reads (the
 lists, status, diff, explain, doctor and check a screen or the header chip
-runs) are bounded at `min(30s, --read-timeout)`: the flag can lower that
+runs, and the dry-run previews) are bounded at `min(30s, --read-timeout)`: the flag can lower that
 bound but not lift it. `--write-timeout` bounds every write (apply, revert,
 import, `plugin upgrade`, ...). Both take a Go duration such as `90s` or
 `10m`; `0` means no bound (for the network reads or the writes). While a

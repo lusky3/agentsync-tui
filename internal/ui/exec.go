@@ -49,7 +49,9 @@ const LocalReadBound = 30 * time.Second
 type Timeouts struct {
 	// Read bounds network reads: ReadOnly actions with Network set (import
 	// dry runs of plugins or a whole agent) and the plugins screen's
-	// `plugin outdated`. Local reads use Local, which it can lower.
+	// `plugin outdated`. Local reads, the screens' and the ReadOnly
+	// actions without Network (apply/revert/import previews, check), use
+	// Local, which it can lower.
 	Read time.Duration
 	// Write bounds every non-ReadOnly action. The default is none: a write
 	// such as `plugin upgrade --all` cut off partway can leave agentsync's
@@ -175,6 +177,8 @@ func (a *App) start(act actions.Action) tea.Cmd {
 		limit = lim.Write
 	case act.Network:
 		limit = lim.Read
+	default:
+		limit = lim.Local() // a dry-run preview or check is a local read
 	}
 	// Actions derive from context.Background, not Deps.Ctx: quitting must
 	// not cut a write off (quitAfterWrite waits for it); the running

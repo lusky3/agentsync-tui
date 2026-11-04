@@ -57,8 +57,9 @@ func deadlineOf(t *testing.T, d Deps, act actions.Action) bool {
 	return fr.deadlines[0]
 }
 
-// By default a network read is bounded and nothing else is: a write, even a
-// network one such as `plugin upgrade --all`, runs to completion.
+// By default every read is bounded (network reads by Read, local ones by
+// Local) and no write is: a write, even a network one such as `plugin
+// upgrade --all`, runs to completion.
 func TestDefaultBoundsNetworkReadsOnly(t *testing.T) {
 	cases := []struct {
 		name string
@@ -66,7 +67,7 @@ func TestDefaultBoundsNetworkReadsOnly(t *testing.T) {
 		want bool
 	}{
 		{"network read", networkRead(t), true},
-		{"local read", actions.Check(), false},
+		{"local read", actions.Check(), true},
 		{"network write", actions.PluginUpgradeAll(), false},
 		{"local write", mustAct(actions.McpEnable("x")), false},
 	}
@@ -167,5 +168,47 @@ func TestTimeoutsLocal(t *testing.T) {
 	}
 	if DefaultTimeouts.Local() != LocalReadBound {
 		t.Errorf("default local bound %v", DefaultTimeouts.Local())
+	}
+}
+
+// A ReadOnly action that is not a network one (the apply/revert/import
+// dry-run previews, check) is a local read and gets the local bound,
+// min(LocalReadBound, --read-timeout); a network read keeps --read-timeout.
+func TestLocalReadActionsBoundedLocally(t *testing.T) {
+	pair, err := actions.ApplyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview := pair.Preview
+	if !preview.ReadOnly || preview.Network {
+		t.Fatalf("precondition: %+v", preview)
+	}
+	for _, c := range []struct {
+		name string
+		read time.Duration
+		act  actions.Action
+		max  time.Duration
+	}{
+		{"preview default", 0, preview, LocalReadBound},
+		{"check default", 0, actions.Check(), LocalReadBound},
+		{"preview lowered", 5 * time.Second, preview, 5 * time.Second},
+		{"preview read-timeout 2m", 2 * time.Minute, preview, LocalReadBound},
+	} {
+		fr := newFakeRunner()
+		d := baseDeps(fr)
+		if c.read > 0 {
+			d.Timeouts = &Timeouts{Read: c.read}
+		}
+		h := start(t, d, newScreen("A", "a"))
+		h.tm.Send(DoMsg{Action: c.act})
+		h.waitStarted()
+		fr.mu.Lock()
+		ctx := fr.ctxs[0]
+		fr.mu.Unlock()
+		dl, ok := ctx.Deadline()
+		if !ok || time.Until(dl) > c.max {
+			t.Errorf("%s: deadline %v (%v), want one within %v", c.name, ok, time.Until(dl), c.max)
+		}
+		h.final()
 	}
 }
