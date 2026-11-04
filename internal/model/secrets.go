@@ -2,15 +2,14 @@ package model
 
 import (
 	"errors"
-	"regexp"
 	"strings"
+
+	"github.com/lusky3/agentsync-tui/internal/ident"
 )
 
-// secretKeyRe is the key charset (the same rule as actions.ValidID).
-var secretKeyRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-
-// IsSecretKey reports whether s is a safe secret key name.
-func IsSecretKey(s string) bool { return secretKeyRe.MatchString(s) }
+// IsSecretKey reports whether s is a safe secret key name (the shared
+// identifier rule, ident.Valid).
+func IsSecretKey(s string) bool { return ident.Valid(s) }
 
 // IsBackendNotConfigured reports whether text is the message `secret list`
 // prints (exit 1, stderr) when [secrets] has no backend.
@@ -57,7 +56,7 @@ func ParseSecretKeys(stdout string) ([]string, error) {
 		if i := strings.IndexAny(tok, "=:"); i >= 0 {
 			tok = tok[:i]
 		}
-		if !secretKeyRe.MatchString(tok) {
+		if !ident.Valid(tok) {
 			continue
 		}
 		keys = append(keys, tok)

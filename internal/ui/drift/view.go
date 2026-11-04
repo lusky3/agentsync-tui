@@ -7,20 +7,11 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/model"
-)
-
-var (
-	styleBold = lipgloss.NewStyle().Bold(true)
-	styleDim  = lipgloss.NewStyle().Faint(true)
-	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleBad  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleSel  = lipgloss.NewStyle().Reverse(true)
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
@@ -50,11 +41,11 @@ func (s *Screen) View() tea.View {
 
 func (s *Screen) listLines() []string {
 	if !s.loaded {
-		return []string{styleDim.Render("loading…"), styleDim.Render(listKeys)}
+		return []string{theme.Dim.Render("loading…"), theme.Dim.Render(listKeys)}
 	}
-	foot := []string{styleDim.Render(listKeys)}
+	foot := []string{theme.Dim.Render(listKeys)}
 	if s.note != "" && len(s.rep.Agents) == 0 {
-		return append([]string{styleDim.Render(s.note)}, foot...)
+		return append([]string{theme.Dim.Render(s.note)}, foot...)
 	}
 	if len(s.rep.Agents) == 0 {
 		return append([]string{"no agents registered"}, foot...)
@@ -65,31 +56,31 @@ func (s *Screen) listLines() []string {
 	}
 	summary := "no drift"
 	if n := len(s.rep.Drifted()); n > 0 {
-		summary = styleBad.Render(itoa(n) + " need attention")
+		summary = theme.Bad.Render(strconv.Itoa(n) + " need attention")
 	} else {
-		summary = styleOK.Render(summary)
+		summary = theme.OK.Render(summary)
 	}
-	head := []string{summary + styleDim.Render("  filter: "+filter), ""}
+	head := []string{summary + theme.Dim.Render("  filter: "+filter), ""}
 	if s.note != "" { // failed refresh: last good report stays visible
-		head = append([]string{styleDim.Render(s.note)}, head...)
+		head = append([]string{theme.Dim.Render(s.note)}, head...)
 	}
 
 	var body []string
 	selLine, idx := 0, 0
 	for _, a := range s.rep.Agents {
-		body = append(body, styleBold.Render(mask.OneLine(mask.Text(a.Agent))+"  "+counts(a.Items)))
+		body = append(body, theme.Bold.Render(mask.OneLine(mask.Text(a.Agent))+"  "+counts(a.Items)))
 		for _, it := range s.visible(a) {
 			line := "  " + itemLine(it)
 			if idx == s.cursor {
 				selLine = len(body)
-				line = styleSel.Render("> " + line[2:])
+				line = theme.Sel.Render("> " + line[2:])
 			}
-			body = append(body, line+"  "+styleDim.Render(mask.OneLine(mask.Text(it.Path))))
+			body = append(body, line+"  "+theme.Dim.Render(mask.OneLine(mask.Text(it.Path))))
 			idx++
 		}
 	}
 	if idx == 0 {
-		body = append(body, styleDim.Render("  no items match this filter"))
+		body = append(body, theme.Dim.Render("  no items match this filter"))
 	}
 	avail := max(s.height-len(head)-len(foot), 1)
 	start := 0
@@ -122,7 +113,7 @@ func counts(items []model.StatusItem) string {
 	sort.Strings(rest)
 	parts := make([]string, 0, len(n))
 	for _, c := range append(order, rest...) {
-		parts = append(parts, itoa(n[c])+" "+mask.OneLine(mask.Text(c)))
+		parts = append(parts, strconv.Itoa(n[c])+" "+mask.OneLine(mask.Text(c)))
 	}
 	if len(parts) == 0 {
 		return "no items"
@@ -136,11 +127,11 @@ func itemLine(it model.StatusItem) string {
 	label := pointerLabel(it.Pointer)
 	switch {
 	case flagged[it.State]:
-		return styleBad.Render("! "+cls) + " " + label
+		return theme.Bad.Render("! "+cls) + " " + label
 	case it.State == "clean" || it.State == "converged":
-		return styleOK.Render("  "+cls) + " " + label
+		return theme.OK.Render("  "+cls) + " " + label
 	}
-	return styleWarn.Render("  "+cls) + " " + label
+	return theme.Warn.Render("  "+cls) + " " + label
 }
 
 // pointerLabel maps /mcpServers/<id> to <id> (pointer-unescaped); any other
@@ -154,18 +145,18 @@ func pointerLabel(p string) string {
 }
 
 func (s *Screen) legendLines() []string {
-	out := []string{styleBold.Render("Status classes"), ""}
+	out := []string{theme.Bold.Render("Status classes"), ""}
 	switch {
 	case s.legendNote != "":
-		out = append(out, styleDim.Render(s.legendNote))
+		out = append(out, theme.Dim.Render(s.legendNote))
 	case s.legendText == "":
-		out = append(out, styleDim.Render("loading…"))
+		out = append(out, theme.Dim.Render("loading…"))
 	default:
 		for _, l := range strings.Split(strings.TrimRight(mask.Sanitize(s.legendText), "\n"), "\n") {
 			out = append(out, strings.ReplaceAll(l, "\t", "  "))
 		}
 	}
-	return append(out, "", styleDim.Render("esc close"))
+	return append(out, "", theme.Dim.Render("esc close"))
 }
 
 // detailAvail is how many content lines the detail pane shows.
@@ -177,36 +168,36 @@ func (s *Screen) detailPane() []string {
 	body := s.detailBody()
 	start := min(s.scroll, s.maxScroll())
 	end := min(start+s.detailAvail(), len(body))
-	head := styleBold.Render(pointerLabel(s.item.Pointer)) + "  " + styleDim.Render(mask.OneLine(mask.Text(s.item.State)))
-	out := append([]string{head, styleDim.Render(mask.OneLine(mask.Text(s.item.Path)))}, body[start:end]...)
-	return append(out, styleDim.Render(detailKeys))
+	head := theme.Bold.Render(pointerLabel(s.item.Pointer)) + "  " + theme.Dim.Render(mask.OneLine(mask.Text(s.item.State)))
+	out := append([]string{head, theme.Dim.Render(mask.OneLine(mask.Text(s.item.Path)))}, body[start:end]...)
+	return append(out, theme.Dim.Render(detailKeys))
 }
 
 // detailBody renders provenance then the masked hunks, one string per line.
 func (s *Screen) detailBody() []string {
 	if !s.diffable {
-		return []string{"", styleWarn.Render("path not diffable")}
+		return []string{"", theme.Warn.Render("path not diffable")}
 	}
 	out := []string{""}
 	switch {
 	case !s.provDone:
-		out = append(out, styleDim.Render("loading provenance…"))
+		out = append(out, theme.Dim.Render("loading provenance…"))
 	case s.provNote != "":
-		out = append(out, styleDim.Render(s.provNote))
+		out = append(out, theme.Dim.Render(s.provNote))
 	default:
 		out = append(out, provLines(*s.prov)...)
 	}
 	out = append(out, "")
 	switch {
 	case !s.diffDone:
-		out = append(out, styleDim.Render("loading diff…"))
+		out = append(out, theme.Dim.Render("loading diff…"))
 	case s.diffNote != "":
-		out = append(out, styleDim.Render(s.diffNote))
+		out = append(out, theme.Dim.Render(s.diffNote))
 	case len(s.hunks) == 0:
-		out = append(out, styleDim.Render("no differing hunk for this item"))
+		out = append(out, theme.Dim.Render("no differing hunk for this item"))
 	default:
 		for _, h := range s.hunks {
-			out = append(out, styleBold.Render("hunk "+mask.OneLine(h.Pointer)))
+			out = append(out, theme.Bold.Render("hunk "+mask.OneLine(h.Pointer)))
 			out = append(out, side("source (canonical)", h.Source)...)
 			out = append(out, side("dest (on disk)", h.Dest)...)
 		}
@@ -216,7 +207,7 @@ func (s *Screen) detailBody() []string {
 
 // side renders one already-masked hunk side as an indented block.
 func side(title, content string) []string {
-	out := []string{styleDim.Render("  " + title)}
+	out := []string{theme.Dim.Render("  " + title)}
 	for _, l := range strings.Split(strings.TrimRight(mask.Sanitize(content), "\n"), "\n") {
 		out = append(out, "    "+strings.ReplaceAll(l, "\t", "  "))
 	}
@@ -225,7 +216,7 @@ func side(title, content string) []string {
 
 func provLines(p model.Provenance) []string {
 	t := func(v string) string { return mask.OneLine(mask.Text(v)) }
-	out := []string{styleBold.Render("provenance")}
+	out := []string{theme.Bold.Render("provenance")}
 	add := func(k, v string) { out = append(out, fmt.Sprintf("  %-10s %s", k, v)) }
 	if p.Scope != "" {
 		add("scope:", t(p.Scope))
@@ -234,7 +225,7 @@ func provLines(p model.Provenance) []string {
 		add("managed:", "no (unmanaged key)")
 	}
 	if len(p.Owners) == 0 {
-		return append(out, styleDim.Render("  no owners reported"))
+		return append(out, theme.Dim.Render("  no owners reported"))
 	}
 	for _, o := range p.Owners {
 		for _, it := range o.Items {
@@ -251,5 +242,3 @@ func provLines(p model.Provenance) []string {
 	}
 	return out
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }

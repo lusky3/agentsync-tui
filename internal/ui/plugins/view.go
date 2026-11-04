@@ -4,17 +4,9 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/lusky3/agentsync-tui/internal/mask"
-)
-
-var (
-	styleBold = lipgloss.NewStyle().Bold(true)
-	styleDim  = lipgloss.NewStyle().Faint(true)
-	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleSel  = lipgloss.NewStyle().Reverse(true)
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
@@ -41,9 +33,9 @@ func (s *Screen) View() tea.View {
 func (s *Screen) tabs() string {
 	a, b := " Plugins ", " Marketplaces "
 	if s.pane == panePlugins {
-		return styleSel.Render(a) + styleDim.Render(b)
+		return theme.Sel.Render(a) + theme.Dim.Render(b)
 	}
-	return styleDim.Render(a) + styleSel.Render(b)
+	return theme.Dim.Render(a) + theme.Sel.Render(b)
 }
 
 func (s *Screen) listView() []string {
@@ -55,30 +47,30 @@ func (s *Screen) listView() []string {
 		keys, what = marketKeys, "marketplace list"
 	}
 	if !loaded {
-		out = append(out, styleDim.Render("loading…"))
+		out = append(out, theme.Dim.Render("loading…"))
 	}
 	out = append(out, rows...)
 	if note != "" {
-		out = append(out, styleDim.Render(what+" unavailable: "+note))
+		out = append(out, theme.Dim.Render(what+" unavailable: "+note))
 	}
 	if s.pane == panePlugins && s.outdatedRaw != "" {
-		out = append(out, "", styleBold.Render("Outdated check (network)"), styleDim.Render(s.rawSummary()))
+		out = append(out, "", theme.Bold.Render("Outdated check (network)"), theme.Dim.Render(s.rawSummary()))
 	}
 	if s.typing >= 0 {
 		label := "plugin id[@marketplace]"
 		if s.typing == paneMarkets {
 			label = "marketplace url or path"
 		}
-		out = append(out, "", styleBold.Render("add "+label+": ")+s.liveField()+"_")
+		out = append(out, "", theme.Bold.Render("add "+label+": ")+s.liveField()+"_")
 		if s.inlineE != "" {
-			out = append(out, styleWarn.Render(s.inlineE))
+			out = append(out, theme.Warn.Render(s.inlineE))
 		}
-		out = append(out, styleDim.Render("enter add • esc cancel"))
+		out = append(out, theme.Dim.Render("enter add • esc cancel"))
 	}
 	if s.note != "" {
-		out = append(out, styleWarn.Render(s.note))
+		out = append(out, theme.Warn.Render(s.note))
 	}
-	return append(out, styleDim.Render(keys))
+	return append(out, theme.Dim.Render(keys))
 }
 
 func (s *Screen) rawSummary() string {
@@ -96,7 +88,7 @@ func (s *Screen) pluginRows() []string {
 		}
 		return nil
 	}
-	out := []string{styleBold.Render("  " + pad("PLUGIN", 28) + pad("VERSION", 12) + pad("STATE", 10) + "UPDATE")}
+	out := []string{theme.Bold.Render("  " + theme.Pad("PLUGIN", 28) + theme.Pad("VERSION", 12) + theme.Pad("STATE", 10) + "UPDATE")}
 	for i, p := range s.plugins {
 		state, upd := "disabled", ""
 		if p.Enabled {
@@ -105,7 +97,7 @@ func (s *Screen) pluginRows() []string {
 		if o, ok := s.outdated[strings.SplitN(p.Name, "@", 2)[0]]; ok {
 			upd = "↑ " + mask.OneLine(o.To)
 		}
-		line := pad(mask.OneLine(p.Name), 28) + pad(mask.OneLine(p.Version), 12) + pad(state, 10) + upd
+		line := theme.Pad(mask.OneLine(p.Name), 28) + theme.Pad(mask.OneLine(p.Version), 12) + theme.Pad(state, 10) + upd
 		out = append(out, s.row(i == s.pCur, p.Enabled, line))
 	}
 	return out
@@ -118,9 +110,9 @@ func (s *Screen) marketRows() []string {
 		}
 		return nil
 	}
-	out := []string{styleBold.Render("  " + pad("MARKETPLACE", 24) + "SOURCE")}
+	out := []string{theme.Bold.Render("  " + theme.Pad("MARKETPLACE", 24) + "SOURCE")}
 	for i, m := range s.markets {
-		out = append(out, s.row(i == s.mCur, true, pad(mask.OneLine(m.Name), 24)+m.URL))
+		out = append(out, s.row(i == s.mCur, true, theme.Pad(mask.OneLine(m.Name), 24)+m.URL))
 	}
 	return out
 }
@@ -128,30 +120,25 @@ func (s *Screen) marketRows() []string {
 func (s *Screen) row(cursor, on bool, line string) string {
 	switch {
 	case cursor:
-		return styleSel.Render("> " + line)
+		return theme.Sel.Render("> " + line)
 	case on:
-		return "  " + styleOK.Render(line)
+		return "  " + theme.OK.Render(line)
 	}
-	return "  " + styleDim.Render(line)
+	return "  " + theme.Dim.Render(line)
 }
 
 func (s *Screen) detailView() []string {
-	out := []string{styleBold.Render(mask.OneLine(s.detailFor)) + styleDim.Render("  (esc close • j/k scroll)")}
+	out := []string{theme.Bold.Render(mask.OneLine(s.detailFor)) + theme.Dim.Render("  (esc close • j/k scroll)")}
 	switch {
 	case s.detailBusy:
-		return append(out, styleDim.Render("loading…"))
+		return append(out, theme.Dim.Render("loading…"))
 	}
 	ls := strings.Split(s.detail, "\n")
 	lo := min(s.scroll, max(len(ls)-1, 0))
 	hi := min(lo+s.bodyLines(), len(ls))
 	out = append(out, ls[lo:hi]...)
 	if hi < len(ls) {
-		out = append(out, styleDim.Render("… more below"))
+		out = append(out, theme.Dim.Render("… more below"))
 	}
 	return out
-}
-
-func pad(s string, n int) string {
-	s = ansi.Truncate(s, n-1, "…")
-	return s + strings.Repeat(" ", max(n-ansi.StringWidth(s), 0))
 }

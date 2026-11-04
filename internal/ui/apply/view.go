@@ -1,23 +1,13 @@
 package apply
 
 import (
-	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
-)
-
-var (
-	styleBold = lipgloss.NewStyle().Bold(true)
-	styleDim  = lipgloss.NewStyle().Faint(true)
-	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleBad  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleSel  = lipgloss.NewStyle().Reverse(true)
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
@@ -26,8 +16,6 @@ const (
 	revertKeys = "m mode • e target • A all • t --to • p preview • v revert • ctrl+d/ctrl+u scroll"
 	headLines  = 8
 )
-
-func itoa(n int) string { return strconv.Itoa(n) }
 
 // avail is how many output lines fit under the fixed header and footer.
 func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
@@ -44,7 +32,7 @@ func (s *Screen) outLines() []string {
 		}
 	}
 	if o.trunc {
-		ls = append(ls, styleWarn.Render("output truncated"))
+		ls = append(ls, theme.Warn.Render("output truncated"))
 	}
 	return ls
 }
@@ -54,7 +42,7 @@ func (s *Screen) maxScroll() int { return max(len(s.outLines())-s.avail(), 0) }
 func (s *Screen) field(label, val string, focused bool) string {
 	v := mask.OneLine(val)
 	if focused {
-		v = styleSel.Render(v + " ")
+		v = theme.Sel.Render(v + " ")
 	}
 	return "  " + label + " " + v
 }
@@ -64,13 +52,13 @@ func (s *Screen) View() tea.View {
 	var lines []string
 	apply, revert := "Apply", "Revert"
 	if s.mode == modeApply {
-		apply = styleSel.Render(" Apply ")
+		apply = theme.Sel.Render(" Apply ")
 	} else {
-		revert = styleSel.Render(" Revert ")
+		revert = theme.Sel.Render(" Revert ")
 	}
 	lines = append(lines, apply+" "+revert)
 	if s.mode == modeApply {
-		lines = append(lines, styleWarn.Render("apply writes destination files (agent config on disk)"))
+		lines = append(lines, theme.Warn.Render("apply writes destination files (agent config on disk)"))
 		agents := s.agents
 		if agents == "" && s.focus == fNone {
 			agents = "(all enabled)"
@@ -78,7 +66,7 @@ func (s *Screen) View() tea.View {
 		lines = append(lines, s.field("agents:", agents, s.focus == fTarget))
 		lines = append(lines, "")
 	} else {
-		lines = append(lines, styleWarn.Render("revert is destructive: it rewinds destination files to a checkpoint"))
+		lines = append(lines, theme.Warn.Render("revert is destructive: it rewinds destination files to a checkpoint"))
 		target := s.target
 		if s.all {
 			target = "all (--all)"
@@ -93,28 +81,28 @@ func (s *Screen) View() tea.View {
 		lines = append(lines, s.field("--to:  ", to, s.focus == fTo))
 	}
 	if act, err := s.build(false); err != nil {
-		lines = append(lines, styleBad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
+		lines = append(lines, theme.Bad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
 	} else {
-		lines = append(lines, styleBold.Render("  will run: ")+mask.OneLine(act.Display()))
+		lines = append(lines, theme.Bold.Render("  will run: ")+mask.OneLine(act.Display()))
 	}
-	st := styleDim.Render("  no preview yet: preview first")
+	st := theme.Dim.Render("  no preview yet: preview first")
 	if s.prev[s.mode] != nil {
-		st = styleOK.Render("  preview ok")
+		st = theme.OK.Render("  preview ok")
 	}
 	if s.msg != "" {
-		st = styleWarn.Render("  " + mask.OneLine(s.msg))
+		st = theme.Warn.Render("  " + mask.OneLine(s.msg))
 	}
 	lines = append(lines, st)
 	if s.mode == modeRevert {
-		lines = append(lines, styleDim.Render(revertHint))
+		lines = append(lines, theme.Dim.Render(revertHint))
 	} else {
 		lines = append(lines, "")
 	}
-	head := styleDim.Render("output")
+	head := theme.Dim.Render("output")
 	if o := s.out[s.mode]; o != nil {
-		head = styleBold.Render(o.title)
+		head = theme.Bold.Render(o.title)
 		if o.note != "" {
-			head += "  " + styleBad.Render(mask.OneLine(o.note))
+			head += "  " + theme.Bad.Render(mask.OneLine(o.note))
 		}
 	}
 	lines = append(lines, head)
@@ -126,7 +114,7 @@ func (s *Screen) View() tea.View {
 	if s.mode == modeRevert {
 		keys = revertKeys
 	}
-	lines = append(lines, styleDim.Render(keys))
+	lines = append(lines, theme.Dim.Render(keys))
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}

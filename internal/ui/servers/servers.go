@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -119,7 +120,7 @@ func readStatus(base context.Context, gen int, r runner.Runner) statusMsg {
 	case err != nil:
 		return statusMsg{gen: gen, note: mask.FirstLine(mask.Text(err.Error()))}
 	case res.ExitCode != 0:
-		return statusMsg{gen: gen, note: "status exited " + itoa(res.ExitCode)}
+		return statusMsg{gen: gen, note: "status exited " + strconv.Itoa(res.ExitCode)}
 	}
 	rep, err := model.ParseStatus(res.Stdout)
 	if err != nil {
@@ -213,7 +214,7 @@ func loadWarning(err error) string {
 		names = append(names, mask.OneLine(mask.Text(name)))
 	}
 	sort.Strings(names)
-	return itoa(len(names)) + " file(s) unreadable: " + strings.Join(names, ", ")
+	return strconv.Itoa(len(names)) + " file(s) unreadable: " + strings.Join(names, ", ")
 }
 
 func (s *Screen) selected() (source.Server, bool) {

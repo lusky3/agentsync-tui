@@ -5,19 +5,10 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
-)
-
-var (
-	styleBold = lipgloss.NewStyle().Bold(true)
-	styleDim  = lipgloss.NewStyle().Faint(true)
-	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleBad  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleSel  = lipgloss.NewStyle().Reverse(true)
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
@@ -33,23 +24,23 @@ func (s *Screen) View() tea.View {
 	var out []string
 	switch {
 	case !s.loaded:
-		out = append(out, styleDim.Render("loading…"))
+		out = append(out, theme.Dim.Render("loading…"))
 	case len(s.items) == 0:
 		out = append(out, "no "+info.plural+" found — create files under "+info.dir+"/ or capture them with `import`")
 	default:
-		out = append(out, styleBold.Render(info.title+" ("+strconv.Itoa(len(s.items))+")"))
+		out = append(out, theme.Bold.Render(info.title+" ("+strconv.Itoa(len(s.items))+")"))
 		out = append(out, s.rows()...)
 	}
 	if s.loadNote != "" {
-		out = append(out, styleDim.Render(info.word+" list unavailable: "+mask.Sanitize(s.loadNote)))
+		out = append(out, theme.Dim.Render(info.word+" list unavailable: "+mask.Sanitize(s.loadNote)))
 	}
 	if s.note != "" {
-		out = append(out, styleWarn.Render(mask.Sanitize(s.note)))
+		out = append(out, theme.Warn.Render(mask.Sanitize(s.note)))
 	}
 	if s.check != nil {
 		out = append(out, s.resultPane()...)
 	}
-	out = append(out, styleDim.Render(listKeys))
+	out = append(out, theme.Dim.Render(listKeys))
 	lines := strings.Split(strings.Join(out, "\n"), "\n")
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
@@ -70,10 +61,10 @@ func (s *Screen) rows() []string {
 		it := s.items[i]
 		line := it.Name
 		if it.Detail != "" {
-			line += "  " + styleDim.Render(mask.OneLine(mask.Text(it.Detail)))
+			line += "  " + theme.Dim.Render(mask.OneLine(mask.Text(it.Detail)))
 		}
 		if i == s.cursor {
-			out = append(out, styleSel.Render("> "+ansi.Strip(line)))
+			out = append(out, theme.Sel.Render("> "+ansi.Strip(line)))
 		} else {
 			out = append(out, "  "+line)
 		}
@@ -87,9 +78,9 @@ func (s *Screen) resultPane() []string {
 	if c.state != "could not run" {
 		head += " (exit " + strconv.Itoa(c.exit) + ")"
 	}
-	style := styleOK
+	style := theme.OK
 	if c.state != "passed" {
-		style = styleBad
+		style = theme.Bad
 	}
 	out := []string{"", style.Render(head)}
 	end := min(c.scroll+s.paneHeight(), len(c.lines))
@@ -97,7 +88,7 @@ func (s *Screen) resultPane() []string {
 		out = append(out, "  "+mask.OneLine(l))
 	}
 	if len(c.lines) > s.paneHeight() {
-		out = append(out, styleDim.Render("  ctrl+d/ctrl+u/pgdn/pgup scroll • "+strconv.Itoa(c.scroll+1)+"/"+strconv.Itoa(len(c.lines))))
+		out = append(out, theme.Dim.Render("  ctrl+d/ctrl+u/pgdn/pgup scroll • "+strconv.Itoa(c.scroll+1)+"/"+strconv.Itoa(len(c.lines))))
 	}
-	return append(out, styleDim.Render(applyTip))
+	return append(out, theme.Dim.Render(applyTip))
 }

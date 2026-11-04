@@ -8,19 +8,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
-)
 
-var idRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	"github.com/lusky3/agentsync-tui/internal/ident"
+)
 
 // Server is one canonical MCP server definition.
 type Server struct {
 	ID      string
-	Type    string // "stdio" or "http"
+	Type    string // "stdio", "http" or "sse"
 	Command string
 	URL     string
 	Args    []string
@@ -55,7 +54,7 @@ var modelled = []string{"type", "command", "url", "args", "env", "headers", "ena
 // ServerPath returns the canonical file path for a server ID, rejecting IDs
 // that are not safe to use in a path or argv.
 func ServerPath(agentsyncHome, id string) (string, error) {
-	if !idRe.MatchString(id) {
+	if !ident.Valid(id) {
 		return "", fmt.Errorf("invalid server id %q", id)
 	}
 	return filepath.Join(agentsyncHome, "mcp", id+".toml"), nil
@@ -87,7 +86,7 @@ func LoadServers(agentsyncHome string) ([]Server, error) {
 			continue
 		}
 		id := strings.TrimSuffix(name, ".toml")
-		if !idRe.MatchString(id) {
+		if !ident.Valid(id) {
 			errs = append(errs, fmt.Errorf("%s: invalid server id", name))
 			continue
 		}
@@ -98,7 +97,7 @@ func LoadServers(agentsyncHome string) ([]Server, error) {
 		}
 		servers = append(servers, s)
 	}
-	sort.Slice(servers, func(i, j int) bool { return servers[i].ID < servers[j].ID })
+	slices.SortFunc(servers, func(a, b Server) int { return strings.Compare(a.ID, b.ID) })
 	return servers, errors.Join(errs...)
 }
 

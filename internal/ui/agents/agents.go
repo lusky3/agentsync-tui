@@ -6,6 +6,7 @@ package agents
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -109,7 +110,7 @@ func readList(base context.Context, gen int, r runner.Runner, timeout time.Durat
 		return listMsg{gen: gen, note: mask.OneLine(mask.Text(err.Error()))}
 	}
 	if res.ExitCode != 0 {
-		n := "agent list exited " + itoa(res.ExitCode)
+		n := "agent list exited " + strconv.Itoa(res.ExitCode)
 		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
 			n += ": " + l
 		}

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lusky3/agentsync-tui/internal/ident"
 	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
@@ -39,12 +40,9 @@ type Action struct {
 	display []string
 }
 
-var idRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-
-// ValidID reports whether s is a safe server/agent/plugin identifier.
-func ValidID(s string) bool {
-	return len(s) <= 128 && idRe.MatchString(s)
-}
+// ValidID reports whether s is a safe server/agent/plugin identifier. The
+// rule itself lives in ident (a leaf package) so model and source share it.
+func ValidID(s string) bool { return ident.Valid(s) }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,6 +13,7 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/runner"
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 // Screen is one tab of the application.
@@ -318,14 +318,6 @@ func (a *App) View() tea.View {
 	return v
 }
 
-func (a *App) header() string {
-	labels := make([]string, len(a.screens))
-	for i, s := range a.screens {
-		labels[i] = " " + strconv.Itoa(i+1) + " " + mask.Sanitize(s.Title()) + " "
-	}
-	return a.headerLine(labels, a.active)
-}
-
 func sanitizeScope(s runner.Scope) string { return mask.Sanitize(string(s)) }
 
 func (a *App) body() string {
@@ -380,16 +372,17 @@ func fit(s string, n int) []string {
 	return ls
 }
 
+// The shell's styles come from theme so every screen shares one palette.
 var (
-	styleBold      = lipgloss.NewStyle().Bold(true)
-	styleDim       = lipgloss.NewStyle().Faint(true)
-	styleError     = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	styleWarn      = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleInfo      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	styleOK        = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleTab       = lipgloss.NewStyle().Faint(true)
-	styleTabActive = lipgloss.NewStyle().Reverse(true).Bold(true)
-	styleModal     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	styleBold      = theme.Bold
+	styleDim       = theme.Dim
+	styleError     = theme.Bad
+	styleWarn      = theme.Warn
+	styleInfo      = theme.Info
+	styleOK        = theme.OK
+	styleTab       = theme.Tab
+	styleTabActive = theme.TabActive
+	styleModal     = theme.Modal
 )
 
 func bannerStyle(k bannerKind) lipgloss.Style {

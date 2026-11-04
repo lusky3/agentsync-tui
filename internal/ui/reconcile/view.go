@@ -5,17 +5,10 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
-)
-
-var (
-	styleBold = lipgloss.NewStyle().Bold(true)
-	styleDim  = lipgloss.NewStyle().Faint(true)
-	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
@@ -40,7 +33,7 @@ func (s *Screen) lines() []string {
 		}
 	}
 	if s.trunc {
-		ls = append(ls, styleWarn.Render("output truncated"))
+		ls = append(ls, theme.Warn.Render("output truncated"))
 	}
 	return ls
 }
@@ -50,7 +43,7 @@ func (s *Screen) maxScroll() int { return max(len(s.lines())-s.avail(), 0) }
 // summary is the one-line digest of the last good report.
 func (s *Screen) summary() string {
 	if !s.loaded {
-		return styleDim.Render("loading reconcile report…")
+		return theme.Dim.Render("loading reconcile report…")
 	}
 	n := 0
 	for _, l := range strings.Split(s.report, "\n") {
@@ -61,16 +54,16 @@ func (s *Screen) summary() string {
 	var out string
 	switch {
 	case n > 0:
-		out = styleWarn.Render(strconv.Itoa(n) + " item(s) need a human: press x to resolve them interactively")
+		out = theme.Warn.Render(strconv.Itoa(n) + " item(s) need a human: press x to resolve them interactively")
 	case strings.Contains(s.report, "nothing to reconcile"):
-		out = styleOK.Render("nothing to reconcile")
+		out = theme.OK.Render("nothing to reconcile")
 	case strings.TrimSpace(s.report) == "":
-		out = styleDim.Render("no report")
+		out = theme.Dim.Render("no report")
 	default:
-		out = styleDim.Render("report loaded")
+		out = theme.Dim.Render("report loaded")
 	}
 	if s.exit != 0 {
-		out += styleWarn.Render(" (exit " + strconv.Itoa(s.exit) + ")")
+		out += theme.Warn.Render(" (exit " + strconv.Itoa(s.exit) + ")")
 	}
 	return out
 }
@@ -78,24 +71,24 @@ func (s *Screen) summary() string {
 // View implements tea.Model. The report is stored masked and sanitised.
 func (s *Screen) View() tea.View {
 	lines := []string{
-		styleBold.Render("Reconcile") + styleDim.Render("  report: agentsync reconcile --auto-safe (resolves nothing)"),
-		styleWarn.Render(banner1),
-		styleDim.Render(banner2),
+		theme.Bold.Render("Reconcile") + theme.Dim.Render("  report: agentsync reconcile --auto-safe (resolves nothing)"),
+		theme.Warn.Render(banner1),
+		theme.Dim.Render(banner2),
 		s.summary(),
 	}
 	status := ""
 	switch {
 	case s.note != "":
-		status = styleDim.Render(mask.OneLine(s.note))
+		status = theme.Dim.Render(mask.OneLine(s.note))
 	case s.handed != "":
-		status = styleDim.Render(mask.OneLine(s.handed))
+		status = theme.Dim.Render(mask.OneLine(s.handed))
 	}
 	lines = append(lines, status)
 	body := s.lines()
 	start := min(s.scroll, s.maxScroll())
 	end := min(start+s.avail(), len(body))
 	lines = append(lines, body[start:end]...)
-	lines = append(lines, styleDim.Render(keysTxt))
+	lines = append(lines, theme.Dim.Render(keysTxt))
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}

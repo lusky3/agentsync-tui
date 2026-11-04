@@ -11,6 +11,7 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/shellwords"
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 type formResult int
@@ -288,7 +289,7 @@ func (f *form) view() string {
 	}
 	warn := "literal value will be stored in plain text in mcp/" + mask.OneLine(id) +
 		".toml — prefer ${env:NAME} or ${secret:NAME}"
-	out := []string{styleBold.Render("Add MCP server"), ""}
+	out := []string{theme.Bold.Render("Add MCP server"), ""}
 	for i := 0; i < nFields; i++ {
 		prefix, text := "  ", f.live(i)
 		if i == f.focus {
@@ -306,24 +307,24 @@ func (f *form) view() string {
 			list = f.headers
 		case fArgs:
 			for _, l := range freeTextWarning {
-				out = append(out, styleWarn.Render("           "+l))
+				out = append(out, theme.Warn.Render("           "+l))
 			}
 		case fAgents:
-			out = append(out, styleDim.Render("           comma-separated agent names; empty = agentsync default"))
+			out = append(out, theme.Dim.Render("           comma-separated agent names; empty = agentsync default"))
 		}
 		for _, e := range list {
 			out = append(out, "           "+mask.OneLine(mask.Text(e.k))+" = "+mask.OneLine(mask.Value(e.k, e.v)))
 			if !refVisible(e.v) {
-				out = append(out, styleWarn.Render("           ! "+warn))
+				out = append(out, theme.Warn.Render("           ! "+warn))
 			}
 		}
 	}
 	out = append(out, "")
 	if f.err != "" {
-		out = append(out, styleBad.Render(f.err))
+		out = append(out, theme.Bad.Render(f.err))
 	}
 	for _, l := range strings.Split(formKeys, "\n") {
-		out = append(out, styleDim.Render(l))
+		out = append(out, theme.Dim.Render(l))
 	}
 	return strings.Join(out, "\n")
 }

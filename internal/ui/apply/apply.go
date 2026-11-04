@@ -9,6 +9,7 @@
 package apply
 
 import (
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -349,7 +350,7 @@ func (s *Screen) store(md mode, m ui.RunMsg) {
 	if m.Err != nil {
 		o.note = mask.OneLine(clean(m.Err.Error()))
 	} else if m.Result.ExitCode != 0 {
-		o.note = "exit " + itoa(m.Result.ExitCode)
+		o.note = "exit " + strconv.Itoa(m.Result.ExitCode)
 	}
 	o.text = b.String()
 	if len(o.text) > maxOutput {

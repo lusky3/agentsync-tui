@@ -20,6 +20,7 @@ import (
 	"context"
 	"regexp"
 	"sort"
+	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -178,7 +179,7 @@ func readList(base context.Context, gen int, r runner.Runner, timeout time.Durat
 			}
 			return listMsg{gen: gen, vault: vaultNotConfigured, msg: mask.FirstLine(mask.Text(text))}
 		}
-		n := "secret list exited " + itoa(res.ExitCode)
+		n := "secret list exited " + strconv.Itoa(res.ExitCode)
 		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
 			n += ": " + l
 		}

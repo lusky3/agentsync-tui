@@ -4,6 +4,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/lusky3/agentsync-tui/internal/ident"
 )
 
 // Agent is one line of `agentsync agent list [--all]`.
@@ -13,9 +15,6 @@ type Agent struct {
 	Scope      string // "" when not shown (unregistered) or not a safe token
 	Registered bool
 }
-
-// agentNameRe matches the names agentsync prints (and actions.ValidID accepts).
-var agentNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 var scopeRe = regexp.MustCompile(`^[a-z]+$`)
 
@@ -60,7 +59,7 @@ func ParseAgentList(stdout string) ([]Agent, error) {
 
 func parseAgentLine(line string) (Agent, bool) {
 	f := strings.Fields(line)
-	if len(f) < 2 || !agentNameRe.MatchString(f[0]) {
+	if len(f) < 2 || !ident.Valid(f[0]) {
 		return Agent{}, false
 	}
 	a := Agent{Name: f[0]}

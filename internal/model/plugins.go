@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/lusky3/agentsync-tui/internal/ident"
 )
 
 // Plugin is one line of `agentsync plugin list`.
@@ -30,20 +32,25 @@ type Marketplace struct {
 }
 
 var (
-	idPartRe  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	tokenRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}$`)
 	modeRe    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,31}$`)
 	errNoRows = errors.New("no rows in output")
 )
 
+// ID returns the bare plugin id: the part before "@marketplace".
+func (p Plugin) ID() string { id, _, _ := strings.Cut(p.Name, "@"); return id }
+
+// ID returns the bare plugin id of a pending bump (before "@marketplace").
+func (o Outdated) ID() string { id, _, _ := strings.Cut(o.Name, "@"); return id }
+
 // validPluginID accepts "name" or "name@marketplace", validating both halves
-// (the same rules as actions.ValidID, which this package cannot import).
+// with the shared identifier rule (ident.Valid, actions.ValidID).
 func validPluginID(s string) bool {
 	id, mkt, has := strings.Cut(s, "@")
-	if !idPartRe.MatchString(id) {
+	if !ident.Valid(id) {
 		return false
 	}
-	return !has || idPartRe.MatchString(mkt)
+	return !has || ident.Valid(mkt)
 }
 
 func cleanText(s string) bool {
@@ -177,7 +184,7 @@ func ParseMarketplaces(stdout string) ([]Marketplace, error) {
 			continue
 		}
 		name, rest, ok := strings.Cut(line, " ")
-		if !ok || !idPartRe.MatchString(name) {
+		if !ok || !ident.Valid(name) {
 			continue
 		}
 		rest = strings.TrimSpace(rest)

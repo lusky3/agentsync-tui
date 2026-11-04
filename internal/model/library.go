@@ -2,9 +2,10 @@ package model
 
 import (
 	"errors"
-	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/lusky3/agentsync-tui/internal/ident"
 )
 
 // Item is one entry of a library listing (skill, subagent, command, hook or
@@ -14,10 +15,6 @@ type Item struct {
 	Name   string
 	Detail string
 }
-
-// itemNameRe is the identifier rule shared with actions.ValidID (model
-// cannot import actions or mask).
-var itemNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // ParseList parses `agentsync skill|subagent|command|hook|lsp list` output.
 //
@@ -51,7 +48,7 @@ func ParseList(stdout string) ([]Item, error) {
 			recognised = true
 			continue
 		}
-		if !itemNameRe.MatchString(f[0]) {
+		if !ident.Valid(f[0]) {
 			continue
 		}
 		recognised = true

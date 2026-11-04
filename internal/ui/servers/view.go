@@ -8,20 +8,11 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/source"
-)
-
-var (
-	styleBold = lipgloss.NewStyle().Bold(true)
-	styleDim  = lipgloss.NewStyle().Faint(true)
-	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleBad  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleSel  = lipgloss.NewStyle().Reverse(true)
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 // flagged classes need attention: the destination differs from canonical.
@@ -53,27 +44,27 @@ func (s *Screen) View() tea.View {
 func (s *Screen) footer() []string {
 	var out []string
 	if s.loaded && !s.statusOK && s.stNote != "" {
-		out = append(out, styleDim.Render("agent state unavailable: "+s.stNote))
+		out = append(out, theme.Dim.Render("agent state unavailable: "+s.stNote))
 	}
 	if s.note != "" {
-		out = append(out, styleWarn.Render(s.note))
+		out = append(out, theme.Warn.Render(s.note))
 	}
-	return append(out, styleDim.Render(listKeys))
+	return append(out, theme.Dim.Render(listKeys))
 }
 
 func (s *Screen) listView() string {
 	var out []string
 	if !s.loaded {
-		out = append(out, styleDim.Render("loading…"))
+		out = append(out, theme.Dim.Render("loading…"))
 		return strings.Join(append(out, s.footer()...), "\n")
 	}
 	if s.loadWarn != "" {
-		out = append(out, styleWarn.Render(s.loadWarn))
+		out = append(out, theme.Warn.Render(s.loadWarn))
 	}
 	if len(s.servers) == 0 {
 		out = append(out, "no MCP servers — press a to add one")
 		if s.dirGone {
-			out = append(out, styleDim.Render("(mcp/ directory not found)"))
+			out = append(out, theme.Dim.Render("(mcp/ directory not found)"))
 		}
 		return strings.Join(append(out, s.footer()...), "\n")
 	}
@@ -102,7 +93,7 @@ func (s *Screen) listView() string {
 		}
 	}
 	widths[2] = max(min(widths[2], s.width-fixed), 12)
-	out = append(out, styleBold.Render("  "+joinCells(head, widths)+"  STATE"))
+	out = append(out, theme.Bold.Render("  "+joinCells(head, widths)+"  STATE"))
 	foot := s.footer()
 	avail := max(s.height-len(out)-len(foot), 1)
 	start := 0
@@ -112,7 +103,7 @@ func (s *Screen) listView() string {
 	for i := start; i < len(rows) && i < start+avail; i++ {
 		line := "  " + joinCells(rows[i], widths)
 		if i == s.cursor {
-			line = styleSel.Render("> " + line[2:])
+			line = theme.Sel.Render("> " + line[2:])
 		}
 		out = append(out, line+"  "+s.stateCell(s.servers[i].ID))
 	}
@@ -131,11 +122,11 @@ func joinCells(cells []string, widths []int) string {
 // stateCell renders "agent:class" per agent, flagging classes that differ.
 func (s *Screen) stateCell(id string) string {
 	if !s.statusOK {
-		return styleDim.Render("?")
+		return theme.Dim.Render("?")
 	}
 	m := s.states[id]
 	if len(m) == 0 {
-		return styleDim.Render("—")
+		return theme.Dim.Render("—")
 	}
 	agents := make([]string, 0, len(m))
 	for a := range m {
@@ -148,11 +139,11 @@ func (s *Screen) stateCell(id string) string {
 		txt := mask.OneLine(a) + ":" + mask.OneLine(cls)
 		switch {
 		case flagged[cls]:
-			cells[i] = styleBad.Render(txt + "!")
+			cells[i] = theme.Bad.Render(txt + "!")
 		case cls == "clean" || cls == "converged":
-			cells[i] = styleOK.Render(txt)
+			cells[i] = theme.OK.Render(txt)
 		default:
-			cells[i] = styleWarn.Render(txt)
+			cells[i] = theme.Warn.Render(txt)
 		}
 	}
 	return strings.Join(cells, " ")
@@ -199,7 +190,7 @@ func (s *Screen) detailView() string {
 	if srv.Disabled {
 		state = "disabled"
 	}
-	out := []string{styleBold.Render(mask.OneLine(srv.ID)) + "  " + styleDim.Render(state), ""}
+	out := []string{theme.Bold.Render(mask.OneLine(srv.ID)) + "  " + theme.Dim.Render(state), ""}
 	add := func(k, v string) { out = append(out, fmt.Sprintf("  %-9s %s", k, v)) }
 	add("type:", mask.OneLine(srv.Type))
 	if srv.Command != "" {
@@ -221,9 +212,9 @@ func (s *Screen) detailView() string {
 	if s.statusOK {
 		add("state:", s.stateCell(srv.ID))
 	}
-	out = append(out, "", styleDim.Render("esc/enter back • e enable/disable • x remove • E edit"))
+	out = append(out, "", theme.Dim.Render("esc/enter back • e enable/disable • x remove • E edit"))
 	if s.note != "" {
-		out = append(out, styleWarn.Render(s.note))
+		out = append(out, theme.Warn.Render(s.note))
 	}
 	return strings.Join(out, "\n")
 }
@@ -263,9 +254,9 @@ func extraLines(extra map[string]any) []string {
 		var v string
 		switch x := extra[k].(type) {
 		case []any:
-			v = "[" + itoa(len(x)) + " items]"
+			v = "[" + strconv.Itoa(len(x)) + " items]"
 		case map[string]any:
-			v = "{" + itoa(len(x)) + " keys}"
+			v = "{" + strconv.Itoa(len(x)) + " keys}"
 		default:
 			v = fmt.Sprint(x)
 			if sensitiveKey.MatchString(k) {
@@ -277,5 +268,3 @@ func extraLines(extra map[string]any) []string {
 	}
 	return out
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }

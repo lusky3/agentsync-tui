@@ -1,21 +1,12 @@
 package agents
 
 import (
-	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/lusky3/agentsync-tui/internal/mask"
-)
-
-var (
-	styleBold = lipgloss.NewStyle().Bold(true)
-	styleDim  = lipgloss.NewStyle().Faint(true)
-	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleSel  = lipgloss.NewStyle().Reverse(true)
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
@@ -28,17 +19,17 @@ func (s *Screen) View() tea.View {
 	var out []string
 	switch {
 	case !s.loaded:
-		out = append(out, styleDim.Render("loading…"))
+		out = append(out, theme.Dim.Render("loading…"))
 	default:
 		out = append(out, s.rows()...)
 	}
 	if s.loadNote != "" {
-		out = append(out, styleDim.Render("agent list unavailable: "+s.loadNote))
+		out = append(out, theme.Dim.Render("agent list unavailable: "+s.loadNote))
 	}
 	if s.note != "" {
-		out = append(out, styleWarn.Render(s.note))
+		out = append(out, theme.Warn.Render(s.note))
 	}
-	out = append(out, styleDim.Render(listKeys))
+	out = append(out, theme.Dim.Render(listKeys))
 	lines := strings.Split(strings.Join(out, "\n"), "\n")
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
@@ -60,7 +51,7 @@ func (s *Screen) rows() []string {
 	if len(s.agents) == 0 {
 		return out
 	}
-	out = append(out, styleBold.Render("  "+pad("AGENT", 20)+pad("STATUS", 12)+pad("STATE", 10)+"SCOPE"))
+	out = append(out, theme.Bold.Render("  "+theme.Pad("AGENT", 20)+theme.Pad("STATUS", 12)+theme.Pad("STATE", 10)+"SCOPE"))
 	for i, a := range s.agents {
 		status, state, scope := "available", "-", "-"
 		if a.Registered {
@@ -72,14 +63,14 @@ func (s *Screen) rows() []string {
 		if a.Scope != "" {
 			scope = mask.OneLine(a.Scope)
 		}
-		line := pad(mask.OneLine(a.Name), 20) + pad(status, 12) + pad(state, 10) + scope
+		line := theme.Pad(mask.OneLine(a.Name), 20) + theme.Pad(status, 12) + theme.Pad(state, 10) + scope
 		switch {
 		case i == s.cursor:
-			line = styleSel.Render("> " + line)
+			line = theme.Sel.Render("> " + line)
 		case a.Registered && a.Enabled:
-			line = "  " + styleOK.Render(line)
+			line = "  " + theme.OK.Render(line)
 		case !a.Registered:
-			line = "  " + styleDim.Render(line)
+			line = "  " + theme.Dim.Render(line)
 		default:
 			line = "  " + line
 		}
@@ -87,10 +78,3 @@ func (s *Screen) rows() []string {
 	}
 	return out
 }
-
-func pad(s string, n int) string {
-	s = ansi.Truncate(s, n-1, "…")
-	return s + strings.Repeat(" ", max(n-ansi.StringWidth(s), 0))
-}
-
-func itoa(n int) string { return strconv.Itoa(n) }

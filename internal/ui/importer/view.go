@@ -5,19 +5,10 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
-)
-
-var (
-	styleBold = lipgloss.NewStyle().Bold(true)
-	styleDim  = lipgloss.NewStyle().Faint(true)
-	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleBad  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	styleSel  = lipgloss.NewStyle().Reverse(true)
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
@@ -40,7 +31,7 @@ func (s *Screen) outLines() []string {
 		}
 	}
 	if s.out.trunc {
-		ls = append(ls, styleWarn.Render("output truncated"))
+		ls = append(ls, theme.Warn.Render("output truncated"))
 	}
 	return ls
 }
@@ -50,23 +41,23 @@ func (s *Screen) maxScroll() int { return max(len(s.outLines())-s.avail(), 0) }
 func (s *Screen) agentLine() string {
 	switch {
 	case !s.loaded:
-		return "  agent:     " + styleDim.Render("loading agents…")
+		return "  agent:     " + theme.Dim.Render("loading agents…")
 	case len(s.agents) == 0 && s.note == "":
-		return "  agent:     " + styleWarn.Render("no registered agents (add one with: agentsync agent add <name>)")
+		return "  agent:     " + theme.Warn.Render("no registered agents (add one with: agentsync agent add <name>)")
 	case len(s.agents) == 0:
-		return "  agent:     " + styleBad.Render(mask.OneLine(s.note))
+		return "  agent:     " + theme.Bad.Render(mask.OneLine(s.note))
 	}
-	line := "  agent:     " + styleBold.Render(mask.OneLine(s.agent))
+	line := "  agent:     " + theme.Bold.Render(mask.OneLine(s.agent))
 	for i, a := range s.agents {
 		if a.Name == s.agent {
-			line += styleDim.Render("  (" + strconv.Itoa(i+1) + "/" + strconv.Itoa(len(s.agents)) + ")")
+			line += theme.Dim.Render("  (" + strconv.Itoa(i+1) + "/" + strconv.Itoa(len(s.agents)) + ")")
 			if !a.Enabled {
-				line += styleWarn.Render("  disabled")
+				line += theme.Warn.Render("  disabled")
 			}
 		}
 	}
 	if s.note != "" {
-		line += "  " + styleBad.Render(mask.OneLine(s.note))
+		line += "  " + theme.Bad.Render(mask.OneLine(s.note))
 	}
 	return line
 }
@@ -74,44 +65,44 @@ func (s *Screen) agentLine() string {
 // View implements tea.Model. Every outside string is sanitised or masked.
 func (s *Screen) View() tea.View {
 	lines := []string{
-		styleBold.Render("Import") + styleDim.Render("  adopt an agent's native config into the canonical source"),
+		theme.Bold.Render("Import") + theme.Dim.Render("  adopt an agent's native config into the canonical source"),
 		s.agentLine(),
-		"  component: " + styleBold.Render(compLabel(s.comp)),
+		"  component: " + theme.Bold.Render(compLabel(s.comp)),
 	}
 	name := mask.OneLine(s.name)
 	switch {
 	case s.typing:
-		name = styleSel.Render(name + " ")
+		name = theme.Sel.Render(name + " ")
 	case name == "":
-		name = styleDim.Render("(every item; press n to name one)")
+		name = theme.Dim.Render("(every item; press n to name one)")
 	}
 	lines = append(lines, "  name:      "+name)
 	act, err := s.build(false)
 	switch {
 	case err == errNoAgent:
-		lines = append(lines, styleDim.Render("  will run: (nothing: no agent selected)"))
+		lines = append(lines, theme.Dim.Render("  will run: (nothing: no agent selected)"))
 	case err != nil:
-		lines = append(lines, styleBad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
+		lines = append(lines, theme.Bad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
 	default:
-		l := styleBold.Render("  will run: ") + mask.OneLine(act.Display())
+		l := theme.Bold.Render("  will run: ") + mask.OneLine(act.Display())
 		if act.Network {
-			l += " " + styleWarn.Render("[network]")
+			l += " " + theme.Warn.Render("[network]")
 		}
 		lines = append(lines, l)
 	}
-	st := styleDim.Render("  no preview yet: " + msgPreviewFirst)
+	st := theme.Dim.Render("  no preview yet: " + msgPreviewFirst)
 	if err == nil && s.g.allows(act, s.scope) {
-		st = styleOK.Render("  preview ok: press i to import")
+		st = theme.OK.Render("  preview ok: press i to import")
 	}
 	if s.msg != "" {
-		st = styleWarn.Render("  " + mask.OneLine(s.msg))
+		st = theme.Warn.Render("  " + mask.OneLine(s.msg))
 	}
 	lines = append(lines, st, "")
-	head := styleDim.Render("output")
+	head := theme.Dim.Render("output")
 	if s.out != nil {
-		head = styleBold.Render(s.out.title)
+		head = theme.Bold.Render(s.out.title)
 		if s.out.note != "" {
-			head += "  " + styleBad.Render(mask.OneLine(s.out.note))
+			head += "  " + theme.Bad.Render(mask.OneLine(s.out.note))
 		}
 	}
 	lines = append(lines, head)
@@ -119,7 +110,7 @@ func (s *Screen) View() tea.View {
 	start := min(s.scroll, s.maxScroll())
 	end := min(start+s.avail(), len(body))
 	lines = append(lines, body[start:end]...)
-	lines = append(lines, styleDim.Render(keysTxt))
+	lines = append(lines, theme.Dim.Render(keysTxt))
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}
