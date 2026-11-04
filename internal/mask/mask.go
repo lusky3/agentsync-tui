@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/lusky3/agentsync-tui/internal/model"
 )
@@ -211,11 +212,12 @@ func underMCPServers(ptr string) bool {
 	return first == "mcpservers"
 }
 
-// hunkSide masks one side of a hunk. It walks the first JSON document and
-// handles any remainder recursively, so trailing bytes or extra documents
-// cannot smuggle a value past the walk. Unparseable input (a truncated
-// document, a TOML rendering) is masked outright under a secret-bearing or
-// mcpServers pointer and scrubbed with Text otherwise.
+// hunkSide masks one side of a hunk. One decoder walks every JSON document
+// on the side in turn (a JSONL-like side is linear, not quadratic), so
+// trailing bytes or extra documents cannot smuggle a value past the walk.
+// Whatever remains unparseable (a truncated document, a TOML rendering) is
+// masked outright under a secret-bearing or mcpServers pointer and scrubbed
+// with Text otherwise.
 func hunkSide(s, key string, forced, mcp bool) string {
 	s = Sanitize(s)
 	if strings.TrimSpace(s) == "" {
@@ -223,25 +225,36 @@ func hunkSide(s, key string, forced, mcp bool) string {
 	}
 	dec := json.NewDecoder(strings.NewReader(s))
 	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
-		if mcp {
-			return Value(s)
+	var parts []string
+	off := 0 // end of the last document decoded
+	for {
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			if rest := s[off:]; strings.TrimSpace(rest) != "" {
+				if mcp {
+					parts = append(parts, Value(rest))
+				} else {
+					parts = append(parts, Text(rest))
+				}
+			}
+			break
 		}
-		return Text(s)
+		off = int(dec.InputOffset())
+		parts = append(parts, encodeMasked(walk(v, key, forced)))
 	}
+	return strings.Join(parts, "\n")
+}
+
+// encodeMasked renders one walked document as indented JSON.
+func encodeMasked(v any) string {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if enc.Encode(walk(v, key, forced)) != nil {
+	if enc.Encode(v) != nil {
 		return Mask
 	}
-	out := strings.TrimRight(buf.String(), "\n")
-	if rest := s[dec.InputOffset():]; strings.TrimSpace(rest) != "" {
-		out += "\n" + hunkSide(rest, key, forced, mcp)
-	}
-	return out
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 // SensitiveKey reports whether k names something whose scalar value must be
@@ -362,14 +375,16 @@ func Capped(s string, n int) (text string, truncated bool) {
 	return strings.ToValidUTF8(cutRune(cut), ""), true
 }
 
-// cutRune drops a trailing partial UTF-8 sequence.
+// cutRune drops a trailing partial UTF-8 sequence: the last rune start is
+// found and the bytes from it are dropped only if they do not form a whole
+// rune, so a cut exactly on a rune boundary keeps every rune.
 func cutRune(s string) string {
-	n := len(s)
-	for n > 0 && n < len(s)+1 && s[n-1]&0xC0 == 0x80 {
-		n--
+	i := len(s) - 1
+	for i >= 0 && len(s)-i < utf8.UTFMax && !utf8.RuneStart(s[i]) {
+		i--
 	}
-	if n > 0 && s[n-1] >= 0xC0 { // a lead byte with no continuation
-		n--
+	if i < 0 || utf8.FullRuneInString(s[i:]) {
+		return s
 	}
-	return s[:n]
+	return s[:i]
 }

@@ -3,6 +3,7 @@ package mask
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/lusky3/agentsync-tui/internal/model"
@@ -440,5 +441,61 @@ func TestCapped(t *testing.T) {
 	}
 	if got, tr := Capped("abc", 0); got != "abc" || tr {
 		t.Errorf("zero cap must mean no cap: %q %v", got, tr)
+	}
+}
+
+// An exact-boundary cut keeps the last whole rune; a cut inside a rune drops
+// only that rune, whatever its width.
+func TestCappedExactRuneBoundary(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"ééx", 4, "éé"}, // the cut lands exactly after the second é
+		{"ééx", 3, "é"},  // inside the second é
+		{"a😀b", 5, "a😀"}, // exactly after a 4-byte rune
+		{"a😀b", 4, "a"},  // inside it
+		{"abcdef", 3, "abc"},
+	} {
+		got, tr := Capped(c.in, c.n)
+		if !tr || got != c.want {
+			t.Errorf("Capped(%q, %d) = %q, %v; want %q", c.in, c.n, got, tr, c.want)
+		}
+	}
+}
+
+// A side made of many concatenated JSON values is masked in linear time:
+// every value is decoded by one decoder, not by a fresh decoder (and a fresh
+// Sanitize) per remaining value.
+func TestHunkManyValuesBoundedTime(t *testing.T) {
+	side := strings.Repeat("1 ", 20000) // 40 KB
+	start := time.Now()
+	h := Hunk(model.Hunk{Pointer: "/x", Source: side, Dest: side})
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Hunk took %v on 40 KB of values", d)
+	}
+	if n := strings.Count(h.Source, "\n"); n != 19999 {
+		t.Errorf("want one value per line, got %d line breaks", n)
+	}
+}
+
+// Every value of a multi-document side is walked, and a trailing remainder
+// that is not JSON is scrubbed, not dropped.
+func TestHunkMultiValueSides(t *testing.T) {
+	src := `{"token":"CANARYm1"} {"a":1} not json token=CANARYm2`
+	h := Hunk(model.Hunk{Pointer: "/x", Source: src})
+	if strings.Contains(h.Source, "CANARY") {
+		t.Fatalf("leak: %q", h.Source)
+	}
+	for _, want := range []string{"\"token\": \"••••\"", "\"a\": 1", "not json token=••••"} {
+		if !strings.Contains(h.Source, want) {
+			t.Errorf("missing %q in %q", want, h.Source)
+		}
+	}
+	// Under an mcpServers pointer the unparseable remainder is masked whole.
+	h = Hunk(model.Hunk{Pointer: "/mcpServers/s", Source: `{"a":1} CANARYm3 junk`})
+	if strings.Contains(h.Source, "CANARY") || strings.Contains(h.Source, "junk") {
+		t.Errorf("remainder not masked whole: %q", h.Source)
 	}
 }
