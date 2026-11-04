@@ -104,32 +104,45 @@ func drive(s *Screen, cmd tea.Cmd) []tea.Msg {
 	return out
 }
 
+var namedKeys = map[string]rune{
+	"esc": tea.KeyEscape, "enter": tea.KeyEnter, "up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft,
+	"right": tea.KeyRight, "tab": tea.KeyTab, "backspace": tea.KeyBackspace, "delete": tea.KeyDelete,
+	"insert": tea.KeyInsert, "home": tea.KeyHome, "end": tea.KeyEnd, "pgdown": tea.KeyPgDown, "pgup": tea.KeyPgUp,
+}
+
+// key builds the key press named like KeyPressMsg.String(): optional
+// ctrl+/alt+/shift+ prefixes, then a named key, f1..f12 or one rune.
 func key(s string) tea.KeyPressMsg {
-	switch s {
-	case "esc":
-		return tea.KeyPressMsg{Code: tea.KeyEscape}
-	case "enter":
-		return tea.KeyPressMsg{Code: tea.KeyEnter}
-	case "up":
-		return tea.KeyPressMsg{Code: tea.KeyUp}
-	case "down":
-		return tea.KeyPressMsg{Code: tea.KeyDown}
-	case "tab":
-		return tea.KeyPressMsg{Code: tea.KeyTab}
-	case "backspace":
-		return tea.KeyPressMsg{Code: tea.KeyBackspace}
-	case "delete":
-		return tea.KeyPressMsg{Code: tea.KeyDelete}
-	case "pgdown":
-		return tea.KeyPressMsg{Code: tea.KeyPgDown}
-	case "pgup":
-		return tea.KeyPressMsg{Code: tea.KeyPgUp}
-	case "space":
-		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
-	case "ctrl+d", "ctrl+u", "ctrl+s", "ctrl+x", "ctrl+k", "ctrl+n", "ctrl+r":
-		return tea.KeyPressMsg{Code: rune(s[5]), Mod: tea.ModCtrl}
+	var mod tea.KeyMod
+	rest := s
+	for {
+		switch {
+		case strings.HasPrefix(rest, "ctrl+") && len(rest) > 5:
+			mod, rest = mod|tea.ModCtrl, rest[5:]
+		case strings.HasPrefix(rest, "alt+") && len(rest) > 4:
+			mod, rest = mod|tea.ModAlt, rest[4:]
+		case strings.HasPrefix(rest, "shift+") && len(rest) > 6:
+			mod, rest = mod|tea.ModShift, rest[6:]
+		default:
+			goto done
+		}
 	}
-	return tea.KeyPressMsg{Code: []rune(s)[0], Text: s}
+done:
+	if c, ok := namedKeys[rest]; ok {
+		return tea.KeyPressMsg{Code: c, Mod: mod}
+	}
+	var n int
+	if _, err := fmt.Sscanf(rest, "f%d", &n); err == nil && n >= 1 && n <= 12 && rest == fmt.Sprintf("f%d", n) {
+		return tea.KeyPressMsg{Code: tea.KeyF1 + rune(n-1), Mod: mod}
+	}
+	if rest == "space" {
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " ", Mod: mod}
+	}
+	r := []rune(rest)[0]
+	if mod != 0 {
+		return tea.KeyPressMsg{Code: r, Mod: mod}
+	}
+	return tea.KeyPressMsg{Code: r, Text: rest}
 }
 
 func press(s *Screen, keys ...string) []tea.Msg {
@@ -335,7 +348,7 @@ func TestOutputStoredMasked(t *testing.T) {
 	if !strings.Contains(s.items[0].Detail, "token=") {
 		t.Errorf("detail %q", s.items[0].Detail)
 	}
-	press(s, "E")
+	startEdit(t, s)
 	s.Update(ui.RunMsg{Action: actions.Check(), Result: runner.Result{Stdout: "password=" + canary + "\nline2", Stderr: "token=" + canary}})
 	if s.check == nil {
 		t.Fatal("no check result stored")
@@ -423,79 +436,19 @@ func TestHostileNameNeverActionable(t *testing.T) {
 	_ = home
 }
 
-func TestSymlinkEscapeRefusedEndToEnd(t *testing.T) {
-	home := t.TempDir()
-	outside := t.TempDir()
-	secret := filepath.Join(outside, "SKILL.md")
-	if err := os.WriteFile(secret, []byte("outside\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(home, "skills"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// skills/evil is a directory symlink pointing outside the home: the
-	// screen's lstat of skills/evil/SKILL.md sees a regular file, so only the
-	// shell's EvalSymlinks check stands between it and the editor.
-	if err := os.Symlink(outside, filepath.Join(home, "skills", "evil")); err != nil {
-		t.Fatal(err)
-	}
-	marker := filepath.Join(t.TempDir(), "editor-ran")
-	script := filepath.Join(t.TempDir(), "fake-editor")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch '"+marker+"'\nprintf 'pwned\\n' >> \"$(for l; do :; done; echo $l)\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("VISUAL", "")
-	t.Setenv("EDITOR", script)
-	d := newDeps(home, stdoutRunner("evil\n"))
-	s := New(d, Skill)
-	app := ui.NewApp(d, s)
-	appDrive(app, func() tea.Msg { return tea.WindowSizeMsg{Width: 200, Height: 40} })
-	appDrive(app, s.Refresh())
-	if !reflect.DeepEqual(names(s), []string{"evil"}) {
-		t.Fatalf("items %v", names(s))
-	}
-	_, cmd := app.Update(key("E"))
-	appDrive(app, cmd)
-	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("editor ran on a symlink escape")
-	}
-	if b, _ := os.ReadFile(secret); string(b) != "outside\n" {
-		t.Errorf("outside file modified: %q", b)
-	}
-	v := ansi.Strip(app.View().Content)
-	if !strings.Contains(v, "refused") {
-		t.Errorf("no refusal status:\n%s", v)
-	}
-	if strings.Contains(v, outside) {
-		t.Errorf("view leaks the outside path:\n%s", v)
-	}
-}
-
-func appDrive(app *ui.App, cmd tea.Cmd) {
-	queue := []tea.Cmd{cmd}
-	for n := 0; len(queue) > 0 && n < 1000; n++ {
-		c := queue[0]
-		queue = queue[1:]
-		if c == nil {
-			continue
-		}
-		switch m := c().(type) {
-		case nil:
-		case tea.BatchMsg:
-			queue = append(queue, m...)
-		default:
-			_, next := app.Update(m)
-			queue = append(queue, next)
-		}
-	}
-}
-
 // ---- check result -----------------------------------------------------------
+
+// startEdit presses E and tells the screen the shell started the editor.
+func startEdit(t *testing.T, s *Screen) {
+	t.Helper()
+	e := onlyEdit(t, press(s, "E"))
+	s.Update(ui.EditOutcomeMsg{Path: e.Path, Started: true})
+}
 
 func afterEdit(t *testing.T) *Screen {
 	t.Helper()
 	s, _ := loaded(t, Skill, stdoutRunner("alpha\n"), "alpha")
-	onlyEdit(t, press(s, "E"))
+	startEdit(t, s)
 	return s
 }
 
@@ -546,7 +499,7 @@ func TestCheckResultOnlyAfterOwnEditAndOnlyCheck(t *testing.T) {
 	if s.check != nil {
 		t.Error("check result shown without an edit from this screen")
 	}
-	press(s, "E")
+	startEdit(t, s)
 	s.Update(ui.RunMsg{Action: actions.Doctor(), Result: runner.Result{Stdout: "other"}})
 	if s.check != nil {
 		t.Error("non-check RunMsg shown")
@@ -593,14 +546,37 @@ func TestCheckResultCappedAndScrollable(t *testing.T) {
 
 // ---- keys -------------------------------------------------------------------
 
-func TestNoCreateDeleteKeys(t *testing.T) {
-	keys := []string{"esc", "enter", "up", "down", "tab", "backspace", "delete", "pgdown", "pgup", "space",
-		"ctrl+d", "ctrl+u", "ctrl+s", "ctrl+x", "ctrl+k", "ctrl+n", "ctrl+r"}
+func allKeys() []string {
+	keys := []string{"esc", "enter", "up", "down", "left", "right", "tab", "backspace", "delete", "insert", "home", "end",
+		"pgdown", "pgup", "space", "shift+tab", "shift+delete", "shift+enter", "shift+up", "shift+down", "ctrl+enter"}
 	for r := '!'; r <= '~'; r++ {
 		keys = append(keys, string(r))
 	}
+	for r := 'a'; r <= 'z'; r++ {
+		keys = append(keys, "ctrl+"+string(r), "alt+"+string(r), "alt+shift+"+string(r), "ctrl+alt+"+string(r))
+	}
+	for r := 'A'; r <= 'Z'; r++ {
+		keys = append(keys, "alt+"+string(r))
+	}
+	for r := '0'; r <= '9'; r++ {
+		keys = append(keys, "alt+"+string(r))
+	}
+	for n := 1; n <= 12; n++ {
+		keys = append(keys, fmt.Sprintf("f%d", n), fmt.Sprintf("shift+f%d", n), fmt.Sprintf("alt+f%d", n), fmt.Sprintf("ctrl+f%d", n))
+	}
+	keys = append(keys, "alt+enter", "alt+backspace", "alt+delete", "alt+insert", "alt+up", "alt+down", "alt+left",
+		"alt+right", "alt+tab", "alt+esc", "alt+home", "alt+end", "alt+pgup", "alt+pgdown", "alt+space", "ctrl+delete")
+	return keys
+}
+
+func TestNoCreateDeleteKeys(t *testing.T) {
+	keys := allKeys()
 	reached, edits := 0, map[string]bool{}
 	for _, k := range keys {
+		// The constructed press must really be the key it is named after.
+		if got := key(k).String(); got != k {
+			t.Fatalf("key(%q).String() = %q: the harness does not send what it names", k, got)
+		}
 		s, _ := loaded(t, Skill, stdoutRunner("alpha\nbeta\n"), "alpha", "beta") // fresh per key
 		if len(s.items) != 2 {
 			t.Fatalf("setup: %v", names(s))
@@ -615,7 +591,7 @@ func TestNoCreateDeleteKeys(t *testing.T) {
 			}
 		}
 	}
-	if reached != len(keys) || reached < 100 {
+	if reached != len(keys) || reached < 300 {
 		t.Errorf("reached %d of %d keys", reached, len(keys))
 	}
 	if len(edits) != 2 || !edits["E"] || !edits["enter"] {
@@ -675,7 +651,7 @@ func TestStaleListResultsDropped(t *testing.T) {
 		t.Errorf("items %v", names(s))
 	}
 	s.gen++
-	s.Update(listMsg{gen: s.gen - 1, items: nil})
+	s.Update(listMsg{id: s.id, gen: s.gen - 1, items: nil})
 	if len(s.items) != 1 {
 		t.Error("stale listMsg applied")
 	}

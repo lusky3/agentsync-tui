@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -65,8 +66,13 @@ type checkResult struct {
 	scroll int
 }
 
+// nextID hands every Screen a process-unique identity: the shell broadcasts
+// unknown messages to all screens, so a result must name its owner.
+var nextID atomic.Uint64
+
 // Screen is one library tab.
 type Screen struct {
+	id    uint64
 	d     ui.Deps
 	kind  Kind
 	run   runner.Runner
@@ -79,7 +85,12 @@ type Screen struct {
 	loadNote string // why the last refresh failed, display-safe; last good list kept
 	note     string // last screen message, display-safe
 
-	awaiting bool // this screen asked the shell to edit; a check result may follow
+	// pending is the path of the edit this screen asked the shell for, until
+	// the shell reports the outcome; awaiting is set only once the shell
+	// started the editor, and cleared when the outcome says it will not run
+	// check or when this screen consumes the check result.
+	pending  string
+	awaiting bool
 	check    *checkResult
 
 	width, height int
@@ -87,6 +98,7 @@ type Screen struct {
 
 // listMsg carries one list read.
 type listMsg struct {
+	id    uint64 // owning Screen
 	gen   int
 	items []model.Item
 	note  string // non-empty: the read failed
@@ -94,7 +106,7 @@ type listMsg struct {
 
 // New returns the library screen for kind.
 func New(d ui.Deps, kind Kind) *Screen {
-	return &Screen{d: d, kind: kind, run: d.Runner, scope: d.Scope, width: 80, height: 24}
+	return &Screen{id: nextID.Add(1), d: d, kind: kind, run: d.Runner, scope: d.Scope, width: 80, height: 24}
 }
 
 // Title implements ui.Screen.
@@ -107,6 +119,7 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
 	s.run, s.scope = r, sc
 	s.gen++ // results of reads started under the old scope are dropped
+	s.pending, s.awaiting = "", false
 }
 
 // CapturesKeys implements ui.KeyCapturer: no text input here.
@@ -115,16 +128,16 @@ func (s *Screen) CapturesKeys() bool { return false }
 // Refresh re-reads the list; nothing runs inside Update.
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
-	gen, kind, r, home := s.gen, s.kind, s.run, s.d.AgentsyncHome
+	id, gen, kind, r, home := s.id, s.gen, s.kind, s.run, s.d.AgentsyncHome
 	if kind == Memory {
-		return func() tea.Msg { return readMemory(gen, home) }
+		return func() tea.Msg { return readMemory(id, gen, home) }
 	}
-	return func() tea.Msg { return readList(gen, kind, r) }
+	return func() tea.Msg { return readList(id, gen, kind, r) }
 }
 
-func readList(gen int, kind Kind, r runner.Runner) listMsg {
+func readList(id uint64, gen int, kind Kind, r runner.Runner) listMsg {
 	if r == nil {
-		return listMsg{gen: gen, note: "no runner"}
+		return listMsg{id: id, gen: gen, note: "no runner"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
 	defer cancel()
@@ -132,36 +145,36 @@ func readList(gen int, kind Kind, r runner.Runner) listMsg {
 	res, err := r.Run(ctx, word, "list")
 	switch {
 	case errors.Is(err, runner.ErrNotInstalled):
-		return listMsg{gen: gen, note: "agentsync is not installed"}
+		return listMsg{id: id, gen: gen, note: "agentsync is not installed"}
 	case err != nil:
-		return listMsg{gen: gen, note: oneLine(mask.Text(err.Error()))}
+		return listMsg{id: id, gen: gen, note: oneLine(mask.Text(err.Error()))}
 	case res.ExitCode != 0:
 		n := word + " list exited " + strconv.Itoa(res.ExitCode)
 		if l := firstLine(mask.Text(res.Stderr)); l != "" {
 			n += ": " + l
 		}
-		return listMsg{gen: gen, note: n}
+		return listMsg{id: id, gen: gen, note: n}
 	}
 	items, err := model.ParseList(res.Stdout)
 	if err != nil {
-		return listMsg{gen: gen, note: word + " list output unreadable"}
+		return listMsg{id: id, gen: gen, note: word + " list output unreadable"}
 	}
 	for i := range items {
 		items[i].Detail = oneLine(mask.Text(items[i].Detail))
 	}
-	return listMsg{gen: gen, items: items}
+	return listMsg{id: id, gen: gen, items: items}
 }
 
 // readMemory lists memory/AGENTS.md and memory/fragments/*.md directly:
 // regular files only (no symlinks, directories or odd names), sorted.
-func readMemory(gen int, home string) listMsg {
+func readMemory(id uint64, gen int, home string) listMsg {
 	var items []model.Item
 	if fi, err := os.Lstat(filepath.Join(home, "memory", "AGENTS.md")); err == nil && fi.Mode().IsRegular() {
 		items = append(items, model.Item{Name: memoryRoot})
 	}
 	entries, err := os.ReadDir(filepath.Join(home, "memory", "fragments"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return listMsg{gen: gen, note: "cannot read memory/fragments"}
+		return listMsg{id: id, gen: gen, note: "cannot read memory/fragments"}
 	}
 	var frags []model.Item
 	for _, e := range entries {
@@ -172,7 +185,7 @@ func readMemory(gen int, home string) listMsg {
 		frags = append(frags, model.Item{Name: name})
 	}
 	sort.Slice(frags, func(i, j int) bool { return frags[i].Name < frags[j].Name })
-	return listMsg{gen: gen, items: append(items, frags...)}
+	return listMsg{id: id, gen: gen, items: append(items, frags...)}
 }
 
 // Update implements tea.Model.
@@ -181,9 +194,11 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width, s.height = msg.Width, msg.Height
 	case listMsg:
-		if msg.gen == s.gen {
+		if msg.id == s.id && msg.gen == s.gen {
 			s.apply(msg)
 		}
+	case ui.EditOutcomeMsg:
+		s.onOutcome(msg)
 	case ui.RunMsg:
 		s.onRun(msg)
 	case tea.KeyPressMsg:
@@ -221,7 +236,7 @@ func (s *Screen) keyPress(k string) tea.Cmd {
 	case "E", "enter":
 		return s.edit()
 	case "esc":
-		s.check, s.awaiting = nil, false
+		s.check, s.pending, s.awaiting = nil, "", false
 	case "ctrl+d":
 		s.scrollBy(s.paneHeight() / 2)
 	case "ctrl+u":
@@ -250,8 +265,27 @@ func (s *Screen) edit() tea.Cmd {
 		s.note = staleNote
 		return s.Refresh()
 	}
-	s.note, s.check, s.awaiting = "", nil, true
+	s.note, s.check, s.pending, s.awaiting = "", nil, p, false
 	return func() tea.Msg { return ui.EditFileMsg{Path: p, After: []actions.Action{actions.Check()}} }
+}
+
+// onOutcome tracks what became of this screen's own edit; outcomes for any
+// other path (another screen's edit) are ignored.
+func (s *Screen) onOutcome(m ui.EditOutcomeMsg) {
+	if s.pending == "" || m.Path != s.pending {
+		return
+	}
+	switch {
+	case m.Finished:
+		s.pending = ""
+		if m.Err != "" { // editor failed: the shell skips the check
+			s.awaiting = false
+		}
+	case m.Started:
+		s.awaiting = true
+	default: // refused
+		s.pending, s.awaiting = "", false
+	}
 }
 
 // onRun records the `check` the shell ran after this screen's edit.
@@ -259,7 +293,7 @@ func (s *Screen) onRun(m ui.RunMsg) {
 	if !s.awaiting || len(m.Action.Argv) != 1 || m.Action.Argv[0] != "check" {
 		return
 	}
-	s.awaiting = false
+	s.awaiting = false // consumed
 	r := &checkResult{exit: m.Result.ExitCode}
 	switch {
 	case errors.Is(m.Err, runner.ErrNotInstalled):

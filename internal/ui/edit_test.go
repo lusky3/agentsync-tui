@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -188,4 +189,113 @@ func TestEditFileLogsEntry(t *testing.T) {
 			t.Errorf("after actions ran after a failed edit: %d calls", fr.nCalls())
 		}
 	})
+}
+
+// outcomeScreen records every EditOutcomeMsg it is sent.
+type outcomeScreen struct {
+	*fakeScreen
+	mu   sync.Mutex
+	outs []EditOutcomeMsg
+}
+
+func (s *outcomeScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if o, ok := msg.(EditOutcomeMsg); ok {
+		s.mu.Lock()
+		s.outs = append(s.outs, o)
+		s.mu.Unlock()
+	}
+	s.fakeScreen.Update(msg)
+	return s, nil
+}
+
+func (s *outcomeScreen) got() []EditOutcomeMsg {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]EditOutcomeMsg(nil), s.outs...)
+}
+
+func TestEditOutcomeBroadcastRefused(t *testing.T) {
+	home, _ := editHome(t, "srv.toml")
+	outside := filepath.Join(t.TempDir(), "evil.toml")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "mcp", "link.toml")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", fakeEditor(t))
+	for name, p := range map[string]string{"symlink": link, "relative": "mcp/srv.toml", "ctrl": "mcp/\x1b[31m\x07evil"} {
+		t.Run(name, func(t *testing.T) {
+			d := baseDeps(newFakeRunner())
+			d.AgentsyncHome = home
+			rs := &outcomeScreen{fakeScreen: newScreen("A", "a")}
+			app := NewApp(d, rs)
+			_, cmd := app.Update(EditFileMsg{Path: p})
+			_ = cmd
+			outs := rs.got()
+			if len(outs) != 1 || outs[0].Path != p || outs[0].Started || outs[0].Finished {
+				t.Fatalf("outcomes %+v", outs)
+			}
+			if !strings.Contains(outs[0].Err, "refused") || strings.ContainsAny(outs[0].Err, "\x1b\x07") || strings.Contains(outs[0].Err, outside) {
+				t.Errorf("err %q", outs[0].Err)
+			}
+		})
+	}
+	t.Run("busy", func(t *testing.T) {
+		d := baseDeps(newFakeRunner())
+		d.AgentsyncHome = home
+		rs := &outcomeScreen{fakeScreen: newScreen("A", "a")}
+		app := NewApp(d, rs)
+		app.running = &running{}
+		app.Update(EditFileMsg{Path: link})
+		if outs := rs.got(); len(outs) != 1 || outs[0].Started || !strings.Contains(outs[0].Err, "busy") {
+			t.Errorf("outcomes %+v", outs)
+		}
+	})
+}
+
+func TestEditOutcomeBroadcastStartedFinishedFailed(t *testing.T) {
+	for _, tc := range []struct {
+		name, editor string
+		wantErr      string
+		wantCalls    int
+	}{
+		{"exit 0", "true", "", 1},
+		{"exit nonzero", "false", "editor failed (exit 1)", 0},
+		{"spawn error", "/nonexistent/editor-\x1b[31m", "editor error", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, file := editHome(t, "srv.toml")
+			t.Setenv("VISUAL", tc.editor)
+			fr := newFakeRunner()
+			d := baseDeps(fr)
+			d.AgentsyncHome = home
+			rs := &outcomeScreen{fakeScreen: newScreen("A", "a")}
+			h := start(t, d, rs)
+			h.tm.Send(EditFileMsg{Path: file, After: []actions.Action{actions.Check()}})
+			h.waitMsg("editDoneMsg", isEditDone)
+			if tc.wantCalls > 0 {
+				h.waitStarted()
+				fr.respond <- fakeResp{}
+				h.waitRun()
+			}
+			h.final()
+			outs := rs.got()
+			if len(outs) != 2 || !outs[0].Started || outs[0].Finished || outs[0].Path != file ||
+				!outs[1].Finished || outs[1].Path != file {
+				t.Fatalf("outcomes %+v", outs)
+			}
+			if tc.wantErr == "" && outs[1].Err != "" || !strings.HasPrefix(outs[1].Err, tc.wantErr) {
+				t.Errorf("finish err %q want prefix %q", outs[1].Err, tc.wantErr)
+			}
+			if strings.ContainsAny(outs[1].Err, "\x1b\x07") {
+				t.Errorf("unsanitised %q", outs[1].Err)
+			}
+			if fr.nCalls() != tc.wantCalls {
+				t.Errorf("calls %d want %d", fr.nCalls(), tc.wantCalls)
+			}
+		})
+	}
 }

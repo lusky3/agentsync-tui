@@ -29,9 +29,32 @@ type EditFileMsg struct {
 	After []actions.Action
 }
 
+// EditOutcomeMsg is broadcast to every screen for each EditFileMsg outcome,
+// so a screen that asked for an edit learns what became of it. Path is the
+// Path of the originating EditFileMsg. Exactly one shape is sent per stage:
+//
+//   - refused:   Started=false, Finished=false, Err = short sanitised reason
+//   - started:   Started=true,  Finished=false (the editor is about to run)
+//   - finished:  Finished=true; Err == "" means the editor exited 0 and the
+//     After actions were queued; otherwise Err is a short sanitised reason
+//     (non-zero exit or spawn error) and After is skipped.
+type EditOutcomeMsg struct {
+	Path     string
+	Started  bool
+	Finished bool
+	Err      string
+}
+
+// editOutcome broadcasts m (reason sanitised) to every screen.
+func (a *App) editOutcome(m EditOutcomeMsg) tea.Cmd {
+	m.Err = oneLine(mask.Text(m.Err))
+	return tea.Batch(a.broadcast(m)...)
+}
+
 // editDoneMsg reports that the editor exited.
 type editDoneMsg struct {
 	base  string // display-safe base name
+	path  string // the EditFileMsg path, echoed in EditOutcomeMsg
 	start time.Time
 	after []actions.Action
 	res   runner.Result
@@ -94,20 +117,20 @@ func (a *App) editFile(m EditFileMsg) tea.Cmd {
 	switch {
 	case a.running != nil || a.modal != nil:
 		a.setStatus(statusFail, "busy: another action is in progress")
-		return nil
+		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: "busy: another action is in progress"})
 	case a.noProject:
 		a.setStatus(statusFail, noProjectText)
-		return nil
+		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: noProjectText})
 	}
 	path, err := resolveInside(a.d.AgentsyncHome, m.Path)
 	if err != nil {
 		a.setStatus(statusFail, "edit refused: "+base+": "+err.Error())
-		return nil
+		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: "edit refused: " + err.Error()})
 	}
 	argv, err := editorArgv(os.Getenv)
 	if err != nil {
 		a.setStatus(statusFail, "edit refused: "+oneLine(mask.Text(err.Error())))
-		return nil
+		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: "edit refused: " + err.Error()})
 	}
 	start := time.Now()
 	a.running = &running{act: actions.Action{Title: "Edit " + base}, start: start}
@@ -115,14 +138,15 @@ func (a *App) editFile(m EditFileMsg) tea.Cmd {
 	// path is absolute (starts with '/'), so it can never read as a flag.
 	cmd := exec.Command(argv[0], append(argv[1:], path)...)
 	after := append([]actions.Action(nil), m.After...)
-	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+	started := a.editOutcome(EditOutcomeMsg{Path: m.Path, Started: true})
+	return tea.Batch(started, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		var res runner.Result
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			res.ExitCode, err = ee.ExitCode(), nil
 		}
-		return editDoneMsg{base: base, start: start, after: after, res: res, err: err}
-	})
+		return editDoneMsg{base: base, path: m.Path, start: start, after: after, res: res, err: err}
+	}))
 }
 
 // editDone logs the edit, runs the After actions if the editor succeeded and
@@ -134,16 +158,22 @@ func (a *App) editDone(m editDoneMsg) tea.Cmd {
 		return tea.Quit
 	}
 	var cmds []tea.Cmd
+	fin := EditOutcomeMsg{Path: m.path, Finished: true}
 	switch {
 	case m.err != nil:
 		a.setStatus(statusFail, "editor error: "+m.base+": "+firstLine(mask.Text(m.err.Error())))
+		fin.Err = "editor error: " + firstLine(mask.Text(m.err.Error()))
 	case m.res.ExitCode != 0:
 		a.setStatus(statusFail, "editor failed (exit "+strconv.Itoa(m.res.ExitCode)+"): "+m.base)
+		fin.Err = "editor failed (exit " + strconv.Itoa(m.res.ExitCode) + ")"
 	default:
 		a.setStatus(statusOK, "edited "+m.base)
 		a.queue = append(a.queue, m.after...)
 		cmds = append(cmds, a.next())
 	}
+	// Broadcast before the queued After action is requested so a screen
+	// has adopted the outcome by the time its RunMsg arrives.
+	cmds = append([]tea.Cmd{a.editOutcome(fin)}, cmds...)
 	if s := a.current(); s != nil && !a.noProject {
 		cmds = append(cmds, s.Refresh())
 	}
