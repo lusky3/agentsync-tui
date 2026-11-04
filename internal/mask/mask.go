@@ -19,6 +19,10 @@ const Mask = "••••"
 
 const refPat = `\$\{(?:secret:|env:)?[A-Za-z_][A-Za-z0-9_.\-]*\}`
 
+// secretKeyPat matches the tail of a secret-named key.
+// The key must not sit inside a reference: "${secret:NAME}" is not a pair.
+const secretKeyPat = `(?:^|[^{]|[^$]\{)(?:token|secret|password|passwd|pwd|api[-_]?key|credential|private[-_]?key|access[-_]?key)`
+
 var (
 	refRe    = regexp.MustCompile(refPat)
 	wholeRef = regexp.MustCompile(`^` + refPat + `$`)
@@ -36,6 +40,14 @@ var (
 		regexp.MustCompile(`(?i)([?&;][A-Za-z0-9_.\-]*(?:token|key|secret|password|passwd|auth|sig|signature)=)([^&\s"'#]+)`),
 		// key/token/secret/password followed by = or : and a long opaque run.
 		regexp.MustCompile(`(?i)((?:token|key|secret|password)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-]{24,})`),
+		// A secret-named key (token, password, api_key, apiKey, ...) ending
+		// the word, then ':' or '=', then a value: bare (one word, or one
+		// ${ref}), "double"- or 'single'-quoted (JSON/YAML shapes). The key
+		// is not masked; plurals ("passwords: 3") and prose ("token
+		// expired") have no ':'/'=' directly after the word and stay as is.
+		regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*)((?:\$\{[^}\s]*\}|[^\s"',;)}\]])+)`),
+		regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`),
+		regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`),
 	}
 	// Known token shapes: the whole match is the secret.
 	shapeRes = []*regexp.Regexp{

@@ -311,6 +311,11 @@ func TestCancelledOrFailedApplyShownMaskedAndNotStuck(t *testing.T) {
 	if strings.Contains(v, "CANARYx1") || !strings.Contains(v, "partial") || !strings.Contains(v, "canceled") {
 		t.Fatalf("cancelled view:\n%s", v)
 	}
+	// the preview no longer describes the disk: a emits nothing until p
+	h.press("a")
+	if len(h.asked) != 0 || !strings.Contains(h.view(), "preview first") {
+		t.Fatalf("a emitted after a cancelled apply: %v", h.asked)
+	}
 	// not stuck: a new preview and apply cycle works
 	h.press("p", "a")
 	if len(h.asked) != 1 {
@@ -514,5 +519,73 @@ func TestRealFixtures(t *testing.T) {
 	h.press("A", "p")
 	if !strings.Contains(h.view(), "no agentsync-managed destination dirs") {
 		t.Fatalf("revert --all output not shown:\n%s", h.view())
+	}
+}
+
+func TestFailedRealRunClearsPreview(t *testing.T) {
+	for name, res := range map[string]ui.RunMsg{
+		"exit":   {Result: runner.Result{ExitCode: 1, Stderr: "partial write"}},
+		"cancel": {Err: context.Canceled},
+		"ok":     {Result: runner.Result{Stdout: "done"}},
+	} {
+		h := newShell(t, okRunner("plan"))
+		h.press("p", "a")
+		res.Action = h.asked[0]
+		h.asked = nil
+		h.send(res)
+		h.press("a")
+		if len(h.asked) != 0 {
+			t.Fatalf("%s: apply preview survived the run", name)
+		}
+	}
+	for name, res := range map[string]ui.RunMsg{
+		"exit":   {Result: runner.Result{ExitCode: 1}},
+		"cancel": {Err: context.Canceled},
+	} {
+		h := newShell(t, okRunner("would revert"))
+		h.press("m")
+		h.typeText("e", "claude")
+		h.press("p", "v")
+		res.Action = h.asked[0]
+		h.asked = nil
+		h.send(res)
+		h.press("v")
+		if len(h.asked) != 0 {
+			t.Fatalf("%s: revert preview survived the run", name)
+		}
+	}
+}
+
+func TestForeignMutationInvalidatesPreviews(t *testing.T) {
+	foreign := actions.Action{Title: "Add server", Argv: []string{"mcp", "add", "x"}}
+	for _, res := range []runner.Result{{}, {ExitCode: 1}} {
+		h := newShell(t, okRunner("plan"))
+		h.press("p")
+		h.press("m")
+		h.typeText("e", "claude")
+		h.press("p") // revert preview too
+		h.send(ui.RunMsg{Action: foreign, Result: res})
+		h.press("v")
+		h.press("m", "a")
+		if len(h.asked) != 0 {
+			t.Fatalf("preview survived a foreign mutation: %v", h.asked)
+		}
+	}
+	h := newShell(t, okRunner("plan"))
+	h.press("p")
+	h.send(ui.RunMsg{Action: foreign, Err: context.Canceled})
+	h.press("a")
+	if len(h.asked) != 0 {
+		t.Fatal("preview survived a cancelled foreign mutation")
+	}
+}
+
+func TestForeignReadOnlyRunKeepsPreview(t *testing.T) {
+	h := newShell(t, okRunner("plan"))
+	h.press("p")
+	h.send(ui.RunMsg{Action: actions.Action{Title: "status", Argv: []string{"status", "--json"}, ReadOnly: true}})
+	h.press("a")
+	if len(h.asked) != 1 {
+		t.Fatal("a foreign read-only run invalidated the preview")
 	}
 }

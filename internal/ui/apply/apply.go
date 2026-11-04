@@ -278,16 +278,28 @@ func (s *Screen) onRun(m ui.RunMsg) {
 		} else if s.live[md] == key {
 			s.live[md] = ""
 			s.store(md, m)
+			// Any completed real run (success, failure, cancel) may have
+			// changed the disk: no preview describes it any more.
+			s.dropPreviews()
 			if m.Err == nil && m.Result.ExitCode == 0 {
-				s.seq++
-				s.prev[md], s.req[md] = nil, nil
 				s.msg = "done; preview again before the next run"
 			} else {
-				s.msg = "run did not succeed"
+				s.msg = "run did not succeed; preview again"
 			}
 			return
 		}
 	}
+	if !m.Action.ReadOnly {
+		// A mutation issued elsewhere (another tab) may change what an apply
+		// or revert would do; read-only runs are harmless.
+		s.dropPreviews()
+	}
+}
+
+// dropPreviews invalidates both modes' previews and in-flight requests.
+func (s *Screen) dropPreviews() {
+	s.seq++
+	s.prev, s.req = [2]*preview{}, [2]*pending{}
 }
 
 // realKey maps a dry-run argv key to the matching real command's key.
@@ -326,19 +338,8 @@ func (s *Screen) store(md mode, m ui.RunMsg) {
 }
 
 // clean masks (before any truncation, so a cut cannot split a secret) then
-// sanitises. mask.Text alone misses short key=value assignments such as
-// "token=abc", so every line holding an "=" also goes through
-// mask.FreeText, which masks the value of secret-named assignments (and a
-// whole line it cannot parse).
-func clean(v string) string {
-	lines := strings.Split(mask.Text(v), "\n")
-	for i, l := range lines {
-		if strings.Contains(l, "=") {
-			lines[i] = mask.FreeText(l)
-		}
-	}
-	return mask.Sanitize(strings.Join(lines, "\n"))
-}
+// sanitises.
+func clean(v string) string { return mask.Sanitize(mask.Text(v)) }
 
 func cutRunes(v string, n int) string {
 	for n > 0 && n < len(v) && v[n]&0xC0 == 0x80 {
