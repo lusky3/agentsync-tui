@@ -17,6 +17,12 @@ const helpText = `Keys
                     twice (it gets SIGINT, then is killed after 10s);
                     quit when idle
 
+Lists and long views (every screen)
+  up/k, down/j      move the cursor, or scroll, one row
+  ctrl+u, pgup      a page up          ctrl+d, pgdown   a page down
+  home / end        first / last row
+  r                 refresh the screen
+
 Confirm dialog
   y                 run          n / esc   cancel (enter does not confirm)
   destructive actions: type the verb shown, then enter`
@@ -53,12 +59,12 @@ func (a *App) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		a.shutdown()
 		return tea.Quit
 	case "tab":
-		a.selectScreen(a.active + 1)
+		return a.selectScreen(a.active + 1)
 	case "shift+tab":
-		a.selectScreen(a.active - 1)
+		return a.selectScreen(a.active - 1)
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		if i := int(s[0] - '1'); i < len(a.screens) {
-			a.selectScreen(i)
+			return a.selectScreen(i)
 		}
 	case "s":
 		return a.toggleScope()
@@ -82,17 +88,25 @@ func (a *App) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-func (a *App) selectScreen(i int) {
+// selectScreen makes screen i (wrapping) the active one and refreshes it if
+// its data is stale (never loaded, or loaded before a scope switch or a
+// write elsewhere).
+func (a *App) selectScreen(i int) tea.Cmd {
 	n := len(a.screens)
 	if n == 0 {
-		return
+		return nil
 	}
 	a.active = ((i % n) + n) % n
+	if a.stale[a.active] {
+		return a.refreshActive()
+	}
+	return nil
 }
 
 // toggleScope switches user<->project, rebuilding the runner and
 // interactive builder through Deps.WithScope, moving the canonical home to
-// the new scope's tree (HomeFor) and refreshing every screen.
+// the new scope's tree (HomeFor), handing every ScopeAware screen the new
+// pair and refreshing the active screen; the others load when shown.
 func (a *App) toggleScope() tea.Cmd {
 	if a.d.WithScope == nil {
 		a.setStatus(statusWarn, "scope switching unavailable")
@@ -116,13 +130,11 @@ func (a *App) toggleScope() tea.Cmd {
 	a.home = HomeFor(a.d, next)
 	chip := a.chipCmd()
 	a.setStatus(statusInfo, "scope: "+string(next))
-	cmds := make([]tea.Cmd, 0, len(a.screens)+1)
-	cmds = append(cmds, chip)
 	for _, scr := range a.screens {
 		if sa, ok := scr.(ScopeAware); ok {
 			sa.SetScope(a.run, next, a.home)
 		}
-		cmds = append(cmds, scr.Refresh())
 	}
-	return tea.Batch(cmds...)
+	a.markOthersStale()
+	return tea.Batch(chip, a.refreshActive())
 }

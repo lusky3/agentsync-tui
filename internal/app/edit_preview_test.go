@@ -101,13 +101,12 @@ func TestEditInvalidatesApplyAndImportPreviews(t *testing.T) {
 	ap, im := apply.New(d), importer.New(d)
 	p := seenProbe{App: ui.NewApp(d, ap, im), seen: make(chan tea.Msg, 4096)}
 	tm := teatest.NewTestModel(t, p, teatest.WithInitialTermSize(140, 40))
-	// The importer loads its agent list through its own read (agentsMsg).
-	waitSeen(t, p.seen, "agent list", func(m tea.Msg) bool { return fmt.Sprintf("%T", m) == "importer.agentsMsg" })
-
-	// Preview on both screens.
+	// Preview on both screens. The importer loads its agent list through
+	// its own read (agentsMsg) when it is first shown.
 	press(tm, "p")
 	waitSeen(t, p.seen, "apply preview", isRun("apply --dry-run"))
 	press(tm, "2")
+	waitSeen(t, p.seen, "agent list", func(m tea.Msg) bool { return fmt.Sprintf("%T", m) == "importer.agentsMsg" })
 	press(tm, "p")
 	waitSeen(t, p.seen, "import preview", func(m tea.Msg) bool {
 		r, ok := m.(ui.RunMsg)

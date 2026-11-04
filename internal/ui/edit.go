@@ -52,6 +52,12 @@ func (a *App) editOutcome(m EditOutcomeMsg) tea.Cmd {
 	return tea.Batch(a.broadcast(m)...)
 }
 
+// refuseEdit reports a refused edit on the status line and to the screens.
+func (a *App) refuseEdit(path, reason string) tea.Cmd {
+	a.setStatus(statusFail, reason)
+	return a.editOutcome(EditOutcomeMsg{Path: path, Err: reason})
+}
+
 // editDoneMsg reports that the editor exited.
 type editDoneMsg struct {
 	base  string // display-safe base name
@@ -117,11 +123,9 @@ func (a *App) editFile(m EditFileMsg) tea.Cmd {
 	base := logSafe(mask.Text(filepath.Base(m.Path)))
 	switch {
 	case a.running != nil || a.modal != nil:
-		a.setStatus(statusFail, "busy: another action is in progress")
-		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: "busy: another action is in progress"})
+		return a.refuseEdit(m.Path, "busy: another action is in progress")
 	case a.noProject:
-		a.setStatus(statusFail, noProjectText)
-		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: noProjectText})
+		return a.refuseEdit(m.Path, noProjectText)
 	}
 	path, err := resolveInside(a.home, m.Path)
 	if err != nil {
@@ -130,8 +134,7 @@ func (a *App) editFile(m EditFileMsg) tea.Cmd {
 	}
 	argv, err := editorArgv(os.Getenv)
 	if err != nil {
-		a.setStatus(statusFail, "edit refused: "+logSafe(mask.Text(err.Error())))
-		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: "edit refused: " + err.Error()})
+		return a.refuseEdit(m.Path, "edit refused: "+logSafe(mask.Text(err.Error())))
 	}
 	start := time.Now()
 	a.running = &running{act: actions.Action{Title: "Edit " + base}, start: start}
@@ -141,17 +144,14 @@ func (a *App) editFile(m EditFileMsg) tea.Cmd {
 	after := append([]actions.Action(nil), m.After...)
 	started := a.editOutcome(EditOutcomeMsg{Path: m.Path, Started: true})
 	return tea.Batch(started, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		var res runner.Result
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			res.ExitCode, err = ee.ExitCode(), nil
-		}
+		res, err := exitResult(err)
 		return editDoneMsg{base: base, path: m.Path, start: start, after: after, res: res, err: err}
 	}))
 }
 
 // editDone logs the edit, runs the After actions if the editor succeeded and
-// refreshes the active screen.
+// refreshes the active screen; the other screens are marked stale, since
+// the edit may have changed what they show.
 func (a *App) editDone(m editDoneMsg) tea.Cmd {
 	a.running = nil
 	a.recordDisplay("edit "+m.base, outcome(m.res, m.err), time.Since(m.start))
@@ -175,10 +175,8 @@ func (a *App) editDone(m editDoneMsg) tea.Cmd {
 	// Broadcast before the queued After action is requested so a screen
 	// has adopted the outcome by the time its RunMsg arrives.
 	cmds = append([]tea.Cmd{a.editOutcome(fin)}, cmds...)
-	if s := a.current(); s != nil && !a.noProject {
-		cmds = append(cmds, s.Refresh())
-	}
-	return tea.Batch(cmds...)
+	a.markOthersStale()
+	return tea.Batch(append(cmds, a.refreshActive())...)
 }
 
 // next requests the first queued follow-up action, if any.

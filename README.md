@@ -31,15 +31,24 @@ agentsync-tui                    # user scope
 agentsync-tui --project ./repo   # project scope
 agentsync-tui --version
 agentsync-tui --write-timeout 10m     # bound writes too (default: no bound)
-agentsync-tui --read-timeout 0       # no bound on network reads (default 2m)
+agentsync-tui --read-timeout 0       # no bound on background reads (default 2m)
 ```
 
-`--read-timeout` bounds network reads: import previews of plugins or a whole
-agent, and the plugins screen's `plugin outdated`. `--write-timeout` bounds
-every write (apply, revert, import, `plugin upgrade`, ...). Both take a Go
-duration such as `90s` or `10m`; `0` means no bound. Writes are unbounded by
-default because a write cut off partway (for example `plugin upgrade --all`)
-can leave agentsync's state and the destination files out of step.
+`--read-timeout` bounds every background read: the lists and status each
+screen shows, import previews of plugins or a whole agent, and the plugins
+screen's `plugin outdated`. `--write-timeout` bounds every write (apply,
+revert, import, `plugin upgrade`, ...). Both take a Go duration such as `90s`
+or `10m`; `0` means no bound. Writes are unbounded by default because a write
+cut off partway (for example `plugin upgrade --all`) can leave agentsync's
+state and the destination files out of step.
+
+Screens load when they are first shown: startup runs the version check, the
+header's `check` and `status --exit-code`, and the reads of the first tab
+only. A screen whose data may be stale (never shown, shown under the other
+scope, or shown before a write or an edit ran elsewhere) refreshes when it is
+next shown; `r` refreshes it on demand. A refresh, a scope switch and quitting
+cancel the reads they supersede. The Reconcile tab's `reconcile --auto-safe`
+takes agentsync's write lock, so it runs only while that tab is on show.
 
 Stopping a command sends it SIGINT and, if it is still running 10 seconds
 later, SIGKILL. `ctrl+c` cancels a running read at once. A running write needs
@@ -60,7 +69,10 @@ half done, and `check` or a new preview shows what changed.
 | `?` | help |
 | `q` | quit (waits for a running write; `ctrl+c` cancels a running read, twice for a write) |
 
-In lists, `up`/`down` or `k`/`j` move and `r` refreshes. Confirm dialogs take
+Every list and long view uses the same keys: `up`/`k` and `down`/`j` move
+one row, `ctrl+u`/`pgup` and `ctrl+d`/`pgdown` a page, `home`/`end` jump to
+the first or last row, and `r` refreshes the screen. The cursor row and the
+key hints at the bottom always stay visible. Confirm dialogs take
 `y` to run and `n`/`esc` to cancel. `enter` does not confirm, so a double
 `enter` on a form cannot run the command before you have read it. Destructive
 actions ask you to type a word instead (see the safety model).
@@ -81,7 +93,7 @@ actions ask you to type a word instead (see the safety model).
 | 10-14 | Subagents, Commands, Hooks, LSP, Memory | same as Skills | `E`/`enter` edit, then `check` runs |
 | 15 | Health | `doctor` and `check` results | `r` re-run |
 
-Long views scroll with `ctrl+d`/`ctrl+u` or `pgdown`/`pgup`; the plugin detail view uses `j`/`k`, `pgdown`/`space` and `pgup`.
+Long views (command output, diffs, the plugin detail) scroll with the same keys as the lists.
 
 ## Safety model
 
@@ -90,9 +102,9 @@ Long views scroll with `ctrl+d`/`ctrl+u` or `pgdown`/`pgup`; the plugin detail v
   runs. Read-only commands (dry-run previews, `check`) run without a prompt,
   and screens read state directly with `list`, `status`, `diff`, `explain`,
   `doctor`, `check`, `version`, `status --legend`, `plugin outdated`,
-  `reconcile --auto-safe` and similar read-only calls. Quitting cancels any of
-  these still in flight (the child gets SIGINT, then SIGKILL). The TUI writes no
-  agentsync files directly.
+  `reconcile --auto-safe` and similar read-only calls. Quitting, a refresh and
+  a scope switch cancel any of these still in flight (the child gets SIGINT,
+  then SIGKILL). The TUI writes no agentsync files directly.
 - The one exception is `E` (edit) on MCP servers and on Skills, Subagents,
   Commands, Hooks, LSP and Memory: it opens the canonical file in `$VISUAL`,
   then `$EDITOR`, falling back to `vi`, immediately and with no confirm dialog.

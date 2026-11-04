@@ -128,11 +128,7 @@ func (a *App) start(act actions.Action) tea.Cmd {
 			return func() tea.Msg { return RunMsg{Action: act, Err: errNoInteractive} }
 		}
 		return tea.ExecProcess(a.interactive(act.Argv...), func(err error) tea.Msg {
-			var res runner.Result
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
-				res.ExitCode, err = ee.ExitCode(), nil
-			}
+			res, err := exitResult(err)
 			return RunMsg{Action: act, Result: res, Err: err}
 		})
 	}
@@ -143,6 +139,9 @@ func (a *App) start(act actions.Action) tea.Cmd {
 	case act.Network:
 		limit = lim.Read
 	}
+	// Actions derive from context.Background, not Deps.Ctx: quitting must
+	// not cut a write off (quitAfterWrite waits for it); the running
+	// action is cancelled explicitly (cancelRunning, interrupt) instead.
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if limit > 0 {
@@ -200,7 +199,19 @@ func (a *App) interrupt() tea.Cmd {
 	return nil
 }
 
-// finish logs a RunMsg, sets the status line and refreshes the active screen.
+// exitResult turns the error of a finished process into a Result: a
+// non-zero exit is a Result.ExitCode, not an error.
+func exitResult(err error) (runner.Result, error) {
+	var res runner.Result
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return runner.Result{ExitCode: ee.ExitCode()}, nil
+	}
+	return res, err
+}
+
+// finish logs a RunMsg, sets the status line and refreshes the active
+// screen; after a write the other screens are marked stale.
 func (a *App) finish(m RunMsg) tea.Cmd {
 	var dur time.Duration
 	if a.running != nil {
@@ -240,22 +251,11 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 	cmds := a.broadcast(m)
 	if !m.Action.ReadOnly {
 		cmds = append(cmds, a.chipCmd()) // apply/revert/import may change health
+		a.markOthersStale()
 	}
-	cmds = append(cmds, a.next())
-	if s := a.current(); s != nil && !a.noProject {
-		cmds = append(cmds, s.Refresh())
-	}
+	cmds = append(cmds, a.next(), a.refreshActive())
 	return tea.Batch(cmds...)
 }
-
-// quitGrace bounds how long quitting waits for a cancelled or interrupted
-// run to report back. runner.Exec kills the child InterruptGrace after
-// SIGINT, so this is a fallback for a runner that ignores its context.
-const quitGrace = runner.InterruptGrace + 3*time.Second
-
-// quitDeadlineMsg fires when a cancelled run has not reported back within
-// quitGrace after a quit request.
-type quitDeadlineMsg struct{}
 
 // record appends one activity-log entry.
 func (a *App) record(act actions.Action, outcome string, dur time.Duration) {
@@ -268,6 +268,15 @@ func (a *App) recordDisplay(display, outcome string, dur time.Duration) {
 		a.logNote = "activity log file unavailable"
 	}
 }
+
+// quitGrace bounds how long quitting waits for a cancelled or interrupted
+// run to report back. runner.Exec kills the child InterruptGrace after
+// SIGINT, so this is a fallback for a runner that ignores its context.
+const quitGrace = runner.InterruptGrace + 3*time.Second
+
+// quitDeadlineMsg fires when a cancelled run has not reported back within
+// quitGrace after a quit request.
+type quitDeadlineMsg struct{}
 
 // quitWhenCancelled handles q while a read is running: the read is
 // cancelled and the program exits once its RunMsg has been logged (see

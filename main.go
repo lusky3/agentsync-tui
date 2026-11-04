@@ -47,7 +47,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	scopeFlag := fs.String("scope", "", "agentsync scope: user or project (default user; --project implies project)")
 	project := fs.String("project", "", "project directory (implies --scope project)")
 	readTimeout := fs.Duration("read-timeout", ui.DefaultReadTimeout,
-		"bound on network reads (import previews of plugins or a whole agent, plugin outdated); 0 = none")
+		"bound on every background read (lists, status, import previews, plugin outdated); 0 = none")
 	writeTimeout := fs.Duration("write-timeout", 0,
 		"bound on every write (apply, import, plugin upgrade, ...); 0 = none. A write cut off partway can leave agentsync's state and the destination files out of step")
 	if err := fs.Parse(args); err != nil {
@@ -71,27 +71,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	ex := runner.NewExec("agentsync", scope, projectDir)
 	// Every background read a screen starts derives from ctx; the shell
 	// cancels it on quit so no agentsync child outlives the TUI.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	withScope := func(s runner.Scope) (runner.Runner, func(args ...string) *exec.Cmd) {
+		e := runner.NewExec("agentsync", s, projectDir)
+		return e, e.Interactive
+	}
 	deps := ui.Deps{
 		Ctx:           ctx,
 		Cancel:        cancel,
-		Runner:        ex,
-		Interactive:   ex.Interactive,
 		AgentsyncHome: agentsyncHome(),
-		ProjectHome:   projectHome(projectDir),
 		Scope:         scope,
 		ProjectDir:    projectDir,
 		LogPath:       logPath(),
 		Timeouts:      &ui.Timeouts{Read: *readTimeout, Write: *writeTimeout},
-		WithScope: func(s runner.Scope) (runner.Runner, func(args ...string) *exec.Cmd) {
-			e := runner.NewExec("agentsync", s, projectDir)
-			return e, e.Interactive
-		},
+		WithScope:     withScope,
 	}
+	// The initial runner is the same pair a scope switch would build.
+	deps.Runner, deps.Interactive = withScope(scope)
 	// Run restores the terminal (alt screen, raw mode) before returning,
 	// including after a recovered panic.
 	if _, err := tea.NewProgram(ui.NewApp(deps, app.Screens(deps)...)).Run(); err != nil {
@@ -125,15 +124,6 @@ func resolveScope(scopeFlag, project string) (runner.Scope, string, error) {
 		return runner.Scope(scopeFlag), dir, nil
 	}
 	return "", "", fmt.Errorf("--scope must be user or project, got %q", scopeFlag)
-}
-
-// projectHome is the project-scope canonical tree, <dir>/.agentsync, as
-// created by `agentsync init --scope project`; empty without a project.
-func projectHome(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	return filepath.Join(dir, ".agentsync")
 }
 
 func agentsyncHome() string {

@@ -17,6 +17,12 @@ import (
 )
 
 // Screen is one tab of the application.
+//
+// The shell broadcasts every message it does not handle itself to every
+// screen, so a screen that runs background reads must tag its result
+// messages with something only it recognises: a generation from its own
+// Rounds (one screen per type) or a process-unique id (several instances
+// of one type, as the library screens are; see Verifier for the pattern).
 type Screen interface {
 	tea.Model
 	Title() string
@@ -43,10 +49,7 @@ type Shutdowner interface{ Shutdown() }
 
 // shutdown cancels every background read the shell and its screens own.
 func (a *App) shutdown() {
-	a.rootCancel()
-	if a.d.Cancel != nil {
-		a.d.Cancel()
-	}
+	a.d.Cancel()
 	for _, s := range a.screens {
 		if sd, ok := s.(Shutdowner); ok {
 			sd.Shutdown()
@@ -56,6 +59,9 @@ func (a *App) shutdown() {
 
 // Deps is everything the shell needs from the outside world.
 type Deps struct {
+	// Runner and Interactive are the pair for the initial Scope; a scope
+	// switch rebuilds them through WithScope. When Runner is nil and
+	// WithScope is set, NewApp takes the initial pair from WithScope.
 	Runner runner.Runner
 	// Interactive builds the handover command for Interactive actions (in
 	// production (*runner.Exec).Interactive). Nil disables handovers.
@@ -63,28 +69,27 @@ type Deps struct {
 	// AgentsyncHome is the user-scope canonical tree (~/.agentsync or
 	// $AGENTSYNC_HOME).
 	AgentsyncHome string
-	// ProjectHome is the project-scope canonical tree, <ProjectDir>/.agentsync
-	// (what `agentsync init --scope project` creates and every scope-aware
-	// command with --project operates on). main computes it; when empty,
-	// HomeFor derives it from ProjectDir.
-	ProjectHome string
-	Scope       runner.Scope
-	ProjectDir  string
+	Scope         runner.Scope
+	// ProjectDir is the project directory; its canonical tree is
+	// ProjectHome(ProjectDir), what `agentsync init --scope project` creates
+	// and every scope-aware command with --project operates on.
+	ProjectDir string
 	// LogPath is the append-only activity log; empty disables the file.
 	LogPath string
 	// WithScope returns the runner and interactive builder for a scope.
 	// Nil disables scope switching.
 	WithScope func(runner.Scope) (runner.Runner, func(args ...string) *exec.Cmd)
-	// Ctx is the root of every background read a screen starts (BaseCtx);
-	// Cancel cancels it. main creates both before the screens are built;
-	// App.shutdown calls Cancel so quitting stops in-flight children (the
-	// Exec runner interrupts, then kills, the process when its context is
-	// cancelled). Nil Ctx
-	// means context.Background (reads then outlive a quit).
+	// Ctx is the root of every background read a screen or the shell starts
+	// (BaseCtx); Cancel cancels it. main creates both before the screens are
+	// built; App.shutdown calls Cancel so quitting stops in-flight children
+	// (the Exec runner interrupts, then kills, the process when its context
+	// is cancelled). When both are nil, NewApp creates the pair, but screens
+	// built from the nil Ctx read under context.Background and outlive a
+	// quit. A Ctx without a Cancel cannot be stopped by the shell.
 	Ctx    context.Context
 	Cancel context.CancelFunc
-	// Timeouts bounds the actions the shell runs (and the plugins screen's
-	// network read); nil means DefaultTimeouts. See Limits.
+	// Timeouts bounds the actions the shell runs and every screen read; nil
+	// means DefaultTimeouts. See Limits.
 	Timeouts *Timeouts
 }
 
@@ -97,20 +102,23 @@ func BaseCtx(d Deps) context.Context {
 	return context.Background()
 }
 
+// ProjectHome is the project-scope canonical tree of dir, <dir>/.agentsync,
+// as created by `agentsync init --scope project`; "" without a project.
+func ProjectHome(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, ".agentsync")
+}
+
 // HomeFor returns the canonical tree the given scope reads: AgentsyncHome for
-// user scope; ProjectHome (or <ProjectDir>/.agentsync) for project scope, or
-// "" when there is no project directory.
+// user scope, ProjectHome(ProjectDir) for project scope ("" when there is
+// no project directory).
 func HomeFor(d Deps, scope runner.Scope) string {
 	if scope != runner.ScopeProject {
 		return d.AgentsyncHome
 	}
-	if d.ProjectHome != "" {
-		return d.ProjectHome
-	}
-	if d.ProjectDir != "" {
-		return filepath.Join(d.ProjectDir, ".agentsync")
-	}
-	return ""
+	return ProjectHome(d.ProjectDir)
 }
 
 type statusKind int
@@ -136,6 +144,11 @@ type App struct {
 
 	screens []Screen
 	active  int
+	// stale marks screens whose data is out of date: never loaded, loaded
+	// under another scope, or loaded before a write ran elsewhere. A stale
+	// screen is refreshed when it becomes active, so startup only reads for
+	// the first tab and a scope switch only for the one on show.
+	stale []bool
 
 	width, height int
 	modal         *modal
@@ -154,10 +167,9 @@ type App struct {
 	chip    chipState // header health chip
 	chipGen int       // chip generation; older results are dropped
 
-	// root is cancelled on quit; every background read (the chip's checks)
-	// derives from it so quitting never orphans a child process.
+	// root is Deps.Ctx, cancelled on quit; every background read (the chip's
+	// checks) derives from it so quitting never orphans a child process.
 	root       context.Context
-	rootCancel context.CancelFunc
 	chipCancel context.CancelFunc // the current chip round; superseded rounds are cancelled
 }
 
@@ -166,10 +178,14 @@ func NewApp(d Deps, screens ...Screen) *App {
 	if d.Scope == "" {
 		d.Scope = runner.ScopeUser
 	}
-	root, rootCancel := context.WithCancel(BaseCtx(d))
-	return &App{
-		root:        root,
-		rootCancel:  rootCancel,
+	if d.Ctx == nil && d.Cancel == nil {
+		d.Ctx, d.Cancel = context.WithCancel(context.Background())
+	}
+	if d.Cancel == nil {
+		d.Cancel = func() {}
+	}
+	a := &App{
+		root:        BaseCtx(d),
 		d:           d,
 		run:         d.Runner,
 		interactive: d.Interactive,
@@ -177,13 +193,25 @@ func NewApp(d Deps, screens ...Screen) *App {
 		home:        HomeFor(d, d.Scope),
 		noProject:   d.Scope == runner.ScopeProject && d.ProjectDir == "",
 		screens:     screens,
+		stale:       make([]bool, len(screens)),
 		width:       80,
 		height:      24,
 		log:         newActivityLog(d.LogPath),
 	}
+	if a.run == nil && d.WithScope != nil {
+		a.run, a.interactive = d.WithScope(d.Scope)
+	}
+	for i := range a.stale {
+		a.stale[i] = true
+	}
+	return a
 }
 
-// Init starts the background version check and every screen's Init.
+// Init starts the background version check, the header chip and the active
+// screen's Init. The other screens stay stale and load when first shown,
+// so startup runs a handful of agentsync processes rather than one per tab
+// (and `reconcile --auto-safe`, which takes agentsync's write lock, only
+// when the Reconcile tab is on show).
 func (a *App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	if a.run != nil {
@@ -191,11 +219,10 @@ func (a *App) Init() tea.Cmd {
 	}
 	cmds = append(cmds, a.chipCmd()) // unavailable, not pending, without a runner or project
 	// Nothing screen-side runs in project scope without a directory; leaving
-	// that state refreshes every screen (toggleScope).
-	if !a.noProject {
-		for _, s := range a.screens {
-			cmds = append(cmds, s.Init())
-		}
+	// that state refreshes the active screen (toggleScope).
+	if !a.noProject && len(a.screens) > 0 {
+		a.stale[a.active] = false
+		cmds = append(cmds, a.screens[a.active].Init())
 	}
 	return tea.Batch(cmds...)
 }
@@ -269,6 +296,24 @@ func (a *App) broadcast(msg tea.Msg) []tea.Cmd {
 		cmds = append(cmds, a.chipCmd()) // the edit may have changed config
 	}
 	return cmds
+}
+
+// markOthersStale notes that every screen but the active one may now show
+// out-of-date data (a write ran, an edit finished, the scope changed).
+func (a *App) markOthersStale() {
+	for i := range a.stale {
+		a.stale[i] = i != a.active
+	}
+}
+
+// refreshActive refreshes the active screen and marks it fresh.
+func (a *App) refreshActive() tea.Cmd {
+	s := a.current()
+	if s == nil || a.noProject {
+		return nil
+	}
+	a.stale[a.active] = false
+	return s.Refresh()
 }
 
 // resize tells every screen the size of the body area.

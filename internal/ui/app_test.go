@@ -674,8 +674,9 @@ func TestScopeSwitchRebuildsAndRefreshes(t *testing.T) {
 	a, b := newScreen("A", "a"), newScreen("B", "b")
 	h := start(t, d, a, b)
 	h.tm.Send(key("s"))
-	waitRefresh(t, a)
-	waitRefresh(t, b)
+	waitRefresh(t, a) // the active screen refreshes at once
+	h.tm.Send(key("tab"))
+	waitRefresh(t, b) // the other one when it is next shown
 	h.tm.Send(DoMsg{Action: actions.Check()})
 	select {
 	case <-fr2.started:
@@ -952,9 +953,8 @@ func TestHomeFor(t *testing.T) {
 		scope runner.Scope
 		want  string
 	}{
-		{"user", Deps{AgentsyncHome: "/u/.agentsync", ProjectDir: "/p", ProjectHome: "/p/.agentsync"}, runner.ScopeUser, "/u/.agentsync"},
-		{"project explicit", Deps{AgentsyncHome: "/u/.agentsync", ProjectDir: "/p", ProjectHome: "/elsewhere"}, runner.ScopeProject, "/elsewhere"},
-		{"project derived", Deps{AgentsyncHome: "/u/.agentsync", ProjectDir: "/p"}, runner.ScopeProject, filepath.Join("/p", ".agentsync")},
+		{"user", Deps{AgentsyncHome: "/u/.agentsync", ProjectDir: "/p"}, runner.ScopeUser, "/u/.agentsync"},
+		{"project", Deps{AgentsyncHome: "/u/.agentsync", ProjectDir: "/p"}, runner.ScopeProject, filepath.Join("/p", ".agentsync")},
 		{"project without dir", Deps{AgentsyncHome: "/u/.agentsync"}, runner.ScopeProject, ""},
 	}
 	for _, c := range cases {
@@ -1238,5 +1238,54 @@ func TestQuitDuringWriteFallsBackAfterInterrupt(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Error("fallback cmd is not tea.Quit")
+	}
+}
+
+// Startup reads only for the active screen; a screen loads when it is first
+// shown, and a write elsewhere makes the screens not on show stale, so they
+// refresh when next shown rather than keep old data.
+func TestScreensLoadLazily(t *testing.T) {
+	fr := newFakeRunner()
+	var mu sync.Mutex
+	var inits [3]int
+	var screens []Screen
+	var fakes []*fakeScreen
+	for i := range inits {
+		f := newScreen(fmt.Sprintf("S%d", i), fmt.Sprintf("body-%d", i))
+		fakes = append(fakes, f)
+		screens = append(screens, initScreen{fakeScreen: f, mu: &mu, inits: &inits[i]})
+	}
+	h := start(t, baseDeps(fr), screens...)
+	h.waitVersion()
+	mu.Lock()
+	if inits != [3]int{1, 0, 0} {
+		t.Fatalf("inits at startup = %v, want only the active screen", inits)
+	}
+	mu.Unlock()
+	select {
+	case <-fakes[1].refreshed:
+		t.Fatal("an inactive screen was refreshed at startup")
+	default:
+	}
+	h.tm.Send(key("tab"))
+	waitRefresh(t, fakes[1]) // first shown: loads now
+	h.tm.Send(key("1"))
+	h.tm.Send(key("tab"))
+	select {
+	case <-fakes[1].refreshed:
+		t.Fatal("a loaded screen was refreshed again without a reason")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// A write on screen 2 (the current one) leaves screens 1 and 3 stale.
+	h.tm.Send(RunMsg{Action: actions.Action{Title: "w", Argv: []string{"mcp", "enable", "x"}}})
+	waitRefresh(t, fakes[1]) // the active screen refreshes after every run
+	h.tm.Send(key("1"))
+	waitRefresh(t, fakes[0])
+	h.tm.Send(key("3"))
+	waitRefresh(t, fakes[2])
+	mu.Lock()
+	defer mu.Unlock()
+	if inits != [3]int{1, 0, 0} {
+		t.Errorf("Init ran again: %v", inits)
 	}
 }

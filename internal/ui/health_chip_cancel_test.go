@@ -133,7 +133,7 @@ func TestChipCancelledRoundNeverFlipsChip(t *testing.T) {
 	res := async(a.Init())
 	await(t, fr.started, "the chip check")
 	// Cancel without superseding the generation: only the root goes.
-	a.rootCancel()
+	a.d.Cancel()
 	await(t, fr.returned, "cancellation")
 	for _, m := range <-res {
 		a.Update(m)

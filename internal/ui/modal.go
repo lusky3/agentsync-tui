@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -21,14 +20,14 @@ const maxConfirmInput = 64
 type modal struct {
 	act     actions.Action
 	verb    string // non-empty: destructive, must be typed
-	input   string
+	input   Field
 	hint    string
 	scope   runner.Scope // the scope the command will run under
 	project string       // Deps.ProjectDir, shown in project scope
 }
 
 func newModal(act actions.Action, scope runner.Scope, project string) *modal {
-	m := &modal{act: act, scope: scope, project: project}
+	m := &modal{act: act, scope: scope, project: project, input: Field{Max: maxConfirmInput}}
 	if act.Destructive {
 		m.verb = act.ConfirmVerb()
 		if m.verb == "" {
@@ -38,13 +37,19 @@ func newModal(act actions.Action, scope runner.Scope, project string) *modal {
 	return m
 }
 
+// cancelModal closes the dialog without running the action and drops any
+// queued follow-ups.
+func (a *App) cancelModal() {
+	a.setStatus(statusInfo, "not run: "+mask.Sanitize(a.modal.act.Title))
+	a.modal, a.queue = nil, nil
+}
+
 // modalKey handles a key while the modal has focus.
 func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 	m := a.modal
 	s := k.String()
 	if s == "esc" {
-		a.modal, a.queue = nil, nil
-		a.setStatus(statusInfo, "not run: "+mask.Sanitize(m.act.Title))
+		a.cancelModal()
 		return nil
 	}
 	if m.verb == "" {
@@ -58,28 +63,19 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		case "enter":
 			m.hint = "press y to run it"
 		case "n":
-			a.modal, a.queue = nil, nil
-			a.setStatus(statusInfo, "not run: "+mask.Sanitize(m.act.Title))
+			a.cancelModal()
 		}
 		return nil
 	}
-	switch s {
-	case "enter":
-		if m.input == m.verb {
+	if s == "enter" {
+		if m.input.Value == m.verb {
 			a.modal = nil
 			return a.start(m.act)
 		}
 		m.hint = fmt.Sprintf("type %q exactly to confirm", m.verb)
-	case "backspace":
-		if m.input != "" {
-			_, n := utf8.DecodeLastRuneInString(m.input)
-			m.input = m.input[:len(m.input)-n]
-		}
-	default:
-		if k.Text != "" && len(m.input)+len(k.Text) <= maxConfirmInput {
-			m.input += mask.Sanitize(k.Text)
-		}
+		return nil
 	}
+	m.input.Key(k)
 	return nil
 }
 
@@ -185,7 +181,7 @@ func (m *modal) render(w int, mode renderMode) string {
 			b.WriteString("\n" + styleWarn.Render(m.hint))
 		}
 	} else {
-		fmt.Fprintf(&b, "Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input)
+		fmt.Fprintf(&b, "Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input.Value)
 		if m.hint != "" {
 			b.WriteString("\n" + styleWarn.Render(m.hint))
 		}
