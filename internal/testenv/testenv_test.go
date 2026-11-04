@@ -61,3 +61,28 @@ func TestInitDoesNotTouchRealHome(t *testing.T) {
 		t.Errorf("init created nothing under %s (err=%v)", env.AgentsyncHome, err)
 	}
 }
+
+// Every AGENTSYNC_* knob the CLI honours (AGENTSYNC_TARGET_ROOT redirects
+// the whole tree and outranks AGENTSYNC_HOME; the AGENTSYNC_ALLOW_* and
+// AGENTSYNC_LOCK_TIMEOUT_MS switches change behaviour) and the third-party
+// agent home override GROK_HOME are scrubbed from the child environment, so
+// a developer's exported knobs cannot steer a "hermetic" run elsewhere.
+func TestEnvScrubsCLIKnobs(t *testing.T) {
+	t.Setenv("AGENTSYNC_TARGET_ROOT", "/elsewhere")
+	t.Setenv("AGENTSYNC_ALLOW_SYMLINK_DEST", "1")
+	t.Setenv("AGENTSYNC_LOCK_TIMEOUT_MS", "1")
+	t.Setenv("GROK_HOME", "/elsewhere/grok")
+	t.Setenv("NO_COLOR", "1")
+	env := New(t)
+	for _, kv := range env.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		switch {
+		case k == "AGENTSYNC_HOME":
+			if v != env.AgentsyncHome {
+				t.Errorf("AGENTSYNC_HOME=%q, want %q", v, env.AgentsyncHome)
+			}
+		case strings.HasPrefix(k, "AGENTSYNC_"), k == "GROK_HOME", k == "NO_COLOR":
+			t.Errorf("inherited %s=%q", k, v)
+		}
+	}
+}

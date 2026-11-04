@@ -42,6 +42,11 @@ or `10m`; `0` means no bound. Writes are unbounded by default because a write
 cut off partway (for example `plugin upgrade --all`) can leave agentsync's
 state and the destination files out of step.
 
+The user-scope canonical tree is resolved as the CLI resolves it:
+`$AGENTSYNC_TARGET_ROOT/.agentsync` if that redirect is set, else
+`$AGENTSYNC_HOME`, else `~/.agentsync`. The project tree is always
+`<project>/.agentsync`.
+
 Screens load when they are first shown: startup runs the version check, the
 header's `check` and `status --exit-code`, and the reads of the first tab
 only. A screen whose data may be stale (never shown, shown under the other
@@ -172,7 +177,9 @@ mise run build
 ```
 
 Tests are hermetic: `HOME`, `AGENTSYNC_HOME` and `XDG_*` point at temp
-directories, so nothing reads your real home. Tests that drive the real CLI
+directories and every `AGENTSYNC_*` variable (including the CLI's own
+`AGENTSYNC_TARGET_ROOT` redirect) plus `GROK_HOME` is scrubbed from the
+agentsync children, so nothing reads your real home. Tests that drive the real CLI
 need `agentsync` (and some need `age-keygen`) on `PATH` and skip otherwise.
 CI runs them against agentsync v0.17.0, including an end-to-end smoke test in
 `test/e2e`.

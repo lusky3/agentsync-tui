@@ -84,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	deps := ui.Deps{
 		Ctx:           ctx,
 		Cancel:        cancel,
-		AgentsyncHome: agentsyncHome(),
+		AgentsyncHome: agentsyncHome(os.Getenv),
 		Scope:         scope,
 		ProjectDir:    projectDir,
 		LogPath:       logPath(),
@@ -146,9 +146,25 @@ func resolveScope(scopeFlag, project string) (runner.Scope, string, error) {
 	return "", "", fmt.Errorf("--scope must be user or project, got %q", scopeFlag)
 }
 
-func agentsyncHome() string {
-	if h := os.Getenv("AGENTSYNC_HOME"); h != "" {
+// agentsyncHome is the user-scope canonical tree, resolved exactly as the
+// CLI's paths.AgentsyncHome (v0.17.0) does, so the TUI reads and edits the
+// tree the commands it runs operate on:
+//  1. $AGENTSYNC_TARGET_ROOT/.agentsync: a redirected run is a sandbox and
+//     the user-facing override below is ignored (the CLI's test knob);
+//  2. $AGENTSYNC_HOME;
+//  3. $HOME/.agentsync.
+//
+// The project tree is <project>/.agentsync whatever the environment, as it
+// is for the CLI's --project.
+func agentsyncHome(getenv func(string) string) string {
+	if root := getenv("AGENTSYNC_TARGET_ROOT"); root != "" {
+		return filepath.Join(root, ".agentsync")
+	}
+	if h := getenv("AGENTSYNC_HOME"); h != "" {
 		return h
+	}
+	if home := getenv("HOME"); home != "" {
+		return filepath.Join(home, ".agentsync")
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".agentsync")

@@ -83,3 +83,26 @@ func TestResolveVersion(t *testing.T) {
 		}
 	}
 }
+
+// The user-scope canonical home must resolve exactly as the CLI's
+// paths.AgentsyncHome does: $AGENTSYNC_TARGET_ROOT/.agentsync first (a
+// redirected run is a sandbox, and the user-facing override is ignored),
+// then $AGENTSYNC_HOME, then $HOME/.agentsync. Otherwise the TUI reads and
+// edits one tree while every command it runs operates on another.
+func TestAgentsyncHomeMatchesCLI(t *testing.T) {
+	cases := []struct {
+		env  map[string]string
+		want string
+	}{
+		{map[string]string{"AGENTSYNC_TARGET_ROOT": "/sandbox", "AGENTSYNC_HOME": "/explicit", "HOME": "/home/u"}, "/sandbox/.agentsync"},
+		{map[string]string{"AGENTSYNC_HOME": "/explicit", "HOME": "/home/u"}, "/explicit"},
+		{map[string]string{"HOME": "/home/u"}, "/home/u/.agentsync"},
+		{map[string]string{"AGENTSYNC_TARGET_ROOT": "", "AGENTSYNC_HOME": "", "HOME": "/home/u"}, "/home/u/.agentsync"},
+	}
+	for _, c := range cases {
+		getenv := func(k string) string { return c.env[k] }
+		if got := agentsyncHome(getenv); got != c.want {
+			t.Errorf("env %v: got %q, want %q", c.env, got, c.want)
+		}
+	}
+}

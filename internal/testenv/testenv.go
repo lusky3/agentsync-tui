@@ -1,6 +1,8 @@
 // Package testenv provides a hermetic environment for tests that drive the
 // real agentsync binary: HOME, AGENTSYNC_HOME and XDG_* all point at
-// t.TempDir(), so nothing touches the developer's real ~/.agentsync.
+// t.TempDir(), and every knob the CLI reads from the environment that could
+// steer it elsewhere (AGENTSYNC_* by prefix, GROK_HOME, NO_COLOR) is
+// scrubbed, so nothing touches the developer's real ~/.agentsync.
 package testenv
 
 import (
@@ -45,7 +47,7 @@ func New(t *testing.T) *Env {
 	}
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if _, ok := over[k]; !ok {
+		if _, ok := over[k]; !ok && !scrubbed(k) {
 			e.Env = append(e.Env, kv)
 		}
 	}
@@ -53,6 +55,17 @@ func New(t *testing.T) *Env {
 		e.Env = append(e.Env, k+"="+v)
 	}
 	return e
+}
+
+// scrubbed reports whether an inherited variable must not reach the child.
+// AGENTSYNC_* covers every CLI knob (v0.17.0 internal/paths, internal/cli):
+// AGENTSYNC_TARGET_ROOT redirects the whole tree and outranks
+// AGENTSYNC_HOME, the AGENTSYNC_ALLOW_* switches and AGENTSYNC_LOCK_TIMEOUT_MS
+// change behaviour. GROK_HOME is a third-party agent home override the CLI
+// honours; NO_COLOR flips its colour decision. EDITOR is left alone: no
+// test drives `secret edit` through this environment.
+func scrubbed(k string) bool {
+	return strings.HasPrefix(k, "AGENTSYNC_") || k == "GROK_HOME" || k == "NO_COLOR"
 }
 
 // Agentsync runs the real agentsync binary with the hermetic environment and
