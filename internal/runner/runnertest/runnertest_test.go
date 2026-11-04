@@ -44,8 +44,8 @@ func TestBlockUntilCancelled(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { _, err := f.Run(ctx, "status"); done <- err }()
 	select {
-	case <-done:
-		t.Fatal("unscripted call returned before cancellation")
+	case err := <-done:
+		t.Fatalf("unscripted call returned before cancellation: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	cancel()
