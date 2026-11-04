@@ -41,6 +41,13 @@ const maxField = 4096
 const formKeys = "tab/↑↓ move • ←/→ type • enter add entry / next • ctrl+d drop last entry\n" +
 	"ctrl+s add server • esc cancel"
 
+// freeTextWarning stands under the args field (wrapped for 80 columns).
+var freeTextWarning = []string{
+	"! arguments and command are free text: put secrets in env/headers as",
+	"  ${env:NAME} or ${secret:NAME}; literal secrets in args are stored in",
+	"  plain text and can't always be masked in the preview",
+}
+
 type kv struct{ k, v string }
 
 // form is the "add MCP server" form. Values typed into it may be secrets:
@@ -243,27 +250,6 @@ func echo(v string) string {
 	return lead + strings.Repeat("•", utf8.RuneCountInString(trimmed))
 }
 
-// liveArgs renders the args input. Unparseable input (a quote still open,
-// a trailing backslash) is completed tentatively so mask.Args still sees
-// which words follow a secret flag; if nothing parses it is masked whole.
-func liveArgs(v string) string {
-	for _, tail := range []string{"", `"`, "'", " "} {
-		w, err := shellwords.Split(v + tail)
-		if err != nil {
-			continue
-		}
-		m := mask.Args(w)
-		if tail == "" && strings.Join(m, "\x00") == strings.Join(w, "\x00") {
-			return oneLine(mask.Text(v)) // nothing masked: echo as typed
-		}
-		return oneLine(mask.Text(strings.Join(m, " ")))
-	}
-	if v == "" {
-		return ""
-	}
-	return mask.Mask
-}
-
 // live renders the focused-or-not input text of field i, masked.
 func (f *form) live(i int) string {
 	v := f.vals[i]
@@ -271,9 +257,12 @@ func (f *form) live(i int) string {
 	case fType:
 		return "‹" + serverTypes[f.typ] + "›"
 	case fTarget:
+		if serverTypes[f.typ] == "stdio" {
+			return oneLine(mask.FreeText(v))
+		}
 		return oneLine(mask.Text(v))
 	case fArgs:
-		return liveArgs(v)
+		return oneLine(mask.FreeText(v))
 	case fEnv, fHeader:
 		sep := "="
 		if i == fHeader {
@@ -315,6 +304,10 @@ func (f *form) view() string {
 			list = f.env
 		case fHeader:
 			list = f.headers
+		case fArgs:
+			for _, l := range freeTextWarning {
+				out = append(out, styleWarn.Render("           "+l))
+			}
 		case fAgents:
 			out = append(out, styleDim.Render("           comma-separated agent names; empty = agentsync default"))
 		}

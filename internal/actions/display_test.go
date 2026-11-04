@@ -29,6 +29,16 @@ func TestMcpAddDisplayMasksLiterals(t *testing.T) {
 		{"header literal", AddSpec{Headers: []string{"X-Custom: " + dCanary}}, []string{"X-Custom: "}},
 		{"header bearer ref", AddSpec{Headers: []string{"Authorization: Bearer ${env:T}"}}, []string{"Authorization: Bearer ${env:T}"}},
 		{"command literal token", AddSpec{Command: "gg_pat_" + dCanary}, nil},
+		// Round 2: free-form args/command.
+		{"args -e DB_PASS=", AddSpec{Args: []string{"-e", "DB_PASS=" + dCanary}}, []string{"-e", "DB_PASS="}},
+		{"args -e MY_PAT=", AddSpec{Args: []string{"-e", "MY_PAT=" + dCanary}}, []string{"MY_PAT="}},
+		{"args --pat next word", AddSpec{Args: []string{"--pat", dCanary}}, []string{"--pat"}},
+		{"args --api-key=", AddSpec{Args: []string{"--api-key=" + dCanary}}, []string{"--api-key="}},
+		{"args --mode= (fail-safe)", AddSpec{Args: []string{"--mode=" + dCanary}}, []string{"--mode="}},
+		{"args env ref visible", AddSpec{Args: []string{"-e", "API_KEY=${env:A}"}}, []string{"API_KEY=${env:A}"}},
+		{"command --password", AddSpec{Command: "mytool --password " + dCanary}, []string{"mytool", "--password"}},
+		{"command --api-key=", AddSpec{Command: "mytool --api-key=" + dCanary}, []string{"mytool", "--api-key="}},
+		{"command sh -c bearer", AddSpec{Command: `sh -c 'curl -H "Authorization: Bearer ` + dCanary + `"'`}, []string{"sh", "-c"}},
 	}
 	for _, tt := range tests {
 		s := tt.spec
@@ -67,5 +77,16 @@ func TestMcpAddDisplayDoesNotChangeArgv(t *testing.T) {
 	}
 	if argAfter(t, a.Argv, "--env") != "DB_PASS="+dCanary {
 		t.Errorf("argv changed: %q", a.Argv)
+	}
+}
+
+// TestMcpAddDisplayKeepsBenignArgsReadable: generic flags keep their values.
+func TestMcpAddDisplayKeepsBenignArgsReadable(t *testing.T) {
+	a, err := McpAdd(AddSpec{ID: "s", Type: "stdio", Command: "npx", Args: []string{"-y", "@upstash/context7-mcp", "--port", "8080", "-p", "3000"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := a.Display(); !strings.Contains(d, "--args -y,@upstash/context7-mcp,--port,8080,-p,3000") {
+		t.Errorf("benign args masked: %s", d)
 	}
 }

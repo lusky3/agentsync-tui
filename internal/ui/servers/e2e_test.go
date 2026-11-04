@@ -125,11 +125,81 @@ func TestLiveArgsEchoMasksWithUnterminatedQuote(t *testing.T) {
 	press(s, "tab", "tab")
 	typeText(s, "npx")
 	press(s, "tab")
-	for _, in := range []string{`--api-key "` + canary, `--api-key '` + canary, `--token=` + canary + `\`} {
+	for _, in := range []string{`--api-key "` + canary, `--api-key '` + canary, `--token=` + canary + `\`,
+		"-e DB_PASS=" + canary, "-e MY_PAT=" + canary, "--pat " + canary, "--api-key=" + canary, "--mode=" + canary} {
 		press(s, "ctrl+u")
 		typeText(s, in)
 		if v := view(s); strings.Contains(v, "CANARY") {
 			t.Errorf("live args %q leaks:\n%s", in, v)
+		}
+	}
+}
+
+// TestLiveCommandEchoMasks: the command field is free text too.
+func TestLiveCommandEchoMasks(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a")
+	typeText(s, "srv")
+	press(s, "tab", "tab")
+	for _, in := range []string{"mytool --password " + canary, "mytool --api-key=" + canary,
+		`sh -c 'curl -H "Authorization: Bearer ` + canary + `"'`, `mytool --password "` + canary} {
+		press(s, "ctrl+u")
+		typeText(s, in)
+		if v := view(s); strings.Contains(v, "CANARY") {
+			t.Errorf("live command %q leaks:\n%s", in, v)
+		}
+	}
+	// Benign input stays readable; refs stay visible.
+	press(s, "ctrl+u")
+	typeText(s, "npx")
+	press(s, "tab")
+	typeText(s, "-y @upstash/context7-mcp --port 8080 -e API_KEY=${env:A}")
+	if v := view(s); !strings.Contains(v, "-y @upstash/context7-mcp --port 8080 -e API_KEY=${env:A}") {
+		t.Errorf("benign args not readable:\n%s", v)
+	}
+}
+
+func TestFormShowsFreeTextWarning(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a")
+	want := "arguments and command are free text: put secrets in env/headers as ${env:NAME} or ${secret:NAME}; literal secrets in args are stored in plain text and can't always be masked in the preview"
+	if v := strings.Join(strings.Fields(view(s)), " "); !strings.Contains(v, want) {
+		t.Errorf("warning missing:\n%s", view(s))
+	}
+}
+
+// TestAddFormFreeTextSecretsNeverReachModalOrLog: round-2 vectors end to end.
+func TestAddFormFreeTextSecretsNeverReachModalOrLog(t *testing.T) {
+	home := fixtureHome(t)
+	logPath := filepath.Join(t.TempDir(), "activity.log")
+	fr := okRunner()
+	d := ui.Deps{Runner: fr, AgentsyncHome: home, Scope: runner.ScopeUser, LogPath: logPath}
+	scr := New(d)
+	app := ui.NewApp(d, scr)
+	appDrive(app, func() tea.Msg { return tea.WindowSizeMsg{Width: 400, Height: 60} })
+	appDrive(app, scr.Refresh())
+	appPress(app, "a")
+	appType(app, "srv")
+	appPress(app, "tab", "tab")
+	appType(app, "mytool --password "+canary)
+	appPress(app, "tab")
+	appType(app, "-e DB_PASS="+canary+" -e MY_PAT="+canary+" --pat "+canary)
+	appPress(app, "ctrl+s")
+	modal := ansi.Strip(app.View().Content)
+	if !strings.Contains(modal, "mcp add srv") || strings.Contains(modal, "CANARY") {
+		t.Fatalf("modal:\n%s", modal)
+	}
+	appPress(app, "y")
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "mcp add srv") || strings.Contains(string(b), "CANARY") {
+		t.Errorf("activity log: %s", b)
+	}
+	for _, c := range fr.callStrings() {
+		if strings.HasPrefix(c, "mcp add srv") && !strings.Contains(c, "DB_PASS="+canary) {
+			t.Errorf("argv that runs must keep the literal: %s", c)
 		}
 	}
 }

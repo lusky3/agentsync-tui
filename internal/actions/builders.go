@@ -278,7 +278,7 @@ func McpAdd(s AddSpec) (Action, error) {
 			return Action{}, err
 		}
 		argv = append(argv, "--command", s.Command)
-		disp = append(disp, "--command", mask.Text(s.Command))
+		disp = append(disp, "--command", mask.FreeText(s.Command))
 	case "http", "sse":
 		if s.Command != "" {
 			return Action{}, fmt.Errorf("%s server must not have a command", s.Type)
@@ -305,7 +305,7 @@ func McpAdd(s AddSpec) (Action, error) {
 			esc[i] = strings.ReplaceAll(a, ",", `\,`)
 		}
 		argv = append(argv, "--args", strings.Join(esc, ","))
-		masked := mask.Args(s.Args)
+		masked := mask.CommandLine(s.Args)
 		for i := range masked {
 			masked[i] = strings.ReplaceAll(masked[i], ",", `\,`)
 		}

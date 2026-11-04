@@ -161,7 +161,7 @@ func (s *Screen) stateCell(id string) string {
 // target summarises where a server runs: masked command line or URL.
 func target(srv source.Server) string {
 	if srv.Type == "stdio" || srv.URL == "" {
-		parts := append([]string{mask.Text(srv.Command)}, mask.Args(srv.Args)...)
+		parts := append([]string{mask.FreeText(srv.Command)}, mask.CommandLine(srv.Args)...)
 		return oneLine(mask.Text(strings.Join(parts, " ")))
 	}
 	return oneLine(mask.Text(srv.URL))
@@ -203,11 +203,11 @@ func (s *Screen) detailView() string {
 	add := func(k, v string) { out = append(out, fmt.Sprintf("  %-9s %s", k, v)) }
 	add("type:", oneLine(srv.Type))
 	if srv.Command != "" {
-		add("command:", oneLine(mask.Text(srv.Command)))
+		add("command:", oneLine(mask.FreeText(srv.Command)))
 	}
 	if len(srv.Args) > 0 {
 		add("args:", "")
-		for _, a := range mask.Args(srv.Args) {
+		for _, a := range mask.CommandLine(srv.Args) {
 			out = append(out, "    "+oneLine(a))
 		}
 	}
