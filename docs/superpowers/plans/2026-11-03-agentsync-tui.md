@@ -21,7 +21,7 @@ Verified against agentsync v0.17.0:
 - `skill|hook|command|subagent|lsp` have **no `add`** by design: items are files created by hand or captured with `import`.
 - Global flags: `--no-input`, `--color`, `--scope user|project`, `--project <path>`.
 - Open upstream bugs the TUI must not trip over: #239 (`reconcile` override writes `${env:…}`/`${secret:…}` literally into live files), #255 (bulk `[W]` writes back ForeignCollision items), #256 (reconcile diff labels reversed), #254 (diff/reconcile cannot mask a rotated secret), #218 (control bytes can reach the terminal).
-- Motivating live example: 21 drift hunks on a maintainer's AGY config, including `disabled` flags that exist only on the AGY side.
+- Motivating live example: 21 drift hunks on an AGY config, including `disabled` flags that exist only on the AGY side.
 
 Not yet known (each is resolved by a named discovery step, with a fixture captured from a **hermetic** agentsync home): `status --json` item field names; `agent list --all` and the other text formats; where `mcp disable` records its state; whether `mcp add` on an existing ID errors or overwrites; `agentsync version` output format.
 
@@ -422,7 +422,7 @@ Plus empty states (no servers, no registered agents, `--scope project` outside a
 
 - [ ] **Step 1: Write `TestE2ESmoke`** (skips without `agentsync`): hermetic home, `Init`, `mcp add`, launch the app under `teatest`, assert the server appears on the Servers screen, toggle it, assert the TOML changed, quit.
 - [ ] **Step 2: Run** `go test ./test/e2e -v`. Expected: FAIL, then PASS after wiring `main.go` to `NewApp` with all screens.
-- [ ] **Step 3: Add CI** (`go vet`, `go test ./...`, `golangci-lint`, `goreleaser check`) and the tag-triggered release workflow. Pin action versions with `mcp__package-version-check-mcp__get_github_action_versions_and_args` at implementation time.
+- [ ] **Step 3: Add CI** (`go vet`, `go test ./...`, `golangci-lint`, `goreleaser check`) and the tag-triggered release workflow. Pin action versions with a version-lookup tool at implementation time.
 - [ ] **Step 4: Write the README:** install (`mise use -g github:lusky3/agentsync-tui`), supported agentsync version, screen tour, the "no secret values, no direct file writes" guarantees.
 - [ ] **Step 5: Verify install** with `mise use -g github:lusky3/agentsync-tui@<tag>` on a clean shell, then `agentsync-tui --version`.
 - [ ] **Step 6: Draft (do not post) an upstream issue** for `spxrogers/agentsync` proposing an in-tree `agentsync tui` or a documented `--json` for the list commands. **Posting is outward-facing; get explicit approval first.**

@@ -8,7 +8,7 @@ import (
 
 const helpText = `Keys
   tab / shift+tab   next / previous screen
-  1-9               jump to screen
+  1-9               jump to screens 1-9 (tab / shift+tab reach the rest)
   s                 toggle scope (user / project)
   l                 toggle activity log
   ?                 toggle this help

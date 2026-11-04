@@ -80,13 +80,6 @@ func onlyRefs(s string) bool {
 	return strings.Trim(rest, " \t:") == ""
 }
 
-func maskUnlessRefs(s string) string {
-	if onlyRefs(s) {
-		return s
-	}
-	return Mask
-}
-
 // Value returns val for display. References pass through, literal text
 // containing a reference stays visible apart from token-shaped secrets, and
 // everything else becomes Mask. key is accepted for call-site clarity; the
@@ -285,11 +278,4 @@ func walk(v any, key string, forced bool) any {
 		return out
 	}
 	return v
-}
-
-func lastSegment(p string) string {
-	if i := strings.LastIndex(p, "/"); i >= 0 {
-		return p[i+1:]
-	}
-	return p
 }

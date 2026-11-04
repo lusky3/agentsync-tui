@@ -16,7 +16,7 @@ func fx(t *testing.T, name string) string {
 	return string(b)
 }
 
-const hostile = "\x1b[31mred\x1b[0m ‮evil ../x -rf a/b \x07bell\n"
+const hostile = "\x1b[31mred\x1b[0m \u202eevil ../x -rf a/b \x07bell\n"
 
 func TestParsePluginListFixture(t *testing.T) {
 	got, err := ParsePluginList(fx(t, "plugin-list.txt"))
@@ -54,7 +54,7 @@ func TestParsePluginListTolerantOfJunk(t *testing.T) {
 }
 
 func TestParsePluginListHostileNamesRejected(t *testing.T) {
-	for _, name := range []string{"\x1b[31mred", "-rf", "../x", "a/b", "evil‮", "a@-b", "a@", "@m", "a@b@c", "bell\x07", ".hidden"} {
+	for _, name := range []string{"\x1b[31mred", "-rf", "../x", "a/b", "evil\u202e", "a@-b", "a@", "@m", "a@b@c", "bell\x07", ".hidden"} {
 		got, err := ParsePluginList("good version=1 enabled\n" + name + " version=1 enabled\n")
 		if err != nil {
 			t.Fatal(err)
@@ -103,7 +103,7 @@ func TestParseOutdatedTolerantOfJunk(t *testing.T) {
 }
 
 func TestParseOutdatedHostileNamesRejected(t *testing.T) {
-	for _, name := range []string{"\x1b[31mred", "-rf", "../x", "a/b", "evil‮", "a@-b"} {
+	for _, name := range []string{"\x1b[31mred", "-rf", "../x", "a/b", "evil\u202e", "a@-b"} {
 		got, err := ParseOutdated("pending bumps (2):\n  good 1 → 2 [track]\n  " + name + " 1 → 2 [track]\n")
 		if err != nil {
 			t.Fatal(err)
@@ -144,7 +144,7 @@ func TestParseMarketplacesTolerantOfJunk(t *testing.T) {
 }
 
 func TestParseMarketplacesHostileNamesRejected(t *testing.T) {
-	for _, name := range []string{"\x1b[31mred", "-rf", "../x", "a/b", "evil‮", "a@b"} {
+	for _, name := range []string{"\x1b[31mred", "-rf", "../x", "a/b", "evil\u202e", "a@b"} {
 		got, err := ParseMarketplaces("good url=/p sha=\n" + name + " url=/p sha=\n")
 		if err != nil {
 			t.Fatal(err)

@@ -44,7 +44,7 @@ func TestHeaderAlwaysShowsActiveTab(t *testing.T) {
 					t.Errorf("w=%d active=%d: line %q is %d wide", w, num, l, ansi.StringWidth(l))
 				}
 			}
-			if w == 80 && !(strings.Contains(h, "? unavailable") && strings.Contains(h, "scope: user")) {
+			if w == 80 && (!strings.Contains(h, "? unavailable") || !strings.Contains(h, "scope: user")) {
 				t.Errorf("w=80 active=%d: chip or scope lost: %q", num, h)
 			}
 			if (w == 80 || w == 60) && !strings.HasPrefix(h, " 1 Screen1 ") && !strings.Contains(h, "‹") {

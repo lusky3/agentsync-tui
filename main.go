@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -19,6 +20,18 @@ import (
 
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
+
+// resolveVersion returns v unless it is the "dev" default, in which case it
+// asks build for the module version (set by `go install ...@vX.Y.Z`).
+func resolveVersion(v string, build func() (*debug.BuildInfo, bool)) string {
+	if v != "dev" {
+		return v
+	}
+	if bi, ok := build(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return v
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -39,7 +52,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *showVersion {
-		_, _ = fmt.Fprintln(stdout, "agentsync-tui "+version)
+		_, _ = fmt.Fprintln(stdout, "agentsync-tui "+resolveVersion(version, debug.ReadBuildInfo))
 		return 0
 	}
 

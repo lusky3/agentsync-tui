@@ -289,8 +289,8 @@ func TestHunkPointerContext(t *testing.T) {
 }
 
 func TestHunkKeysSanitisedAndScrubbed(t *testing.T) {
-	h := Hunk(model.Hunk{Pointer: "/x", Source: "{\"a‮b\":1,\"c\u009bd\":2,\"Bearer FAKEkey9\":3}"})
-	if strings.ContainsRune(h.Source, '‮') || strings.ContainsRune(h.Source, '\u009b') || strings.Contains(h.Source, "FAKE") {
+	h := Hunk(model.Hunk{Pointer: "/x", Source: "{\"a\u202eb\":1,\"c\u009bd\":2,\"Bearer FAKEkey9\":3}"})
+	if strings.ContainsRune(h.Source, '\u202e') || strings.ContainsRune(h.Source, '\u009b') || strings.Contains(h.Source, "FAKE") {
 		t.Errorf("key leak: %q", h.Source)
 	}
 }

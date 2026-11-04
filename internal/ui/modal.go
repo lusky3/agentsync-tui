@@ -119,7 +119,7 @@ func (m *modal) view(width int) string {
 	if m.verb == "" {
 		b.WriteString("Run it? y/enter = yes, n/esc = no")
 	} else {
-		b.WriteString(fmt.Sprintf("Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input))
+		fmt.Fprintf(&b, "Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input)
 		if m.hint != "" {
 			b.WriteString("\n" + styleWarn.Render(m.hint))
 		}

@@ -117,7 +117,7 @@ func TestRefreshRunsDoctorAndCheckReadOnly(t *testing.T) {
 	s := newScreen(fr)
 	msgs := collect(s.Refresh())
 	got := fr.called()
-	if len(got) != 2 || !(got[0] == "doctor" && got[1] == "check" || got[0] == "check" && got[1] == "doctor") {
+	if len(got) != 2 || (got[0] != "doctor" || got[1] != "check") && (got[0] != "check" || got[1] != "doctor") {
 		t.Fatalf("argv = %v", got)
 	}
 	for _, m := range msgs {

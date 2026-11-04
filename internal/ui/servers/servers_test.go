@@ -239,7 +239,7 @@ func TestListShowsServersAndPerAgentState(t *testing.T) {
 		}
 	}
 	// Sorted by ID; only /mcpServers/<id> pointers count.
-	if !(strings.Index(v, "http-srv") < strings.Index(v, "off-srv") && strings.Index(v, "off-srv") < strings.Index(v, "stdio-srv")) {
+	if strings.Index(v, "http-srv") >= strings.Index(v, "off-srv") || strings.Index(v, "off-srv") >= strings.Index(v, "stdio-srv") {
 		t.Errorf("not sorted:\n%s", v)
 	}
 	if strings.Contains(v, "conflict") || strings.Contains(v, "orphan") {

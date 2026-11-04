@@ -13,7 +13,6 @@ var (
 	styleBold = lipgloss.NewStyle().Bold(true)
 	styleDim  = lipgloss.NewStyle().Faint(true)
 	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleBad  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	styleSel  = lipgloss.NewStyle().Reverse(true)
 )

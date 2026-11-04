@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -39,5 +40,29 @@ func TestRunBadScopeExitsTwo(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"--scope", "galaxy"}, &out, &errb); code != 2 {
 		t.Fatalf("exit %d, want 2", code)
+	}
+}
+
+func TestResolveVersion(t *testing.T) {
+	info := func(v string) func() (*debug.BuildInfo, bool) {
+		return func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Version: v}}, true
+		}
+	}
+	none := func() (*debug.BuildInfo, bool) { return nil, false }
+	for _, tc := range []struct {
+		name, ldflags string
+		build         func() (*debug.BuildInfo, bool)
+		want          string
+	}{
+		{"ldflags wins", "1.2.3", info("v9.9.9"), "1.2.3"},
+		{"go install version", "dev", info("v0.1.0"), "v0.1.0"},
+		{"devel build", "dev", info("(devel)"), "dev"},
+		{"empty", "dev", info(""), "dev"},
+		{"no build info", "dev", none, "dev"},
+	} {
+		if got := resolveVersion(tc.ldflags, tc.build); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

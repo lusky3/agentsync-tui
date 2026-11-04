@@ -142,7 +142,7 @@ type observed struct {
 func (p probe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	_, cmd := p.App.Update(msg)
 	select {
-	case p.seen <- observed{msg: msg, modalOpen: p.App.modal != nil, running: p.App.running != nil}:
+	case p.seen <- observed{msg: msg, modalOpen: p.modal != nil, running: p.running != nil}:
 	default:
 	}
 	return p, cmd
@@ -550,7 +550,7 @@ func TestActivityLogMasksArgv(t *testing.T) {
 func TestActivityRingIsBounded(t *testing.T) {
 	l := newActivityLog("")
 	for i := 0; i < 250; i++ {
-		l.add(entry{Display: "agentsync check"})
+		_ = l.add(entry{Display: "agentsync check"})
 	}
 	if n := len(l.entries()); n != 200 {
 		t.Errorf("ring holds %d, want 200", n)
@@ -771,6 +771,9 @@ func TestHelpToggle(t *testing.T) {
 	app.Update(key("?"))
 	if !strings.Contains(content(app), "toggle scope") {
 		t.Errorf("help missing: %q", content(app))
+	}
+	if !strings.Contains(content(app), "reach the rest") {
+		t.Errorf("help does not say tab reaches screens past 9: %q", content(app))
 	}
 }
 

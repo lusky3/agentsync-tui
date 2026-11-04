@@ -16,19 +16,19 @@ func Split(s string) ([]string, error) {
 	rs := []rune(s)
 	for i := 0; i < len(rs); i++ {
 		r := rs[i]
-		switch {
-		case r == ' ' || r == '\t':
+		switch r {
+		case ' ', '\t':
 			if inWord {
 				words = append(words, string(cur))
 				cur, inWord = cur[:0], false
 			}
-		case r == '\\':
+		case '\\':
 			if i+1 >= len(rs) {
 				return nil, errors.New("trailing backslash")
 			}
 			i++
 			cur, inWord = append(cur, rs[i]), true
-		case r == '\'':
+		case '\'':
 			end := -1
 			for j := i + 1; j < len(rs); j++ {
 				if rs[j] == '\'' {
@@ -41,7 +41,7 @@ func Split(s string) ([]string, error) {
 			}
 			cur, inWord = append(cur, rs[i+1:end]...), true
 			i = end
-		case r == '"':
+		case '"':
 			closed := false
 			for i++; i < len(rs); i++ {
 				if rs[i] == '"' {

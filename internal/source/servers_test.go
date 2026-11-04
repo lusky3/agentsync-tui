@@ -114,8 +114,10 @@ func TestLoadEmptyDirReturnsEmptySlice(t *testing.T) {
 func TestLoadServersSortedAndSkipsNonToml(t *testing.T) {
 	h := home(t, map[string]string{"stdio.toml": "b.toml", "http.toml": "a.toml"})
 	dir := filepath.Join(h, "mcp")
-	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi"), 0o644)
-	os.Mkdir(filepath.Join(dir, "sub.toml"), 0o755)
+	mustWrite(t, filepath.Join(dir, "notes.txt"), "hi")
+	if err := os.Mkdir(filepath.Join(dir, "sub.toml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	s, err := LoadServers(h)
 	if err != nil || len(s) != 2 || s[0].ID != "a" || s[1].ID != "b" {
 		t.Fatalf("got %+v, %v", s, err)
@@ -125,8 +127,8 @@ func TestLoadServersSortedAndSkipsNonToml(t *testing.T) {
 func TestLoadServersSkipsMalformedFile(t *testing.T) {
 	h := home(t, map[string]string{"stdio.toml": "good.toml"})
 	dir := filepath.Join(h, "mcp")
-	os.WriteFile(filepath.Join(dir, "bad.toml"), []byte("[server\nsecret = 'hunter2'"), 0o644)
-	os.WriteFile(filepath.Join(dir, "bad id.toml"), []byte("[server]\n"), 0o644)
+	mustWrite(t, filepath.Join(dir, "bad.toml"), "[server\nsecret = 'hunter2'")
+	mustWrite(t, filepath.Join(dir, "bad id.toml"), "[server]\n")
 	s, err := LoadServers(h)
 	if len(s) != 1 || s[0].ID != "good" {
 		t.Fatalf("good server hidden: %+v", s)
@@ -148,7 +150,7 @@ func TestLoadServersSkipsMalformedFile(t *testing.T) {
 func TestLoadServersDoesNotFollowSymlinkOutside(t *testing.T) {
 	h := home(t, map[string]string{"stdio.toml": "good.toml"})
 	outside := filepath.Join(t.TempDir(), "evil.toml")
-	os.WriteFile(outside, []byte("[server]\ntype='stdio'\ncommand='evil'\n"), 0o644)
+	mustWrite(t, outside, "[server]\ntype='stdio'\ncommand='evil'\n")
 	if err := os.Symlink(outside, filepath.Join(h, "mcp", "x.toml")); err != nil {
 		t.Skip("symlinks unsupported")
 	}
@@ -158,5 +160,12 @@ func TestLoadServersDoesNotFollowSymlinkOutside(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "x.toml") {
 		t.Fatalf("want symlink reported, got %v", err)
+	}
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

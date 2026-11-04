@@ -77,7 +77,7 @@ func TestParseSecretKeysKeepsHeaderLikeNames(t *testing.T) {
 }
 
 func TestParseSecretKeysDropsHostileNames(t *testing.T) {
-	in := "GOOD\n-rf\n../etc\n--flag=x\n\x1b[31mRED\nBI‮DI\nCTL\x07X\n.hidden\nsp ace\n" + strings.Repeat("A", 200) + "\nALSO_GOOD\n"
+	in := "GOOD\n-rf\n../etc\n--flag=x\n\x1b[31mRED\nBI\u202eDI\nCTL\x07X\n.hidden\nsp ace\n" + strings.Repeat("A", 200) + "\nALSO_GOOD\n"
 	got, err := ParseSecretKeys(in)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,9 @@ func TestSecretListRealCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = f.WriteString("\n[secrets]\nbackend = \"age\"\nfile = \"secrets/secrets.age\"\nrecipient = \"" + pub + "\"\nidentity_file = \"" + keyFile + "\"\n")
-	f.Close()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
