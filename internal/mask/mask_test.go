@@ -342,3 +342,51 @@ func TestArgsFlagValueRefDoesNotShieldLiteral(t *testing.T) {
 		t.Errorf("header ref masked: %q", got)
 	}
 }
+
+// Probe shapes from the whole-branch review: an args element addressed by
+// index, numbers and bools under forced keys, a non-string element in args,
+// and unparseable or TOML-rendered sides under an mcpServers pointer.
+func TestHunkCanaryShapes(t *testing.T) {
+	cases := []struct{ ptr, side, leak string }{
+		{"/mcpServers/x/args/1", `"CANARYx1"`, "CANARY"},
+		{"/mcpServers/x/ARGS/0", `"CANARYx1"`, "CANARY"},
+		{"/mcpServers/x/env/API_TOKEN", `31415926`, "31415926"},
+		{"/mcpServers/x/env/PIN", `true`, "true"},
+		{"/mcpServers/x", `{"env":{"PIN":31415926,"ON":true}}`, "31415926"},
+		{"/mcpServers/x", `{"env":{"PIN":31415926,"ON":true}}`, "true"},
+		{"/mcpServers/x", `{"args":["--token",31415926]}`, "31415926"},
+		{"/mcpServers/x", `{"args":["--port",8080,"--token","CANARYx2"]}`, "CANARY"},
+		{"/mcpServers/x", `{"env":{"A":"CANARYx3"}`, "CANARY"},
+		{"/mcpServers/x", "DB_PASS = \"CANARYx4\"\n", "CANARY"},
+		{"/mcpServers/x/env", `{"A":"${secret:A}"} CANARYx5`, "CANARY"},
+		{"/mcp_servers/x", `[mcp_servers.x.env]` + "\nA = \"CANARYx6\"\n", "CANARY"},
+	}
+	for _, c := range cases {
+		h := Hunk(model.Hunk{Pointer: c.ptr, Source: c.side, Dest: c.side})
+		for _, s := range []string{h.Source, h.Dest} {
+			if strings.Contains(s, c.leak) {
+				t.Errorf("%s %q leaked %q: %q", c.ptr, c.side, c.leak, s)
+			}
+		}
+		if again := Hunk(h); again != h {
+			t.Errorf("Hunk not idempotent for %s %q: %q -> %q", c.ptr, c.side, h.Source, again.Source)
+		}
+	}
+}
+
+// A hunk under a pointer that is neither forced nor mcpServers keeps its
+// structure, and an unparseable side there is only scrubbed, not masked.
+func TestHunkNonForcedKeepsStructure(t *testing.T) {
+	h := Hunk(model.Hunk{Pointer: "/settings/theme", Source: `{"mode":"dark","size":12}`})
+	for _, keep := range []string{`"mode": "dark"`, `"size": 12`} {
+		if !strings.Contains(h.Source, keep) {
+			t.Errorf("lost %q: %q", keep, h.Source)
+		}
+	}
+	if h := Hunk(model.Hunk{Pointer: "/settings", Source: "theme = dark"}); h.Source != "theme = dark" {
+		t.Errorf("non-mcp unparseable side changed: %q", h.Source)
+	}
+	if h := Hunk(model.Hunk{Pointer: "/mcpServers/x", Source: `{"command":"npx","args":["-y","pkg","--port","8080"]}`}); !strings.Contains(h.Source, "npx") || !strings.Contains(h.Source, `"pkg"`) {
+		t.Errorf("args readability lost: %q", h.Source)
+	}
+}

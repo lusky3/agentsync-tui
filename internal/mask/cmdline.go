@@ -138,7 +138,7 @@ func commandLine(words []string, depth int) []string {
 // named "mytool --api-key".
 func assignment(w string) (name, val string, ok bool) {
 	name, val, ok = strings.Cut(w, "=")
-	if !ok || name == "" || strings.ContainsAny(name, " \t") {
+	if !ok || name == "" || strings.ContainsAny(name, " \t\n") {
 		return "", "", false
 	}
 	return name, val, true

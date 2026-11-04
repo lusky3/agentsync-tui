@@ -5,6 +5,7 @@ package mask
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -45,10 +46,16 @@ var (
 		// ${ref}), "double"- or 'single'-quoted (JSON/YAML shapes). The key
 		// is not masked; plurals ("passwords: 3") and prose ("token
 		// expired") have no ':'/'=' directly after the word and stay as is.
-		regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*)((?:\$\{[^}\s]*\}|[^\s"',;)}\]])+)`),
+		bareKVRe,
 		regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`),
 		regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`),
 	}
+	// bareKVRe is the bare-value rule above. A value that starts with a
+	// reference keeps the conservative class (so "A=${env:A},B=${env:B}"
+	// shows both refs); a literal value runs to the next whitespace so a
+	// separator cannot end the masked region early ("password=ab,x"). Text
+	// re-appends trailing closers unmasked so "(token=x)" keeps its shape.
+	bareKVRe = regexp.MustCompile(`(?i)(` + secretKeyPat + `["']?[ \t]*[:=][ \t]*)(\$\{[^}\s]*\}(?:\$\{[^}\s]*\}|[^\s"',;)}\]])*|(?:[^\s"'$]|\$[^{\s])[^\s]*)`)
 	// Known token shapes: the whole match is the secret.
 	shapeRes = []*regexp.Regexp{
 		regexp.MustCompile(`gg_pat_[^\s"']+`),
@@ -110,7 +117,16 @@ func Text(s string) string {
 			if onlyRefs(secret) {
 				return m
 			}
-			return sub[1] + Mask + m[len(sub[1])+len(secret):]
+			tail := ""
+			if re == bareKVRe {
+				// Trailing closers belong to the surrounding text.
+				keep := strings.TrimRight(secret, `,;)}]"'`)
+				if keep == "" {
+					return m
+				}
+				tail = secret[len(keep):]
+			}
+			return sub[1] + Mask + tail + m[len(sub[1])+len(secret):]
 		})
 	}
 	for _, re := range shapeRes {
@@ -176,19 +192,32 @@ func Hunk(h model.Hunk) model.Hunk {
 	forced := false
 	last := ""
 	for _, seg := range strings.Split(h.Pointer, "/") {
-		forced = forced || secretKey(seg)
+		// An args element addressed by index ("/args/1") carries no key of
+		// its own, so the args segment itself forces masking.
+		forced = forced || secretKey(seg) || strings.EqualFold(seg, "args")
 		last = seg
 	}
-	h.Source = hunkSide(h.Source, last, forced)
-	h.Dest = hunkSide(h.Dest, last, forced)
+	mcp := forced || underMCPServers(h.Pointer)
+	h.Source = hunkSide(h.Source, last, forced, mcp)
+	h.Dest = hunkSide(h.Dest, last, forced, mcp)
 	return h
+}
+
+// underMCPServers reports whether the pointer's first segment is the MCP
+// server table ("mcpServers", "mcp_servers", ...): anything there that
+// cannot be walked as JSON is masked whole rather than scrubbed.
+func underMCPServers(ptr string) bool {
+	first, _, _ := strings.Cut(strings.TrimPrefix(ptr, "/"), "/")
+	first = strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(first))
+	return first == "mcpservers"
 }
 
 // hunkSide masks one side of a hunk. It walks the first JSON document and
 // handles any remainder recursively, so trailing bytes or extra documents
-// cannot smuggle a value past the walk. Unparseable input is masked outright
-// under a secret-bearing pointer and scrubbed with Text otherwise.
-func hunkSide(s, key string, forced bool) string {
+// cannot smuggle a value past the walk. Unparseable input (a truncated
+// document, a TOML rendering) is masked outright under a secret-bearing or
+// mcpServers pointer and scrubbed with Text otherwise.
+func hunkSide(s, key string, forced, mcp bool) string {
 	s = Sanitize(s)
 	if strings.TrimSpace(s) == "" {
 		return s
@@ -197,7 +226,7 @@ func hunkSide(s, key string, forced bool) string {
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
-		if forced {
+		if mcp {
 			return Value(key, s)
 		}
 		return Text(s)
@@ -211,7 +240,7 @@ func hunkSide(s, key string, forced bool) string {
 	}
 	out := strings.TrimRight(buf.String(), "\n")
 	if rest := s[dec.InputOffset():]; strings.TrimSpace(rest) != "" {
-		out += "\n" + hunkSide(rest, key, forced)
+		out += "\n" + hunkSide(rest, key, forced, mcp)
 	}
 	return out
 }
@@ -224,9 +253,9 @@ func secretKey(k string) bool {
 	return sensitiveRe.MatchString(k)
 }
 
-// walk masks a decoded JSON tree. Under a secret-bearing key every string is
-// run through Value; elsewhere args arrays go through Args and other strings
-// through Text.
+// walk masks a decoded JSON tree. Under a secret-bearing key every scalar
+// (string, number, bool) becomes Mask unless it is a reference; elsewhere
+// args arrays go through Args and other strings through Text.
 func walk(v any, key string, forced bool) any {
 	switch x := v.(type) {
 	case string:
@@ -234,6 +263,11 @@ func walk(v any, key string, forced bool) any {
 			return Value(key, x)
 		}
 		return Text(x)
+	case json.Number, bool:
+		if forced {
+			return Mask
+		}
+		return v
 	case map[string]any:
 		keys := make([]string, 0, len(x))
 		for k := range x {
@@ -255,21 +289,29 @@ func walk(v any, key string, forced bool) any {
 		return out
 	case []any:
 		if !forced && strings.EqualFold(key, "args") {
-			strs := make([]string, 0, len(x))
-			all := true
-			for _, c := range x {
-				cs, ok := c.(string)
-				all = all && ok
-				strs = append(strs, cs)
-			}
-			if all {
-				masked := Args(strs)
-				out := make([]any, len(masked))
-				for i, m := range masked {
-					out[i] = m
+			// Scalars are stringified so the flag-to-next-value logic still
+			// applies across a number ("--port", 8080, "--token", "x");
+			// containers are walked in place.
+			strs := make([]string, len(x))
+			for i, c := range x {
+				switch c := c.(type) {
+				case string:
+					strs[i] = c
+				case json.Number, bool:
+					strs[i] = fmt.Sprint(c)
 				}
-				return out
 			}
+			masked := Args(strs)
+			out := make([]any, len(x))
+			for i, c := range x {
+				switch c.(type) {
+				case string, json.Number, bool:
+					out[i] = masked[i]
+				default:
+					out[i] = walk(c, key, forced)
+				}
+			}
+			return out
 		}
 		out := make([]any, len(x))
 		for i, c := range x {

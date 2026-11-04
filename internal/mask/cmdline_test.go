@@ -196,3 +196,19 @@ func TestCommandLineCoversOldSecretFlags(t *testing.T) {
 		}
 	}
 }
+
+// A word split only by newlines is a nested script too: the value after a
+// secret flag on its own line must not survive.
+func TestCommandLineNewlineSplitScript(t *testing.T) {
+	got := CommandLine([]string{"-c", "mytool\n--password\nCANARYx1\nX=1"})
+	for _, w := range got {
+		if strings.Contains(w, "CANARYx1") {
+			t.Errorf("leaked: %q", got)
+		}
+	}
+	// shellwords rejects a bare newline, so the script is masked whole
+	// (fail-safe); the first word keeps its shape.
+	if len(got) != 2 || got[0] != "-c" || got[1] != Mask {
+		t.Errorf("shape: %q", got)
+	}
+}

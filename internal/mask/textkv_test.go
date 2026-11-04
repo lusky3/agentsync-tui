@@ -72,3 +72,31 @@ func TestTextSecretKeyValueUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// A literal value runs to the next whitespace: separators cannot end the
+// masked region early. Trailing closers are re-appended unmasked so
+// "(token=x)" keeps its shape, and references keep their conservative class.
+func TestTextLiteralValueRunsToWhitespace(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"password=ab,CANARYx1", "password=" + Mask},
+		{"GITHUB_TOKEN=CANARYx1;extra", "GITHUB_TOKEN=" + Mask},
+		{"GITHUB_TOKEN=CANARYx1;extra next", "GITHUB_TOKEN=" + Mask + " next"},
+		{"(token=CANARYx1)", "(token=" + Mask + ")"},
+		{"token=CANARYx1),", "token=" + Mask + "),"},
+		{`"token": ["a","b"]`, `"token": ` + Mask + `"]`},
+		{"A=${env:A},B=${env:B}", "A=${env:A},B=${env:B}"},
+		{"token=${env:T},B=lit", "token=${env:T},B=lit"},
+	}
+	for _, c := range cases {
+		got := Text(c.in)
+		if got != c.want {
+			t.Errorf("Text(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if strings.Contains(got, "CANARY") {
+			t.Errorf("Text(%q) leaked: %q", c.in, got)
+		}
+		if again := Text(got); again != got {
+			t.Errorf("Text not idempotent on %q: %q -> %q", c.in, got, again)
+		}
+	}
+}
