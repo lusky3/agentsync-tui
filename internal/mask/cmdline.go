@@ -110,19 +110,53 @@ func commandLine(words []string, depth int) []string {
 			out[i] = flagValue(w)
 			valueNext = false
 		case strings.ContainsAny(w, " \t\n"):
-			out[i] = freeText(w, depth+1, false)
+			// NAME=value keeps everything after the first '=' as the value,
+			// spaces included ("DB_PASS=correct horse battery"). Only a word
+			// with no '=' or whose name holds whitespace is a nested script
+			// to be re-split.
+			if name, val, ok := assignment(w); ok {
+				out[i] = Text(name) + "=" + assignedValue(name, val)
+			} else {
+				out[i] = freeText(w, depth+1, false)
+			}
 		case secretFlag(w):
 			out[i] = w
 			valueNext = true
 		default:
-			if name, val, ok := strings.Cut(w, "="); ok && name != "" {
-				out[i] = Text(name) + "=" + Value(name, val)
+			if name, val, ok := assignment(w); ok {
+				out[i] = Text(name) + "=" + assignedValue(name, val)
 			} else {
 				out[i] = Text(w)
 			}
 		}
 	}
 	return out
+}
+
+// assignment splits a NAME=value / --flag=value word. A name is never empty
+// and never holds whitespace: "mytool --api-key=x" is a script, not a word
+// named "mytool --api-key".
+func assignment(w string) (name, val string, ok bool) {
+	name, val, ok = strings.Cut(w, "=")
+	if !ok || name == "" || strings.ContainsAny(name, " \t") {
+		return "", "", false
+	}
+	return name, val, true
+}
+
+// assignedValue masks the value of an assignment with Value semantics
+// (references visible, anything literal masked whole). A header-shaped
+// value whose only literal parts are the header name and an auth scheme
+// ("Authorization: Bearer ${env:T}") keeps its reference visible, the same
+// rule flagValue applies to the space-separated "--header Name: ..." form.
+func assignedValue(name, val string) string {
+	if v := Value(name, val); v != Mask {
+		return v
+	}
+	if refRe.MatchString(val) && schemeOnlyRe.MatchString(refRe.ReplaceAllString(headerNameRe.ReplaceAllString(val, ""), "")) {
+		return Text(val)
+	}
+	return Mask
 }
 
 // FreeText masks a free-form command line given as one string, for

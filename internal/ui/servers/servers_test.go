@@ -281,11 +281,17 @@ secret = '`+canary+`'
 type = 'http'
 url = 'https://user:`+canary+`@example.com/mcp?token=`+canary+`'
 `)
+	// Values holding spaces after '=' are masked whole (round 4).
+	writeServer(t, home, "spaced", `[server]
+type = 'stdio'
+command = 'env "DB_PASS=correct horse `+canary+`" mytool --password="correct `+canary+`"'
+args = ['-e', 'DB_PASS=correct horse `+canary+`', '--header=X-Api-Key: `+canary+`', '--header=Authorization: Bearer ${env:T}']
+`)
 	s := newLoaded(t, home, okRunner())
 	if v := view(s); strings.Contains(v, "CANARY") {
 		t.Fatalf("list leaks canary:\n%s", v)
 	}
-	for _, id := range []string{"leaky", "remote"} {
+	for _, id := range []string{"leaky", "remote", "spaced"} {
 		selectID(t, s, id)
 		press(s, "enter")
 		v := view(s)
@@ -297,6 +303,12 @@ url = 'https://user:`+canary+`@example.com/mcp?token=`+canary+`'
 		}
 		if id == "leaky" {
 			for _, want := range []string{"REF = ${env:TOKEN}", "Authorization = Bearer ${secret:GH}", "API_KEY = ••••", "-y", "nested", "list"} {
+				if !strings.Contains(v, want) {
+					t.Errorf("detail missing %q:\n%s", want, v)
+				}
+			}
+		} else if id == "spaced" {
+			for _, want := range []string{"DB_PASS=••••", "--password=••••", "--header=••••", "--header=Authorization: Bearer ${env:T}", "mytool"} {
 				if !strings.Contains(v, want) {
 					t.Errorf("detail missing %q:\n%s", want, v)
 				}

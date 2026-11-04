@@ -127,7 +127,9 @@ func TestLiveArgsEchoMasksWithUnterminatedQuote(t *testing.T) {
 	press(s, "tab")
 	for _, in := range []string{`--api-key "` + canary, `--api-key '` + canary, `--token=` + canary + `\`,
 		"-e DB_PASS=" + canary, "-e MY_PAT=" + canary, "--pat " + canary, "--api-key=" + canary, "--mode=" + canary,
-		`"--password ` + canary, `--privateKey ` + canary} {
+		`"--password ` + canary, `--privateKey ` + canary,
+		`-e "DB_PASS=correct horse ` + canary + `"`, `--header="X-Api-Key: ` + canary + `"`,
+		`--password="correct ` + canary + `"`, `-e "DB_PASS=correct horse ` + canary, `--header="X-Api-Key: ` + canary} {
 		press(s, "ctrl+u")
 		typeText(s, in)
 		if v := view(s); strings.Contains(v, "CANARY") {
@@ -144,7 +146,10 @@ func TestLiveCommandEchoMasks(t *testing.T) {
 	press(s, "tab", "tab")
 	for _, in := range []string{"mytool --password " + canary, "mytool --api-key=" + canary,
 		`sh -c 'curl -H "Authorization: Bearer ` + canary + `"'`, `mytool --password "` + canary,
-		`sh -c 'mytool --password ` + canary + `'`, `sh -c "mytool --password ` + canary, `mytool --accessKey ` + canary} {
+		`sh -c 'mytool --password ` + canary + `'`, `sh -c "mytool --password ` + canary, `mytool --accessKey ` + canary,
+		`env "DB_PASS=correct horse ` + canary + `" mytool`, `mytool --password="correct ` + canary + `"`,
+		`mytool --header="X-Api-Key: ` + canary + `"`, `mytool --password="correct ` + canary,
+		`sh -c "export DB_PASS='a ` + canary + `' && run"`} {
 		press(s, "ctrl+u")
 		typeText(s, in)
 		if v := view(s); strings.Contains(v, "CANARY") {
@@ -183,9 +188,9 @@ func TestAddFormFreeTextSecretsNeverReachModalOrLog(t *testing.T) {
 	appPress(app, "a")
 	appType(app, "srv")
 	appPress(app, "tab", "tab")
-	appType(app, "sh -c 'mytool --password "+canary+"'")
+	appType(app, `env "DB_PASS=correct horse `+canary+`" sh -c 'mytool --password `+canary+`'`)
 	appPress(app, "tab")
-	appType(app, "-e DB_PASS="+canary+" -e MY_PAT="+canary+" --pat "+canary)
+	appType(app, "-e DB_PASS="+canary+" -e MY_PAT="+canary+" --pat "+canary+` --header="X-Api-Key: `+canary+`"`)
 	appPress(app, "ctrl+s")
 	modal := ansi.Strip(app.View().Content)
 	if !strings.Contains(modal, "mcp add srv") || strings.Contains(modal, "CANARY") {

@@ -46,6 +46,17 @@ func TestMcpAddDisplayMasksLiterals(t *testing.T) {
 		{"command nested ref", AddSpec{Command: "sh -c 'mytool --token ${env:T}'"}, []string{"${env:T}"}},
 		{"args camelCase key", AddSpec{Args: []string{"--accessKey", dCanary, "--privateKey", dCanary}}, []string{"--accessKey"}},
 		{"command sh -c bearer", AddSpec{Command: `sh -c 'curl -H "Authorization: Bearer ` + dCanary + `"'`}, []string{"sh", "-c"}},
+		// Round 4: a NAME=value / --flag=value word whose value holds spaces is masked whole.
+		{"command env quoted assignment", AddSpec{Command: `env "DB_PASS=correct horse ` + dCanary + `" mytool`}, []string{"env", "DB_PASS=", "mytool"}},
+		{"command --password= with space", AddSpec{Command: `mytool --password="correct ` + dCanary + `"`}, []string{"mytool", "--password="}},
+		{"command --header= with space", AddSpec{Command: `mytool --header="X-Api-Key: ` + dCanary + `"`}, []string{"mytool", "--header="}},
+		{"command sh -c export quoted", AddSpec{Command: `sh -c "export DB_PASS='a ` + dCanary + `' && run"`}, []string{"export", "DB_PASS=", "run"}},
+		{"command --header= bearer ref", AddSpec{Command: `mytool --header="Authorization: Bearer ${env:T}"`}, []string{"--header=", "${env:T}"}},
+		{"args -e DB_PASS= with spaces", AddSpec{Args: []string{"-e", "DB_PASS=correct horse " + dCanary}}, []string{"-e", "DB_PASS="}},
+		{"args --header= with space", AddSpec{Args: []string{"--header=X-Api-Key: " + dCanary}}, []string{"--header="}},
+		{"args --header= bearer ref", AddSpec{Args: []string{"--header=Authorization: Bearer ${env:T}"}}, []string{"--header=", "${env:T}"}},
+		{"args -e literal plus ref", AddSpec{Args: []string{"-e", "A=" + dShort + " ${env:B}"}}, []string{"-e", "A="}},
+		{"args --note= over-masked", AddSpec{Args: []string{"--note=hello " + dCanary}}, []string{"--note="}},
 	}
 	for _, tt := range tests {
 		s := tt.spec

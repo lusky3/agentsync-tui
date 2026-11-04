@@ -69,6 +69,66 @@ func TestFreeTextRescansNestedStrings(t *testing.T) {
 	}
 }
 
+// TestCommandLineMasksWholeValueAfterEquals: for a NAME=value or
+// --flag=value word, everything after the first '=' is the value, spaces
+// included. A word is only re-split when the name itself holds whitespace
+// (a nested script) or there is no '='.
+func TestCommandLineMasksWholeValueAfterEquals(t *testing.T) {
+	c := "plainCANARY"
+	tests := []struct{ in, want []string }{
+		{[]string{"-e", "DB_PASS=correct horse " + c}, []string{"-e", "DB_PASS=" + Mask}},
+		{[]string{"--header=X-Api-Key: " + c}, []string{"--header=" + Mask}},
+		{[]string{"--password=correct " + c}, []string{"--password=" + Mask}},
+		{[]string{"--header=Authorization: Bearer " + c}, []string{"--header=" + Mask}},
+		{[]string{"-e", "DB_PASS=" + c + " trailing words"}, []string{"-e", "DB_PASS=" + Mask}},
+		{[]string{"-e", "A=x ${env:B}"}, []string{"-e", "A=" + Mask}}, // literal mixed with a ref
+		{[]string{"--note=hello world"}, []string{"--note=" + Mask}},  // over-masked by the ruling
+		{[]string{"-e", "A=${env:B} ${env:C}"}, []string{"-e", "A=${env:B} ${env:C}"}},
+		{[]string{"-e", "A=Bearer ${env:B}"}, []string{"-e", "A=Bearer ${env:B}"}},
+		{[]string{"--header=Authorization: Bearer ${env:T}"}, []string{"--header=Authorization: Bearer ${env:T}"}},
+		{[]string{"--header=X-Secret: lit ${env:T}"}, []string{"--header=" + Mask}},
+		{[]string{"--header=ghp_" + c + ": Bearer ${env:T}"}, []string{"--header=" + Mask + " Bearer ${env:T}"}}, // token-shaped "name"
+		// A nested script is still re-split: '=' belongs to an inner word.
+		{[]string{"mytool --api-key=" + c + " --port 8080"}, []string{"mytool --api-key=" + Mask + " --port 8080"}},
+		{[]string{"export DB_PASS='a " + c + "' && run"}, []string{"export DB_PASS=" + Mask + " && run"}},
+		{[]string{"mytool --note='a=b' --password " + c}, []string{"mytool --note=" + Mask + " --password " + Mask}},
+		// Leading assignment: the rest of the script is hidden with the value (fail-safe).
+		{[]string{"DB_PASS=" + c + " mytool"}, []string{"DB_PASS=" + Mask}},
+	}
+	for _, tt := range tests {
+		if got := CommandLine(tt.in); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("CommandLine(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+	free := []struct{ in, want string }{
+		{`env "DB_PASS=correct horse ` + c + `" mytool`, "env DB_PASS=" + Mask + " mytool"},
+		{`mytool --password="correct ` + c + `"`, "mytool --password=" + Mask},
+		{`mytool --header="X-Api-Key: ` + c + `"`, "mytool --header=" + Mask},
+		{`mytool --password "correct horse ` + c + `"`, "mytool --password " + Mask},
+		{`sh -c "export DB_PASS='a b' && run"`, "sh -c 'export DB_PASS=" + Mask + " && run'"},
+		{`sh -c 'mytool --header="Authorization: Bearer ${env:T}"'`, `sh -c 'mytool --header="Authorization: Bearer ${env:T}"'`}, // nothing to mask: as typed
+		{`sh -c 'A=1 mytool --password ` + c + `'`, "sh -c A=" + Mask},
+		{`sh -c "DB_PASS=` + c + ` mytool"`, "sh -c DB_PASS=" + Mask},
+	}
+	for _, tt := range free {
+		got := FreeText(tt.in)
+		if got != tt.want {
+			t.Errorf("FreeText(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		if again := FreeText(got); again != got {
+			t.Errorf("FreeText not idempotent: %q -> %q", got, again)
+		}
+	}
+	for _, in := range []string{
+		`mytool --password="correct ` + c, `mytool --header="X-Api-Key: ` + c, `-e "DB_PASS=correct horse ` + c,
+		`env "DB_PASS=correct horse ` + c + `" mytool`, `mytool --password="correct ` + c + `"`,
+	} {
+		if got := FreeTextLive(in); strings.Contains(got, "CANARY") {
+			t.Errorf("FreeTextLive(%q) = %q", in, got)
+		}
+	}
+}
+
 func TestFreeTextUnparseableFailsSafe(t *testing.T) {
 	for _, in := range []string{`mytool --password "plainCANARY`, `"--password plainCANARY`, `sh -c "mytool --password plainCANARY`, `harmless "open`} {
 		if got := FreeText(in); got != Mask {
