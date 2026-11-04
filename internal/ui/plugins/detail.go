@@ -51,7 +51,7 @@ func (s *Screen) submitAdd() tea.Cmd {
 	}
 	s.typing, s.inlineE, s.note = -1, "", ""
 	s.buf.Clear()
-	return ui.Do(act)
+	return ui.Do(act, s.scope)
 }
 
 // liveField renders the buffer for display. Credentials in a URL's

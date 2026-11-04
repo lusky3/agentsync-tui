@@ -35,6 +35,7 @@ type Screen struct {
 	base     context.Context
 	limit    time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	netLimit time.Duration // bound on `plugin outdated` (ui.Deps.Limits().Read)
+	scope    runner.Scope  // the scope the lists (and `plugin upgrade`) belong to
 	run      runner.Runner
 	reads    ui.Rounds // the two list reads; superseded rounds are cancelled
 
@@ -111,7 +112,7 @@ type explainMsg struct {
 // New returns the plugins screen.
 func New(d ui.Deps) *Screen {
 	return &Screen{
-		base: ui.BaseCtx(d), limit: d.Limits().Local(), netLimit: d.Limits().Read, run: d.Runner,
+		base: ui.BaseCtx(d), limit: d.Limits().Local(), netLimit: d.Limits().Read, run: d.Runner, scope: d.Scope,
 		typing: -1, buf: ui.Field{Max: maxField}, width: 80, height: 24,
 	}
 }
@@ -125,8 +126,8 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 func (s *Screen) CapturesKeys() bool { return s.typing >= 0 }
 
 // SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, _ string) {
-	s.run = r
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
+	s.run, s.scope = r, sc
 	s.reads.Supersede()
 	s.outdated, s.outdatedRaw, s.oChecking = nil, "", false
 	s.oreads.Supersede()

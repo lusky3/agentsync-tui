@@ -65,7 +65,7 @@ func (s *Screen) verified(v verification) tea.Cmd {
 	}
 	act.Warning = s.removeWarning(v.key)
 	s.note = ""
-	return ui.Do(act)
+	return ui.Do(act, s.scope)
 }
 
 func (s *Screen) removeWarning(key string) string {

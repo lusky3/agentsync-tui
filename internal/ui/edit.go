@@ -186,5 +186,5 @@ func (a *App) next() tea.Cmd {
 	}
 	act := a.queue[0]
 	a.queue = a.queue[1:]
-	return a.request(act)
+	return a.request(act, "") // a follow-up of the shell's own, not bound to a scope
 }

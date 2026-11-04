@@ -24,7 +24,8 @@ type Screen struct {
 	base  context.Context
 	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
-	reads ui.Rounds // the list read; superseded rounds are cancelled
+	scope runner.Scope // the scope the list (and every action) belongs to
+	reads ui.Rounds    // the list read; superseded rounds are cancelled
 
 	loaded bool
 	agents []model.Agent
@@ -55,7 +56,7 @@ type verification struct {
 
 // New returns the agents screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, width: 80, height: 20}
+	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, scope: d.Scope, width: 80, height: 20}
 }
 
 // Title implements ui.Screen.
@@ -65,8 +66,8 @@ func (s *Screen) Title() string { return "Agents" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, _ string) {
-	s.run = r
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
+	s.run, s.scope = r, sc
 	s.reads.Supersede()
 	s.invalidate()
 }
@@ -223,5 +224,5 @@ func (s *Screen) verified(v verification) tea.Cmd {
 	default:
 		act, err = actions.AgentEnable(sel.Name)
 	}
-	return ui.DoOr(act, err, &s.note)
+	return ui.DoOr(act, err, &s.note, s.scope)
 }

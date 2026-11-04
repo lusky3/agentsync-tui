@@ -21,7 +21,9 @@ func (s *Screen) guard() bool {
 }
 
 // emit hands a built action to the shell, or shows the builder error.
-func (s *Screen) emit(act actions.Action, err error) tea.Cmd { return ui.DoOr(act, err, &s.note) }
+func (s *Screen) emit(act actions.Action, err error) tea.Cmd {
+	return ui.DoOr(act, err, &s.note, s.scope)
+}
 
 // mutate gates e/x/u on the selection, then starts an asynchronous fresh
 // read of the pane's list; the action is only built and emitted in verified,

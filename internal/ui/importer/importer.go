@@ -257,7 +257,7 @@ func (s *Screen) preview() tea.Cmd {
 	}
 	s.g.Request(p, s.scope)
 	s.msg = "running preview…"
-	return ui.Do(p.Preview)
+	return ui.Do(p.Preview, s.scope)
 }
 
 // commit emits the real import, only behind a successful matching preview.
@@ -272,7 +272,7 @@ func (s *Screen) commit() tea.Cmd {
 	}
 	s.g.Arm(p.Real)
 	s.msg = "waiting for confirmation"
-	return ui.Do(p.Real)
+	return ui.Do(p.Real, s.scope)
 }
 
 // onRun applies a finished action matched to this screen by argv.

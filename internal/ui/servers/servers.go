@@ -32,8 +32,9 @@ type Screen struct {
 	base  context.Context
 	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
-	home  string    // canonical tree of the current scope
-	reads ui.Rounds // the list and status reads; superseded rounds are cancelled
+	scope runner.Scope // the scope the list (and every action) belongs to
+	home  string       // canonical tree of the current scope
+	reads ui.Rounds    // the list and status reads; superseded rounds are cancelled
 
 	loaded   bool
 	servers  []source.Server
@@ -78,7 +79,7 @@ type verification struct {
 
 // New returns the MCP servers screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, home: ui.HomeFor(d, d.Scope), width: 80, height: 20}
+	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, scope: d.Scope, home: ui.HomeFor(d, d.Scope), width: 80, height: 20}
 }
 
 // Title implements ui.Screen.
@@ -89,8 +90,8 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware: swap the runner and the home and forget
 // the loaded list so nothing from the old tree is shown or acted on.
-func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, home string) {
-	s.run, s.home = r, home
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
+	s.run, s.scope, s.home = r, sc, home
 	s.reads.Supersede()
 	s.verify.Invalidate()
 	s.loaded, s.servers, s.dirGone, s.loadWarn = false, nil, false, ""
@@ -299,7 +300,7 @@ func (s *Screen) verified(v verification) tea.Cmd {
 	default:
 		act, err = actions.McpDisable(v.sel.ID)
 	}
-	return ui.DoOr(act, err, &s.note)
+	return ui.DoOr(act, err, &s.note, s.scope)
 }
 
 func (s *Screen) edit() tea.Cmd {
@@ -330,7 +331,7 @@ func (s *Screen) formKey(k tea.KeyPressMsg) tea.Cmd {
 			return nil // shown inline by the form
 		}
 		s.form = nil
-		return ui.DoOr(act, nil, &s.note)
+		return ui.DoOr(act, nil, &s.note, s.scope)
 	}
 	return nil
 }

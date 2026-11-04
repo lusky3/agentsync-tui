@@ -38,7 +38,8 @@ type Screen struct {
 	base  context.Context
 	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
-	reads ui.Rounds // the report read; superseded rounds are cancelled
+	scope runner.Scope // the scope the report (and the handover) belongs to
+	reads ui.Rounds    // the report read; superseded rounds are cancelled
 
 	loaded bool
 	report string // masked + sanitised, capped
@@ -63,7 +64,7 @@ type reportMsg struct {
 
 // New returns the reconcile screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, width: 80, height: 20}
+	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, scope: d.Scope, width: 80, height: 20}
 }
 
 // Title implements ui.Screen.
@@ -73,8 +74,8 @@ func (s *Screen) Title() string { return "Reconcile" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware: swap the runner and forget the report.
-func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, _ string) {
-	s.run = r
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
+	s.run, s.scope = r, sc
 	s.reads.Supersede()
 	s.loaded, s.report, s.trunc, s.exit, s.note, s.handed, s.scroll = false, "", false, 0, "", "", ui.Scroll{}
 }
@@ -157,7 +158,7 @@ func (s *Screen) key(k string) tea.Cmd {
 	}
 	switch k {
 	case "x":
-		return ui.Do(actions.Reconcile())
+		return ui.Do(actions.Reconcile(), s.scope)
 	case "r":
 		return s.Refresh()
 	}

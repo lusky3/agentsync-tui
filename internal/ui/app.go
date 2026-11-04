@@ -37,7 +37,9 @@ type KeyCapturer interface{ CapturesKeys() bool }
 // ScopeAware is implemented by screens that run their own reads: on a scope
 // switch the shell hands them the runner and the canonical home for the new
 // scope (HomeFor) before calling Refresh. A screen that reads files from the
-// home must read the new one from then on and drop what it loaded before.
+// home must read the new one from then on and drop what it loaded before,
+// and it stamps every DoMsg it emits with the scope it holds (Do, DoOr) so
+// the shell can refuse an action built under the other scope.
 type ScopeAware interface {
 	SetScope(r runner.Runner, s runner.Scope, home string)
 }
@@ -236,7 +238,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return a, a.handleKey(msg)
 	case DoMsg:
-		return a, a.request(msg.Action)
+		return a, a.request(msg.Action, msg.Scope)
 	case RunMsg:
 		return a, a.finish(msg)
 	case EditFileMsg:

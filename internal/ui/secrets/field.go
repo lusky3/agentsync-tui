@@ -38,7 +38,7 @@ func (s *Screen) typingKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 		s.typing, s.fieldErr = false, ""
 		s.input.Clear()
-		return ui.Do(act)
+		return ui.Do(act, s.scope)
 	}
 	if s.locked {
 		return nil

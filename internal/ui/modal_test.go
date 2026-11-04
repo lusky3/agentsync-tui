@@ -62,7 +62,7 @@ func TestConfirmModalCancelDoesNotRun(t *testing.T) {
 	fr := newFakeRunner()
 	h := start(t, baseDeps(fr), newScreen("A", "a"))
 	act := mustAct(actions.McpEnable("x"))
-	h.tm.Send(Do(act)())
+	h.tm.Send(Do(act, runner.ScopeUser)())
 	h.tm.Send(key("esc"))
 	app := h.final()
 	if n := fr.nCalls(); n != 0 {

@@ -24,7 +24,14 @@ type RunMsg struct {
 
 // DoMsg asks the shell to run an action (confirming it first unless it is
 // ReadOnly). Screens that do not hold the *App can return it from a Cmd.
-type DoMsg struct{ Action actions.Action }
+// Scope is the scope the screen built the action under (its list, its
+// ids); the shell refuses a scope-aware action whose Scope is no longer
+// the current one, so an id read under one scope can never run under the
+// other. "" means unbound (a follow-up queued by the shell itself).
+type DoMsg struct {
+	Action actions.Action
+	Scope  runner.Scope
+}
 
 // DefaultReadTimeout is the default bound on network reads (Timeouts.Read).
 const DefaultReadTimeout = 120 * time.Second
@@ -104,30 +111,35 @@ const interruptConfirm = 3 * time.Second
 // Do returns the Cmd a screen uses to hand act to the shell: non-ReadOnly
 // actions go through the confirm modal first; every action is logged and
 // the active screen is refreshed afterwards.
-func Do(act actions.Action) tea.Cmd {
-	return func() tea.Msg { return DoMsg{Action: act} }
+func Do(act actions.Action, scope runner.Scope) tea.Cmd {
+	return func() tea.Msg { return DoMsg{Action: act, Scope: scope} }
 }
 
 // DoOr is Do for a builder result: a builder error is written to *note as
 // "error: <first line, masked>" and nothing is handed over; otherwise the
 // note is cleared.
-func DoOr(act actions.Action, err error, note *string) tea.Cmd {
+func DoOr(act actions.Action, err error, note *string, scope runner.Scope) tea.Cmd {
 	if err != nil {
 		*note = "error: " + mask.FirstLine(err.Error())
 		return nil
 	}
 	*note = ""
-	return Do(act)
+	return Do(act, scope)
 }
 
 // request handles a DoMsg inside Update.
-func (a *App) request(act actions.Action) tea.Cmd {
+func (a *App) request(act actions.Action, scope runner.Scope) tea.Cmd {
 	switch {
 	case a.running != nil || a.modal != nil:
 		a.setStatus(statusFail, "busy: another action is in progress")
 		return nil
 	case a.noProject:
 		a.setStatus(statusFail, noProjectText)
+		return nil
+	case scope != "" && scope != a.scope && !runner.ScopeUnaware(act.Argv):
+		// Built under the other scope (an s between the key and its Cmd):
+		// its ids came from that scope's list, so it must not run here.
+		a.setStatus(statusFail, "not run: "+mask.Sanitize(act.Title)+": scope changed since it was built ("+sanitizeScope(scope)+" → "+sanitizeScope(a.scope)+")")
 		return nil
 	case act.ReadOnly:
 		return a.start(act)

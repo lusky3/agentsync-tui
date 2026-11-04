@@ -224,3 +224,36 @@ func TestScreensLoadLazily(t *testing.T) {
 		t.Errorf("Init ran again: %v", inits)
 	}
 }
+
+// A DoMsg carries the scope its screen built the action under; one that
+// arrives after the scope changed (a buffered s between the key and the
+// Cmd) is refused for a scope-aware command, so an id read under one scope
+// never runs under the other. A matching, an unbound ("") or a
+// scope-unaware (secret, plugin, ...) action still opens the modal.
+func TestDoMsgRefusedAfterScopeChange(t *testing.T) {
+	fr := newFakeRunner()
+	d := baseDeps(fr)
+	d.ProjectDir = t.TempDir()
+	d.WithScope = func(runner.Scope) (runner.Runner, func(...string) *exec.Cmd) { return fr, nil }
+	app := NewApp(d, newScreen("A", "a"))
+	enable := mustAct(actions.McpEnable("x"))
+	app.Update(key("s")) // user -> project
+	if app.scope != runner.ScopeProject {
+		t.Fatal("precondition: project scope")
+	}
+	app.Update(DoMsg{Action: enable, Scope: runner.ScopeUser})
+	if app.modal != nil || !strings.Contains(content(app), "scope changed") {
+		t.Fatalf("stale-scope action was offered: modal=%v status %q", app.modal != nil, app.status)
+	}
+	for name, m := range map[string]DoMsg{
+		"matching":      {Action: enable, Scope: runner.ScopeProject},
+		"unbound":       {Action: enable},
+		"scope-unaware": {Action: mustAct(actions.SecretRemove("K")), Scope: runner.ScopeUser},
+	} {
+		app.modal = nil
+		app.Update(m)
+		if app.modal == nil {
+			t.Errorf("%s: modal not opened: %q", name, app.status)
+		}
+	}
+}

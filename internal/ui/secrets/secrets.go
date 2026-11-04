@@ -55,8 +55,9 @@ type Screen struct {
 	base  context.Context
 	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
-	home  string    // canonical tree whose servers the cross-check scans
-	reads ui.Rounds // the list read; superseded rounds are cancelled
+	scope runner.Scope // the current scope (the vault itself is user-level)
+	home  string       // canonical tree whose servers the cross-check scans
+	reads ui.Rounds    // the list read; superseded rounds are cancelled
 
 	loaded bool
 	keys   []string // as the CLI returned them
@@ -107,7 +108,7 @@ type verification struct {
 // New returns the secrets screen.
 func New(d ui.Deps) *Screen {
 	return &Screen{
-		base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, home: ui.HomeFor(d, d.Scope),
+		base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, scope: d.Scope, home: ui.HomeFor(d, d.Scope),
 		input: ui.Field{Accept: keyRune}, width: 80, height: 20,
 	}
 }
@@ -120,8 +121,8 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware: swap the runner and the home the
 // cross-check scans, and drop the uses loaded from the old tree.
-func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, home string) {
-	s.run, s.home = r, home
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
+	s.run, s.scope, s.home = r, sc, home
 	s.reads.Supersede()
 	s.uses, s.srvNote = nil, ""
 	s.invalidate()
@@ -300,5 +301,5 @@ func (s *Screen) emit(act actions.Action, err error) tea.Cmd {
 		return nil
 	}
 	s.note = ""
-	return ui.Do(act)
+	return ui.Do(act, s.scope)
 }

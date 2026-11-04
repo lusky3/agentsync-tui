@@ -207,7 +207,7 @@ func (s *Screen) preview() tea.Cmd {
 	}
 	s.gates[s.mode].Request(p, s.scope)
 	s.msg = "running preview…"
-	return ui.Do(p.Preview)
+	return ui.Do(p.Preview, s.scope)
 }
 
 // commit emits the real command, only behind a successful matching preview
@@ -223,7 +223,7 @@ func (s *Screen) commit() tea.Cmd {
 	}
 	s.gates[s.mode].Arm(p.Real)
 	s.msg = "waiting for confirmation"
-	return ui.Do(p.Real)
+	return ui.Do(p.Real, s.scope)
 }
 
 // onRun feeds a finished action to both gates. One of them may own it (a

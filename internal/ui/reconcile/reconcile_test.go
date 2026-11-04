@@ -350,3 +350,14 @@ func TestReconcileIgnoresForeignRunMsg(t *testing.T) {
 		t.Fatalf("foreign RunMsg changed the view:\n%s", h.view())
 	}
 }
+
+// The interactive reconcile is stamped with the scope it was asked under.
+func TestReconcileCarriesScope(t *testing.T) {
+	h := newHarness(t, runnertest.New())
+	h.s.SetScope(runnertest.New(), runner.ScopeProject, "")
+	_, cmd := h.s.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	h.pump(cmd)
+	if len(h.dos) != 1 || h.dos[0].Scope != runner.ScopeProject {
+		t.Fatalf("dos %+v, want one project-scoped reconcile", h.dos)
+	}
+}

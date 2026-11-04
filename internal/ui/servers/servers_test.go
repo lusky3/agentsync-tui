@@ -533,7 +533,7 @@ func TestMutateVerifiesAsynchronously(t *testing.T) {
 		t.Fatalf("a second mutation while verifying: %v note=%q", got, s.note)
 	}
 	_, next := s.Update(m)
-	if got := drive(s, next); len(got) != 1 || !reflect.DeepEqual(got[0], ui.DoMsg{Action: mustAct(actions.McpDisable("stdio-srv"))}) {
+	if got := drive(s, next); len(got) != 1 || !reflect.DeepEqual(got[0], ui.DoMsg{Action: mustAct(actions.McpDisable("stdio-srv")), Scope: runner.ScopeUser}) {
 		t.Fatalf("after the verification: %#v", got)
 	}
 	if s.verify.Busy() {
@@ -557,5 +557,28 @@ func TestMutateVerificationDroppedWhenSuperseded(t *testing.T) {
 	s.SetScope(okRunner(), runner.ScopeProject, t.TempDir())
 	if got := drive(s, func() tea.Msg { return m }); len(got) != 0 {
 		t.Fatalf("verification from the old scope emitted %v", got)
+	}
+}
+
+// Every action the screen emits is stamped with the scope it was built
+// under, so the shell can refuse it after a scope switch.
+func TestMutationsCarryScope(t *testing.T) {
+	home := fixtureHome(t)
+	s := newLoaded(t, home, okRunner())
+	s.SetScope(okRunner(), runner.ScopeProject, home)
+	drive(s, s.Refresh())
+	selectID(t, s, "stdio-srv")
+	_, cmd := s.Update(key("e"))
+	m, ok := cmd().(ui.VerifiedMsg)
+	if !ok {
+		t.Fatalf("mutate emitted %#v, want a ui.VerifiedMsg", m)
+	}
+	_, next := s.Update(m)
+	msgs := drive(s, next)
+	if len(msgs) != 1 {
+		t.Fatalf("msgs %#v", msgs)
+	}
+	if d := msgs[0].(ui.DoMsg); d.Scope != runner.ScopeProject {
+		t.Errorf("DoMsg scope %q, want project", d.Scope)
 	}
 }
