@@ -43,7 +43,7 @@ func (s *Screen) footer() []string {
 	if s.note != "" {
 		out = append(out, theme.Warn.Render(s.note))
 	}
-	return append(out, theme.Dim.Render(listKeys))
+	return append(out, ui.KeyLines(listKeys, s.width)...)
 }
 
 // listView lays the table out as header (warnings, column titles), the

@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 func rowsN(n int) []string {
@@ -143,5 +145,34 @@ func TestFrameTinyHeight(t *testing.T) {
 	}
 	if out := l.Frame([]string{"H1"}, nil, []string{"F1"}, 1); len(out) != 2 {
 		t.Fatalf("no rows: %q", out)
+	}
+}
+
+// KeyLines wraps a key hint at its " • " separators so every line fits the
+// width and no hint (the scroll keys come last) is cut off; a hint that
+// fits is one line, and a width too small for one item still yields it.
+func TestKeyLinesWrap(t *testing.T) {
+	hint := "a add • e enable/disable • x remove • r refresh • " + ScrollKeys
+	one := KeyLines(hint, 200)
+	if len(one) != 1 {
+		t.Fatalf("fits: %q", one)
+	}
+	lines := KeyLines(hint, 40)
+	if len(lines) < 2 {
+		t.Fatalf("not wrapped: %q", lines)
+	}
+	for _, l := range lines {
+		if w := lipgloss.Width(l); w > 40 {
+			t.Errorf("line %q is %d wide", l, w)
+		}
+	}
+	joined := strings.Join(lines, " • ")
+	for _, want := range []string{"a add", "x remove", "home/end"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("%q lost: %q", want, lines)
+		}
+	}
+	if got := KeyLines("home/end", 3); len(got) != 1 {
+		t.Errorf("tiny width: %q", got)
 	}
 }

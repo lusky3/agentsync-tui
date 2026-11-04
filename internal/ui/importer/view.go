@@ -95,7 +95,7 @@ func (s *Screen) header() []string {
 
 // View implements tea.Model. Every outside string is sanitised or masked.
 func (s *Screen) View() tea.View {
-	lines := s.scroll.Frame(s.header(), s.outLines(), []string{theme.Dim.Render(keysTxt)}, s.height)
+	lines := s.scroll.Frame(s.header(), s.outLines(), ui.KeyLines(keysTxt, s.width), s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}

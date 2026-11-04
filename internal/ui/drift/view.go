@@ -79,9 +79,9 @@ func (s *Screen) View() tea.View {
 
 func (s *Screen) listLines() []string {
 	if !s.loaded {
-		return []string{theme.Dim.Render("loading…"), theme.Dim.Render(listKeys)}
+		return append([]string{theme.Dim.Render("loading…")}, ui.KeyLines(listKeys, s.width)...)
 	}
-	foot := []string{theme.Dim.Render(listKeys)}
+	foot := ui.KeyLines(listKeys, s.width)
 	if s.note != "" && len(s.rep.Agents) == 0 {
 		return append([]string{theme.Dim.Render(s.note)}, foot...)
 	}
@@ -190,7 +190,7 @@ func (s *Screen) detailPane() []string {
 		theme.Bold.Render(pointerLabel(s.item.Pointer)) + "  " + theme.Dim.Render(mask.OneLine(mask.Text(s.item.State))),
 		theme.Dim.Render(mask.OneLine(mask.Text(s.item.Path))),
 	}
-	return s.dscroll.Frame(head, s.detailBody(), []string{theme.Dim.Render(detailKeys)}, s.height)
+	return s.dscroll.Frame(head, s.detailBody(), ui.KeyLines(detailKeys, s.width), s.height)
 }
 
 // detailBody renders provenance then the masked hunks, one string per line.

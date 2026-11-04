@@ -71,7 +71,7 @@ func (s *Screen) header() []string {
 
 // View implements tea.Model. The report is stored masked and sanitised.
 func (s *Screen) View() tea.View {
-	lines := s.scroll.Frame(s.header(), s.lines(), []string{theme.Dim.Render(keysTxt)}, s.height)
+	lines := s.scroll.Frame(s.header(), s.lines(), ui.KeyLines(keysTxt, s.width), s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}

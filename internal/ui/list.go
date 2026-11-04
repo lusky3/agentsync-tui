@@ -1,5 +1,13 @@
 package ui
 
+import (
+	"strings"
+
+	"charm.land/lipgloss/v2"
+
+	"github.com/lusky3/agentsync-tui/internal/ui/theme"
+)
+
 // The scroll keys every list and every long view share (ScrollKeys is the
 // footer hint; the help screen and README list them too).
 const ScrollKeys = "j/k move • ctrl+d/ctrl+u page (space in long views) • home/end"
@@ -154,4 +162,30 @@ func frame(header, rows, footer []string, height int, window func(n, room int) (
 		out = append(out, rows[start:end]...)
 	}
 	return append(out, footer...)
+}
+
+// KeyLines renders a footer key hint (items joined by " • ") in dim style,
+// wrapped at the separators so every line fits width and no item, the
+// scroll keys last of all, is cut off by the shell's line truncation. A
+// width too small for one item still yields that item on its own line.
+func KeyLines(hint string, width int) []string {
+	const sep = " • "
+	var lines []string
+	cur := ""
+	for _, item := range strings.Split(hint, sep) {
+		switch {
+		case cur == "":
+			cur = item
+		case lipgloss.Width(cur+sep+item) <= width:
+			cur += sep + item
+		default:
+			lines = append(lines, cur)
+			cur = item
+		}
+	}
+	lines = append(lines, cur)
+	for i, l := range lines {
+		lines[i] = theme.Dim.Render(l)
+	}
+	return lines
 }

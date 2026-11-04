@@ -81,7 +81,7 @@ func (s *Screen) listView() []string {
 	if s.note != "" {
 		footer = append(footer, theme.Warn.Render(s.note))
 	}
-	footer = append(footer, theme.Dim.Render(keys))
+	footer = append(footer, ui.KeyLines(keys, s.width)...)
 	l, _ := s.list()
 	return l.Frame(header, rows, footer, s.height)
 }

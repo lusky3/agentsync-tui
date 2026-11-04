@@ -545,3 +545,13 @@ func TestVerifyEndsWhenIdentityChanged(t *testing.T) {
 	}
 	_ = cmd
 }
+
+// At 80 columns the footer wraps instead of being cut, so the scroll hints
+// stay visible.
+func TestFooterKeepsScrollHintsAt80Cols(t *testing.T) {
+	s, _ := loaded(t, fixture(t, "agent-list-all.txt"))
+	s.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if v := view(s); !strings.Contains(v, "home/end") || !strings.Contains(v, "a add") {
+		t.Fatalf("footer cut at 80 cols:\n%s", v)
+	}
+}

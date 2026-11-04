@@ -688,3 +688,17 @@ func TestListReadsUseLocalBound(t *testing.T) {
 		}
 	}
 }
+
+// At 80 columns the (long) plugin footer wraps instead of being cut, so the
+// scroll hints stay visible on both panes.
+func TestFooterKeepsScrollHintsAt80Cols(t *testing.T) {
+	s := loaded(t, standardFake(t))
+	s.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if v := view(s); !strings.Contains(v, "home/end") || !strings.Contains(v, "e enable/disable") {
+		t.Fatalf("plugin footer cut at 80 cols:\n%s", v)
+	}
+	press(s, "m")
+	if v := view(s); !strings.Contains(v, "home/end") || !strings.Contains(v, "a add") {
+		t.Fatalf("marketplace footer cut at 80 cols:\n%s", v)
+	}
+}

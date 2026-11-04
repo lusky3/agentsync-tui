@@ -33,7 +33,7 @@ func (s *Screen) View() tea.View {
 	if s.note != "" {
 		footer = append(footer, theme.Warn.Render(s.note))
 	}
-	footer = append(footer, theme.Dim.Render(listKeys))
+	footer = append(footer, ui.KeyLines(listKeys, s.width)...)
 	lines := s.list.Frame(header, rows, footer, s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")

@@ -104,7 +104,7 @@ func (s *Screen) View() tea.View {
 	if s.mode == modeRevert {
 		keys = revertKeys
 	}
-	lines := s.scroll[s.mode].Frame(s.header(), s.outLines(), []string{theme.Dim.Render(keys)}, s.height)
+	lines := s.scroll[s.mode].Frame(s.header(), s.outLines(), ui.KeyLines(keys, s.width), s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}
