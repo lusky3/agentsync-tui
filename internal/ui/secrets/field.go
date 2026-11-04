@@ -10,65 +10,76 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
-// typingKey handles a key while the key-name field has focus.
+// typingKey handles a key while the key-name field has focus. The field is
+// a ui.Field whose Accept is the key charset; this screen adds the lock: the
+// first refused rune wipes the buffer and ignores everything after it.
 func (s *Screen) typingKey(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
 	case "esc":
-		s.typing, s.input, s.locked, s.fieldErr = false, "", false, ""
+		s.typing, s.locked, s.fieldErr = false, false, ""
+		s.input.Clear()
+		return nil
 	case "enter":
 		if s.locked {
 			return nil
 		}
-		if s.input == "" {
+		if s.input.Value == "" {
 			s.fieldErr = "enter a key name"
 			return nil
 		}
-		if !plausibleName(s.input) {
-			s.input, s.locked, s.fieldErr = "", true, valueNote
+		if !plausibleName(s.input.Value) {
+			s.lock(valueNote)
 			return nil
 		}
-		act, err := actions.SecretSet(s.input)
+		act, err := actions.SecretSet(s.input.Value)
 		if err != nil {
 			s.fieldErr = "invalid key name"
 			return nil
 		}
-		s.typing, s.input, s.fieldErr = false, "", ""
-		return func() tea.Msg { return ui.DoMsg{Action: act} }
-	case "backspace":
-		if !s.locked && s.input != "" {
-			s.input = s.input[:len(s.input)-1]
-		}
-	default:
-		switch {
-		case k.Mod&(tea.ModCtrl|tea.ModAlt) != 0:
-		case utf8.RuneCountInString(k.Text) > 1:
-			s.rejectPaste() // a multi-character "key" is a paste in disguise
-		default:
-			s.insert(k.Text)
-		}
+		s.typing, s.fieldErr = false, ""
+		s.input.Clear()
+		return ui.Do(act)
+	}
+	if s.locked {
+		return nil
+	}
+	switch k.String() {
+	case "backspace", "ctrl+u":
+		s.input.Key(k)
+		return nil
+	}
+	if k.Text == "" || k.Mod&(tea.ModCtrl|tea.ModAlt) != 0 {
+		return nil
+	}
+	if utf8.RuneCountInString(k.Text) > 1 {
+		s.rejectPaste() // a multi-character "key" is a paste in disguise
+		return nil
+	}
+	changed, refused := s.input.Insert(k.Text)
+	if refused {
+		s.lock(rejectNote) // outside the key charset: wipe and refuse the rest
+		return nil
+	}
+	if changed {
+		s.insert()
 	}
 	return nil
 }
 
-// insert adds typed text one rune at a time. The first character outside the
-// key charset wipes the buffer and locks the field: nothing typed after it
-// (for example the value half of KEY=VALUE) is kept.
-func (s *Screen) insert(text string) {
-	for _, r := range text {
-		if s.locked {
-			return
-		}
-		if !keyRune(r) {
-			s.input, s.locked, s.fieldErr = "", true, rejectNote
-			return
-		}
-		s.input += string(r)
-		s.fieldErr = ""
-		if !plausibleName(s.input) {
-			s.input, s.locked, s.fieldErr = "", true, valueNote
-			return
-		}
+// insert checks the field after an edit: a refused rune (outside the key
+// charset) or a value-shaped name wipes the buffer and locks the field so
+// nothing typed after it (for example the value half of KEY=VALUE) is kept.
+func (s *Screen) insert() {
+	s.fieldErr = ""
+	if !plausibleName(s.input.Value) {
+		s.lock(valueNote)
 	}
+}
+
+// lock wipes the field and refuses further input until esc.
+func (s *Screen) lock(why string) {
+	s.input.Clear()
+	s.locked, s.fieldErr = true, why
 }
 
 // rejectPaste refuses pasted text: key names are short and typed, and a

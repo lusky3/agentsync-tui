@@ -363,7 +363,7 @@ func TestOutputCappedAt64KiB(t *testing.T) {
 		t.Fatalf("no truncation note at end:\n%s", h.view())
 	}
 	h.press("ctrl+u")
-	if h.s.scroll[modeApply] >= h.s.maxScroll() {
+	if h.s.scroll[modeApply].Offset >= h.s.maxScroll() {
 		t.Fatal("ctrl+u did not scroll up")
 	}
 }
@@ -399,8 +399,8 @@ func TestKeyCapturerWhileTyping(t *testing.T) {
 		t.Fatal("not capturing while typing")
 	}
 	h.press("p") // typed, not a preview
-	if len(h.calls()) != 0 || h.s.agents != "p" {
-		t.Fatalf("typing leaked to commands: %q calls=%v", h.s.agents, h.calls())
+	if len(h.calls()) != 0 || h.s.agents.Value != "p" {
+		t.Fatalf("typing leaked to commands: %q calls=%v", h.s.agents.Value, h.calls())
 	}
 	h.press("esc")
 	if kc.CapturesKeys() {
@@ -412,7 +412,7 @@ func TestShellKeysNotUsed(t *testing.T) {
 	// the shell owns tab, shift+tab, 1-9, s, l, ?, q: none may do anything here
 	h := newShell(t, okRunner("x"))
 	h.press("s", "l", "?", "q", "1", "9")
-	if h.s.mode != modeApply || h.s.focus != fNone || len(h.calls()) != 0 {
+	if h.s.mode != modeApply || h.s.focus != focusNone || len(h.calls()) != 0 {
 		t.Fatal("a shell key changed screen state")
 	}
 }
@@ -634,7 +634,7 @@ func TestForeignReadOnlyRunKeepsPreview(t *testing.T) {
 // not keep saying "running preview…" for a preview that will be ignored.
 func TestForeignMutationClearsPreviewMessage(t *testing.T) {
 	h := newShell(t, okRunner("x"))
-	h.s.agents = "claude"
+	h.s.agents.Value = "claude"
 	h.s.preview() // request recorded, DoMsg not run: the preview is in flight
 	if h.s.msg != "running preview…" {
 		t.Fatalf("precondition: msg %q", h.s.msg)
@@ -654,7 +654,7 @@ func TestForeignMutationClearsPreviewMessage(t *testing.T) {
 // dropping the preview, the real command is refused in the other scope.
 func TestPreviewBoundToScope(t *testing.T) {
 	h := newShell(t, okRunner("x"))
-	h.s.agents = "claude"
+	h.s.agents.Value = "claude"
 	h.press("p")
 	if !strings.Contains(h.s.msg, "preview ok") {
 		t.Fatalf("precondition: %q", h.s.msg)

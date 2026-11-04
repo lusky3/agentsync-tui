@@ -1,8 +1,9 @@
 // Package apply is the apply/revert screen. Both flows are preview-first:
 // the real command is only offered after a successful `--dry-run` for the
-// same inputs, and it is emitted as a ui.DoMsg so the shell's confirm modal
-// (typed verb for revert) stands between the user and the mutation. The
-// screen never runs a mutating command itself.
+// same inputs in the same scope (see gate.Gate), and it is emitted as a
+// ui.DoMsg so the shell's confirm modal (typed verb for revert) stands
+// between the user and the mutation. The screen never runs a mutating
+// command itself.
 //
 // Command output is free text that can carry resolved values, so only the
 // mask.Text-then-Sanitize form is ever stored or rendered.
@@ -14,7 +15,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
-	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/gate"
@@ -27,32 +27,35 @@ const (
 	modeRevert
 )
 
-type field int
+// focus names the text field being edited.
+type focus int
 
 const (
-	fNone   field = iota
-	fTarget       // apply: agents list; revert: agent name
-	fTo           // revert: --to checkpoint
+	focusNone   focus = iota
+	focusTarget       // apply: agents list; revert: agent name
+	focusTo           // revert: --to checkpoint
 )
 
 const msgPreviewFirst = "preview first"
 
+// maxInput caps each text field (bytes); agent lists and revisions are short.
+const maxInput = 1024
+
 // Screen is the apply/revert tab.
 type Screen struct {
-	d     ui.Deps
 	run   runner.Runner
-	scope runner.Scope
+	scope runner.Scope // the preview is bound to it (gate.Gate)
 
 	mode   mode
-	focus  field
-	agents string // apply: comma-separated, empty = all enabled
-	target string // revert: one agent name
-	all    bool   // revert: --all
-	to     string // revert: --to checkpoint
+	focus  focus
+	agents ui.Field // apply: comma-separated, empty = all enabled
+	target ui.Field // revert: one agent name
+	all    bool     // revert: --all
+	to     ui.Field // revert: --to checkpoint
 
 	gates  [2]gate.Gate // the preview-then-run rule, one per mode
 	out    [2]*ui.Output
-	scroll [2]int
+	scroll [2]ui.Scroll
 	msg    string
 
 	width, height int
@@ -60,7 +63,11 @@ type Screen struct {
 
 // New returns the apply/revert screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{d: d, run: d.Runner, scope: d.Scope, width: 80, height: 20}
+	return &Screen{
+		run: d.Runner, scope: d.Scope,
+		agents: ui.Field{Max: maxInput}, target: ui.Field{Max: maxInput}, to: ui.Field{Max: maxInput},
+		width: 80, height: 20,
+	}
 }
 
 // Title implements ui.Screen.
@@ -79,28 +86,28 @@ func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	for md := range s.gates {
 		s.gates[md].Reset()
 	}
-	s.out, s.scroll, s.msg = [2]*ui.Output{}, [2]int{}, ""
+	s.out, s.scroll, s.msg = [2]*ui.Output{}, [2]ui.Scroll{}, ""
 }
 
 // CapturesKeys implements ui.KeyCapturer: true while a text field has focus.
-func (s *Screen) CapturesKeys() bool { return s.focus != fNone }
+func (s *Screen) CapturesKeys() bool { return s.focus != focusNone }
 
 // pair returns the dry run and the real action for the current inputs.
 func (s *Screen) pair() (actions.Previewed, error) {
 	if s.mode == modeApply {
 		var names []string
-		for _, n := range strings.Split(s.agents, ",") {
+		for _, n := range strings.Split(s.agents.Value, ",") {
 			if n = strings.TrimSpace(n); n != "" {
 				names = append(names, n)
 			}
 		}
 		return actions.ApplyPair(names...)
 	}
-	agent := strings.TrimSpace(s.target)
+	agent := strings.TrimSpace(s.target.Value)
 	if s.all {
 		agent = ""
 	}
-	return actions.RevertPair(agent, strings.TrimSpace(s.to), s.all)
+	return actions.RevertPair(agent, strings.TrimSpace(s.to.Value), s.all)
 }
 
 // invalidate drops the mode's preview and any result still in flight.
@@ -119,7 +126,7 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ui.EditOutcomeMsg:
 		s.onEdit(msg)
 	case tea.KeyPressMsg:
-		if s.focus != fNone {
+		if s.focus != focusNone {
 			s.typing(msg)
 			return s, nil
 		}
@@ -128,54 +135,49 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return s, nil
 }
 
-func (s *Screen) typing(k tea.KeyPressMsg) {
-	f := &s.agents
+// field is the text field that has focus.
+func (s *Screen) field() *ui.Field {
 	switch {
-	case s.mode == modeRevert && s.focus == fTarget:
-		f = &s.target
-	case s.focus == fTo:
-		f = &s.to
+	case s.mode == modeRevert && s.focus == focusTarget:
+		return &s.target
+	case s.focus == focusTo:
+		return &s.to
 	}
+	return &s.agents
+}
+
+func (s *Screen) typing(k tea.KeyPressMsg) {
 	switch k.String() {
 	case "enter", "esc":
-		s.focus = fNone
-		return
-	case "backspace":
-		if r := []rune(*f); len(r) > 0 {
-			*f = string(r[:len(r)-1])
-			s.edited()
-		}
-		return
-	case "ctrl+u":
-		*f = ""
-		s.edited()
+		s.focus = focusNone
 		return
 	}
-	if k.Text != "" && k.Mod&(tea.ModCtrl|tea.ModAlt) == 0 {
-		*f += mask.Sanitize(k.Text)
+	if _, changed := s.field().Key(k); changed {
 		s.edited()
 	}
 }
 
 // edited runs after any input change.
 func (s *Screen) edited() {
-	if s.mode == modeRevert && s.focus == fTarget {
+	if s.mode == modeRevert && s.focus == focusTarget {
 		s.all = false
 	}
 	s.invalidate()
 }
 
 func (s *Screen) key(k string) tea.Cmd {
-	page := max(s.avail()/2, 1)
+	if s.scroll[s.mode].Key(k, len(s.outLines())) {
+		return nil
+	}
 	switch k {
 	case "m", "[", "]":
 		s.mode = 1 - s.mode
 		s.msg = ""
 	case "e":
-		s.focus = fTarget
+		s.focus = focusTarget
 	case "t":
 		if s.mode == modeRevert {
-			s.focus = fTo
+			s.focus = focusTo
 		}
 	case "A":
 		if s.mode == modeRevert {
@@ -192,12 +194,7 @@ func (s *Screen) key(k string) tea.Cmd {
 		if s.mode == modeRevert {
 			return s.commit()
 		}
-	case "ctrl+d", "pgdown":
-		s.scroll[s.mode] += page
-	case "ctrl+u", "pgup":
-		s.scroll[s.mode] = max(s.scroll[s.mode]-page, 0)
 	}
-	s.scroll[s.mode] = min(s.scroll[s.mode], s.maxScroll())
 	return nil
 }
 
@@ -282,5 +279,5 @@ func (s *Screen) onEdit(m ui.EditOutcomeMsg) {
 // store keeps only the masked, capped form of the run's output (ui.OutputOf).
 func (s *Screen) store(md mode, m ui.RunMsg) {
 	o := ui.OutputOf(m)
-	s.out[md], s.scroll[md] = &o, 0
+	s.out[md], s.scroll[md] = &o, ui.Scroll{}
 }

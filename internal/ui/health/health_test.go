@@ -304,8 +304,8 @@ func TestInitEqualsRefresh(t *testing.T) {
 	if strings.Join(a.called(), ",") != strings.Join(b.called(), ",") || len(a.called()) != 2 {
 		t.Errorf("Init %v != Refresh %v", a.called(), b.called())
 	}
-	if sa.gen != sb.gen {
-		t.Errorf("generation differs: %d vs %d", sa.gen, sb.gen)
+	if sa.reads.Gen() != sb.reads.Gen() {
+		t.Errorf("generation differs: %d vs %d", sa.reads.Gen(), sb.reads.Gen())
 	}
 }
 
@@ -377,28 +377,28 @@ func TestScrollBounds(t *testing.T) {
 	}
 	s.Update(key("ctrl+u")) // above the top
 	s.Update(key("pgup"))
-	if s.scroll != 0 {
-		t.Errorf("scrolled above the top: %d", s.scroll)
+	if s.scroll.Offset != 0 {
+		t.Errorf("scrolled above the top: %d", s.scroll.Offset)
 	}
 	for i := 0; i < 200; i++ {
 		s.Update(key("pgdown"))
 		s.Update(key("ctrl+d"))
 	}
-	if s.scroll != s.maxScroll() || !strings.Contains(view(s), "LASTLINE") {
-		t.Errorf("scroll %d max %d:\n%s", s.scroll, s.maxScroll(), view(s))
+	if s.scroll.Offset != s.maxScroll() || !strings.Contains(view(s), "LASTLINE") {
+		t.Errorf("scroll %d max %d:\n%s", s.scroll.Offset, s.maxScroll(), view(s))
 	}
 	if n := len(strings.Split(view(s), "\n")); n > 12 {
 		t.Errorf("view is %d lines in a 12-line screen", n)
 	}
 	s.Update(key("ctrl+u"))
-	if s.scroll >= s.maxScroll() {
+	if s.scroll.Offset >= s.maxScroll() {
 		t.Error("ctrl+u did not scroll up")
 	}
 	// Shrinking the output re-clamps.
 	fr.res["doctor"] = runner.Result{Stdout: "short\n"}
 	refresh(s)
-	if s.scroll > s.maxScroll() {
-		t.Errorf("scroll %d beyond max %d", s.scroll, s.maxScroll())
+	if s.scroll.Offset > s.maxScroll() {
+		t.Errorf("scroll %d beyond max %d", s.scroll.Offset, s.maxScroll())
 	}
 }
 

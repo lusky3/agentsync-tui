@@ -173,8 +173,8 @@ func claudeShell(t *testing.T, preview string) *shell {
 	t.Helper()
 	h := newShell(t, newRunner(agentsTwo, preview))
 	h.press("a")
-	if h.s.agentName() != "claude" {
-		t.Fatalf("agent = %q", h.s.agentName())
+	if h.s.agent != "claude" {
+		t.Fatalf("agent = %q", h.s.agent)
 	}
 	return h
 }
@@ -183,7 +183,7 @@ func claudeShell(t *testing.T, preview string) *shell {
 func (h *shell) setComponent(c string) {
 	h.t.Helper()
 	for i := 0; i < len(components); i++ {
-		if compLabel(h.s.component()) == c {
+		if compLabel(h.s.comp) == c {
 			return
 		}
 		h.press("c")
@@ -475,7 +475,7 @@ func TestImportPendingDisplayShownInHeader(t *testing.T) {
 	h.setComponent("mcp")
 	h.typeName("github")
 	lines := strings.Split(h.view(), "\n")
-	head := strings.Join(lines[:min(len(lines), headLines)], "\n")
+	head := strings.Join(lines[:min(len(lines), len(h.s.header()))], "\n")
 	if !strings.Contains(head, "will run: agentsync import claude:mcp:github") {
 		t.Fatalf("header:\n%s", head)
 	}
@@ -495,8 +495,8 @@ func TestImportScopeAwareSwapsRunner(t *testing.T) {
 	if got := r2.got(); len(got) != 1 || got[0] != "agent list" || h.s.scope != runner.ScopeProject {
 		t.Fatalf("r2 calls = %q", got)
 	}
-	if h.s.agentName() != "codex" {
-		t.Fatalf("agent = %q", h.s.agentName())
+	if h.s.agent != "codex" {
+		t.Fatalf("agent = %q", h.s.agent)
 	}
 }
 
@@ -519,8 +519,8 @@ func TestImportInitEqualsRefresh(t *testing.T) {
 		t.Fatal("stale agent list applied")
 	}
 	s.Update(m2)
-	if !s.loaded || s.agentName() != "antigravity" {
-		t.Fatalf("current agent list not applied: %q", s.agentName())
+	if !s.loaded || s.agent != "antigravity" {
+		t.Fatalf("current agent list not applied: %q", s.agent)
 	}
 }
 
@@ -536,18 +536,18 @@ func TestImportKeyCapturerWhileTyping(t *testing.T) {
 		t.Fatal("not capturing while typing")
 	}
 	h.press("p", "i", "a", "c", "s", "q")
-	if len(h.r.imports()) != 0 || len(h.asked) != 0 || h.s.name != "piacsq" {
-		t.Fatalf("typing leaked: name=%q imports=%q", h.s.name, h.r.imports())
+	if len(h.r.imports()) != 0 || len(h.asked) != 0 || h.s.name.Value != "piacsq" {
+		t.Fatalf("typing leaked: name=%q imports=%q", h.s.name.Value, h.r.imports())
 	}
 	h.press("backspace")
-	if h.s.name != "piacs" {
-		t.Fatalf("backspace: %q", h.s.name)
+	if h.s.name.Value != "piacs" {
+		t.Fatalf("backspace: %q", h.s.name.Value)
 	}
 	h.press("esc")
 	if kc.CapturesKeys() {
 		t.Fatal("still capturing after esc")
 	}
-	if h.s.agentName() != "claude" || compLabel(h.s.component()) != "mcp" {
+	if h.s.agent != "claude" || compLabel(h.s.comp) != "mcp" {
 		t.Fatal("typed keys changed the selection")
 	}
 }
@@ -565,8 +565,8 @@ func TestImportAgentReloadDroppingSelectionNeedsPreview(t *testing.T) {
 	h.setComponent("mcp")
 	h.press("p")
 	h.reloadAgents("antigravity enabled=true scope=user\n") // claude is gone
-	if h.s.agentName() != "antigravity" {
-		t.Fatalf("selection = %q", h.s.agentName())
+	if h.s.agent != "antigravity" {
+		t.Fatalf("selection = %q", h.s.agent)
 	}
 	h.press("i")
 	if len(h.asked) != 0 {
@@ -582,8 +582,8 @@ func TestImportAgentReloadKeepingSelectionKeepsPreview(t *testing.T) {
 	h.setComponent("mcp")
 	h.press("p")
 	h.reloadAgents(agentsTwo + "codex enabled=true scope=user\n")
-	if h.s.agentName() != "claude" {
-		t.Fatalf("selection = %q", h.s.agentName())
+	if h.s.agent != "claude" {
+		t.Fatalf("selection = %q", h.s.agent)
 	}
 	h.press("i")
 	asked1(t, h, "import claude:mcp")

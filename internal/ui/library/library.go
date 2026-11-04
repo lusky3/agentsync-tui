@@ -10,8 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -39,9 +38,8 @@ const (
 )
 
 const (
-	memoryRoot  = "AGENTS" // memory/AGENTS.md; fragments live in memory/fragments/
-	listTimeout = 30 * time.Second
-	staleNote   = "item changed — refreshed"
+	memoryRoot = "AGENTS" // memory/AGENTS.md; fragments live in memory/fragments/
+	staleNote  = "item changed — refreshed"
 )
 
 // kindInfo holds the per-kind words.
@@ -56,33 +54,53 @@ var infos = map[Kind]kindInfo{
 	Memory:   {"Memory", "memory", "memory files", "memory"},
 }
 
+// checkState is how the `check` after an edit ended.
+type checkState int
+
+const (
+	checkPassed checkState = iota
+	checkFailed
+	checkNotRun // agentsync could not run at all
+)
+
+func (c checkState) String() string {
+	switch c {
+	case checkPassed:
+		return "passed"
+	case checkFailed:
+		return "failed"
+	}
+	return "could not run"
+}
+
 // checkResult is the last `check` outcome shown in the result pane. lines is
 // masked and sanitised before it is stored.
 type checkResult struct {
-	state  string // "passed", "failed" or "could not run"
+	state  checkState
 	exit   int
 	lines  []string
 	trunc  bool
-	scroll int
+	scroll ui.Scroll
 }
 
 // nextID hands every Screen a process-unique identity: the shell broadcasts
-// unknown messages to all screens, so a result must name its owner.
+// unknown messages to all screens, so a result must name its owner (see
+// ui.Screen).
 var nextID atomic.Uint64
 
 // Screen is one library tab.
 type Screen struct {
 	id    uint64
-	d     ui.Deps
 	kind  Kind
+	base  context.Context
+	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
 	run   runner.Runner
-	scope runner.Scope
-	home  string // canonical tree of the current scope (memory list, edit paths)
-	gen   int    // refresh generation; older results are dropped
+	home  string    // canonical tree of the current scope (memory list, edit paths)
+	reads ui.Rounds // the list read; superseded rounds are cancelled
 
 	loaded   bool
 	items    []model.Item
-	cursor   int
+	list     ui.List
 	loadNote string // why the last refresh failed, display-safe; last good list kept
 	note     string // last screen message, display-safe
 
@@ -107,7 +125,10 @@ type listMsg struct {
 
 // New returns the library screen for kind.
 func New(d ui.Deps, kind Kind) *Screen {
-	return &Screen{id: nextID.Add(1), d: d, kind: kind, run: d.Runner, scope: d.Scope, home: ui.HomeFor(d, d.Scope), width: 80, height: 24}
+	return &Screen{
+		id: nextID.Add(1), kind: kind, base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner,
+		home: ui.HomeFor(d, d.Scope), width: 80, height: 24,
+	}
 }
 
 // Title implements ui.Screen.
@@ -119,45 +140,35 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 // SetScope implements ui.ScopeAware: swap the runner and the home (memory
 // is listed from it and every edit path is built under it) and drop the
 // items loaded from the old tree.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
-	s.run, s.scope, s.home = r, sc, home
-	s.gen++ // results of reads started under the old scope are dropped
-	s.loaded, s.items, s.loadNote, s.note, s.cursor = false, nil, "", "", 0
+func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, home string) {
+	s.run, s.home = r, home
+	s.reads.Supersede() // results of reads started under the old scope are dropped
+	s.loaded, s.items, s.loadNote, s.note, s.list = false, nil, "", "", ui.List{}
 	s.pending, s.awaiting, s.check = "", false, nil
 }
+
+// Shutdown implements ui.Shutdowner.
+func (s *Screen) Shutdown() { s.reads.Cancel() }
 
 // CapturesKeys implements ui.KeyCapturer: no text input here.
 func (s *Screen) CapturesKeys() bool { return false }
 
-// Refresh re-reads the list; nothing runs inside Update.
+// Refresh re-reads the list, cancelling the previous read; nothing runs
+// inside Update.
 func (s *Screen) Refresh() tea.Cmd {
-	s.gen++
-	id, gen, kind, r, home, base := s.id, s.gen, s.kind, s.run, s.home, ui.BaseCtx(s.d)
+	gen, ctx := s.reads.Next(s.base)
+	id, kind, r, home, limit := s.id, s.kind, s.run, s.home, s.limit
 	if kind == Memory {
 		return func() tea.Msg { return readMemory(id, gen, home) }
 	}
-	return func() tea.Msg { return readList(base, id, gen, kind, r) }
+	return func() tea.Msg { return readList(ctx, id, gen, kind, r, limit) }
 }
 
-func readList(base context.Context, id uint64, gen int, kind Kind, r runner.Runner) listMsg {
-	if r == nil {
-		return listMsg{id: id, gen: gen, note: "no runner"}
-	}
-	ctx, cancel := context.WithTimeout(base, listTimeout)
-	defer cancel()
+func readList(ctx context.Context, id uint64, gen int, kind Kind, r runner.Runner, timeout time.Duration) listMsg {
 	word := infos[kind].word
-	res, err := r.Run(ctx, word, "list")
-	switch {
-	case errors.Is(err, runner.ErrNotInstalled):
-		return listMsg{id: id, gen: gen, note: "agentsync is not installed"}
-	case err != nil:
-		return listMsg{id: id, gen: gen, note: mask.OneLine(mask.Text(err.Error()))}
-	case res.ExitCode != 0:
-		n := word + " list exited " + strconv.Itoa(res.ExitCode)
-		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
-			n += ": " + l
-		}
-		return listMsg{id: id, gen: gen, note: n}
+	res, err := ui.Read(ctx, r, timeout, word, "list")
+	if note := ui.ReadNote(word+" list", res, err); note != "" {
+		return listMsg{id: id, gen: gen, note: note}
 	}
 	items, err := model.ParseList(res.Stdout)
 	if err != nil {
@@ -188,7 +199,7 @@ func readMemory(id uint64, gen int, home string) listMsg {
 		}
 		frags = append(frags, model.Item{Name: name})
 	}
-	sort.Slice(frags, func(i, j int) bool { return frags[i].Name < frags[j].Name })
+	slices.SortFunc(frags, func(a, b model.Item) int { return strings.Compare(a.Name, b.Name) })
 	return listMsg{id: id, gen: gen, items: append(items, frags...)}
 }
 
@@ -198,7 +209,7 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width, s.height = msg.Width, msg.Height
 	case listMsg:
-		if msg.id == s.id && msg.gen == s.gen {
+		if msg.id == s.id && s.reads.Current(msg.gen) {
 			s.apply(msg)
 		}
 	case ui.EditOutcomeMsg:
@@ -218,22 +229,26 @@ func (s *Screen) apply(m listMsg) {
 		return
 	}
 	s.loadNote, s.items = "", m.items
-	s.cursor = max(min(s.cursor, len(s.items)-1), 0)
+	s.list.Clamp(len(s.items))
 }
 
 func (s *Screen) selected() (model.Item, bool) {
-	if s.cursor < 0 || s.cursor >= len(s.items) {
+	if s.list.Cursor < 0 || s.list.Cursor >= len(s.items) {
 		return model.Item{}, false
 	}
-	return s.items[s.cursor], true
+	return s.items[s.list.Cursor], true
 }
 
+// keyPress routes the scroll keys to the result pane while one is open and
+// to the item list otherwise.
 func (s *Screen) keyPress(k string) tea.Cmd {
+	if s.check != nil && s.check.scroll.Key(k, len(s.check.lines)) {
+		return nil
+	}
+	if s.check == nil && s.list.Key(k, len(s.items)) {
+		return nil
+	}
 	switch k {
-	case "up", "k":
-		s.cursor = max(s.cursor-1, 0)
-	case "down", "j":
-		s.cursor = max(min(s.cursor+1, len(s.items)-1), 0)
 	case "r":
 		s.note = ""
 		return s.Refresh()
@@ -241,14 +256,6 @@ func (s *Screen) keyPress(k string) tea.Cmd {
 		return s.edit()
 	case "esc":
 		s.check, s.pending, s.awaiting = nil, "", false
-	case "ctrl+d":
-		s.scrollBy(s.paneHeight() / 2)
-	case "ctrl+u":
-		s.scrollBy(-s.paneHeight() / 2)
-	case "pgdown", "pgdn":
-		s.scrollBy(s.paneHeight())
-	case "pgup":
-		s.scrollBy(-s.paneHeight())
 	}
 	return nil
 }
@@ -262,7 +269,7 @@ func (s *Screen) edit() tea.Cmd {
 	}
 	p, err := PathFor(s.home, s.kind, it.Name)
 	if err != nil {
-		s.note = "error: " + mask.OneLine(mask.Text(err.Error()))
+		s.note = "error: " + mask.FirstLine(err.Error())
 		return nil
 	}
 	if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
@@ -294,21 +301,21 @@ func (s *Screen) onOutcome(m ui.EditOutcomeMsg) {
 
 // onRun records the `check` the shell ran after this screen's edit.
 func (s *Screen) onRun(m ui.RunMsg) {
-	if !s.awaiting || len(m.Action.Argv) != 1 || m.Action.Argv[0] != "check" {
+	if !s.awaiting || !slices.Equal(m.Action.Argv, actions.Check().Argv) {
 		return
 	}
 	s.awaiting = false // consumed
 	r := &checkResult{exit: m.Result.ExitCode}
 	switch {
 	case errors.Is(m.Err, runner.ErrNotInstalled):
-		r.state, r.lines = "could not run", []string{"agentsync is not installed"}
+		r.state, r.lines = checkNotRun, []string{"agentsync is not installed"}
 	case m.Err != nil:
-		r.state, r.lines = "could not run", []string{mask.FirstLine(mask.Text(m.Err.Error()))}
+		r.state, r.lines = checkNotRun, []string{mask.FirstLine(m.Err.Error())}
 	case m.Result.ExitCode != 0:
-		r.state = "failed"
+		r.state = checkFailed
 		r.lines, r.trunc = storedLines(m.Result.Stderr, m.Result.Stdout)
 	default:
-		r.state = "passed"
+		r.state = checkPassed
 		r.lines, r.trunc = storedLines(m.Result.Stdout, m.Result.Stderr)
 	}
 	s.check = r
@@ -323,14 +330,6 @@ func storedLines(first, second string) ([]string, bool) {
 		return nil, trunc
 	}
 	return strings.Split(text, "\n"), trunc
-}
-
-func (s *Screen) scrollBy(n int) {
-	if s.check == nil {
-		return
-	}
-	limit := max(len(s.check.lines)-s.paneHeight(), 0)
-	s.check.scroll = max(min(s.check.scroll+n, limit), 0)
 }
 
 // paneHeight is the number of output lines the result pane shows.

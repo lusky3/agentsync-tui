@@ -15,20 +15,13 @@ import (
 const (
 	banner1 = "No in-TUI write-back/override and no bulk W/O/S or auto resolution (upstream agentsync #239, #255, #256)."
 	banner2 = "Press x to resolve item by item in agentsync's own interactive reconcile."
-	keysTxt = "x resolve interactively • r refresh • ctrl+d/ctrl+u scroll"
-	// headLines is the number of fixed lines above the report.
-	headLines = 5
+	keysTxt = "x resolve interactively • r refresh • " + ui.ScrollKeys
 )
 
 // skippedPrefix starts each line of the --auto-safe report that needs a human.
 const skippedPrefix = "skipped (needs manual review):"
 
-// avail is how many report lines fit under the header and above the footer.
-func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
-
 func (s *Screen) lines() []string { return ui.TextLines(s.report, s.trunc) }
-
-func (s *Screen) maxScroll() int { return max(len(s.lines())-s.avail(), 0) }
 
 // summary is the one-line digest of the last good report.
 func (s *Screen) summary() string {
@@ -58,14 +51,8 @@ func (s *Screen) summary() string {
 	return out
 }
 
-// View implements tea.Model. The report is stored masked and sanitised.
-func (s *Screen) View() tea.View {
-	lines := []string{
-		theme.Bold.Render("Reconcile") + theme.Dim.Render("  report: agentsync reconcile --auto-safe (resolves nothing)"),
-		theme.Warn.Render(banner1),
-		theme.Dim.Render(banner2),
-		s.summary(),
-	}
+// header is every fixed line above the report; the body gets what is left.
+func (s *Screen) header() []string {
 	status := ""
 	switch {
 	case s.note != "":
@@ -73,12 +60,18 @@ func (s *Screen) View() tea.View {
 	case s.handed != "":
 		status = theme.Dim.Render(mask.OneLine(s.handed))
 	}
-	lines = append(lines, status)
-	body := s.lines()
-	start := min(s.scroll, s.maxScroll())
-	end := min(start+s.avail(), len(body))
-	lines = append(lines, body[start:end]...)
-	lines = append(lines, theme.Dim.Render(keysTxt))
+	return []string{
+		theme.Bold.Render("Reconcile") + theme.Dim.Render("  report: agentsync reconcile --auto-safe (resolves nothing)"),
+		theme.Warn.Render(banner1),
+		theme.Dim.Render(banner2),
+		s.summary(),
+		status,
+	}
+}
+
+// View implements tea.Model. The report is stored masked and sanitised.
+func (s *Screen) View() tea.View {
+	lines := s.scroll.Frame(s.header(), s.lines(), []string{theme.Dim.Render(keysTxt)}, s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}

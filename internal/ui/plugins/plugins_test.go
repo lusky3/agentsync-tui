@@ -283,7 +283,7 @@ func TestAddPluginValidatesInline(t *testing.T) {
 		if !s.CapturesKeys() {
 			t.Fatal("add field must capture keys")
 		}
-		s.buf = bad // straight into the buffer: typing already strips controls
+		s.buf.Value = bad // straight into the buffer: typing already strips controls
 		if got := press(s, "enter"); len(got) != 0 {
 			t.Errorf("%q emitted %v", bad, got)
 		}
@@ -337,7 +337,7 @@ func TestMarketplaceAddMasksCredentials(t *testing.T) {
 	for _, r := range url {
 		s.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 		if v := view(s); strings.Contains(v, canary) {
-			t.Fatalf("credential visible while typing %q:\n%s", s.buf, v)
+			t.Fatalf("credential visible while typing %q:\n%s", s.buf.Value, v)
 		}
 	}
 	if !strings.Contains(view(s), "host.example") {
@@ -413,13 +413,13 @@ func TestDetailCappedAndScrollable(t *testing.T) {
 	if len(s.detail) > ui.MaxOutput+64 {
 		t.Errorf("stored %d bytes", len(s.detail))
 	}
-	if s.scroll != 0 || !strings.Contains(view(s), "more below") {
+	if s.dscroll.Offset != 0 || !strings.Contains(view(s), "more below") {
 		t.Fatalf("not scrollable:\n%s", view(s))
 	}
 	press(s, "j")
 	press(s, "j")
-	if s.scroll != 2 {
-		t.Errorf("scroll = %d", s.scroll)
+	if s.dscroll.Offset != 2 {
+		t.Errorf("scroll = %d", s.dscroll.Offset)
 	}
 }
 
@@ -450,7 +450,7 @@ func TestStaleStateBlocksMutation(t *testing.T) {
 			if got := press(s, k); len(got) != 0 {
 				t.Errorf("%s/%s: stale mutation emitted %v", name, k, got)
 			}
-			if s.verifying {
+			if s.verify.Busy() {
 				t.Errorf("%s/%s: still verifying", name, k)
 			}
 		}
@@ -500,7 +500,7 @@ func TestVerifyDoesNotBlockUpdate(t *testing.T) {
 	if fr.count() != before {
 		t.Fatal("Update ran the CLI synchronously")
 	}
-	if !s.verifying {
+	if !s.verify.Busy() {
 		t.Fatal("not verifying")
 	}
 	// mutating keys are ignored meanwhile; navigation and sizing still work.
@@ -521,7 +521,7 @@ func TestVerifyDroppedOnCursorMove(t *testing.T) {
 	s := loaded(t, fr)
 	_, cmd := s.Update(keyMsg("x"))
 	s.Update(keyMsg("j"))
-	if s.verifying {
+	if s.verify.Busy() {
 		t.Error("cursor move must clear verifying")
 	}
 	if got := drive(s, cmd); len(got) != 0 {
@@ -534,11 +534,11 @@ func TestVerifyDroppedWhenItemGone(t *testing.T) {
 	s := loaded(t, fr)
 	_, cmd := s.Update(keyMsg("x")) // verify in flight for "hello"
 	// A list read lands (same generation) and the selected plugin is gone.
-	s.Update(pluginsMsg{gen: s.gen, plugins: []model.Plugin{{Name: "other", Version: "1.0.0", SHA: "tree:v1:76cc"}}})
+	s.Update(pluginsMsg{gen: s.reads.Gen(), plugins: []model.Plugin{{Name: "other", Version: "1.0.0", SHA: "tree:v1:76cc"}}})
 	if got := drive(s, cmd); len(got) != 0 {
 		t.Fatalf("emitted %v", got)
 	}
-	if s.verifying {
+	if s.verify.Busy() {
 		t.Fatal("verifying stuck after the verify result was dropped")
 	}
 	// and the screen is usable again.
@@ -559,8 +559,8 @@ func TestVerifyDroppedOnRefreshAndScope(t *testing.T) {
 	_, cmd = s.Update(keyMsg("x"))
 	other := standardFake(t)
 	s.SetScope(other, runner.ScopeProject, "")
-	if got := drive(s, cmd); len(got) != 0 || s.verifying {
-		t.Errorf("verify after SetScope emitted %v (verifying=%v)", got, s.verifying)
+	if got := drive(s, cmd); len(got) != 0 || s.verify.Busy() {
+		t.Errorf("verify after SetScope emitted %v (verifying=%v)", got, s.verify.Busy())
 	}
 }
 
@@ -613,8 +613,8 @@ func TestKeyCapturerWhileTyping(t *testing.T) {
 		t.Fatal("not capturing while typing")
 	}
 	typeText(s, "mxeoUq") // shell/global and screen hotkeys are text here
-	if s.pane != panePlugins || s.buf != "mxeoUq" {
-		t.Errorf("hotkeys leaked while typing: pane=%d buf=%q", s.pane, s.buf)
+	if s.pane != panePlugins || s.buf.Value != "mxeoUq" {
+		t.Errorf("hotkeys leaked while typing: pane=%d buf=%q", s.pane, s.buf.Value)
 	}
 	press(s, "esc")
 	if s.CapturesKeys() {
@@ -625,7 +625,7 @@ func TestKeyCapturerWhileTyping(t *testing.T) {
 func TestStaleListResultIgnored(t *testing.T) {
 	fr := standardFake(t)
 	s := loaded(t, fr)
-	s.Update(pluginsMsg{gen: s.gen - 1, plugins: nil})
+	s.Update(pluginsMsg{gen: s.reads.Gen() - 1, plugins: nil})
 	if len(s.plugins) != 2 {
 		t.Error("old-generation result applied")
 	}
@@ -650,8 +650,8 @@ func TestHostileNamesNeverActionable(t *testing.T) {
 	// A hostile selection (e.g. injected via a stale model) is refused.
 	s.pane = panePlugins
 	s.plugins = []model.Plugin{{Name: "-rf"}}
-	s.pCur = 0
-	if got := press(s, "x"); len(got) != 0 || s.verifying {
+	s.plist.Cursor = 0
+	if got := press(s, "x"); len(got) != 0 || s.verify.Busy() {
 		t.Errorf("hostile selection actionable: %v", got)
 	}
 	if got := press(s, "enter"); len(got) != 0 || fr.saw("plugin explain") {

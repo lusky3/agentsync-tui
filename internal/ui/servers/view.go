@@ -2,7 +2,7 @@ package servers
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -10,27 +10,25 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/model"
 	"github.com/lusky3/agentsync-tui/internal/source"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
-// flagged classes need attention: the destination differs from canonical.
-var flagged = map[string]bool{"drift": true, "conflict": true, "foreign-collision": true, "orphan-drifted": true}
-
-const listKeys = "enter detail • e enable/disable • x remove • a add • E edit • r refresh"
+const listKeys = "enter detail • e enable/disable • x remove • a add • E edit • r refresh • " + ui.ScrollKeys
 
 // View implements tea.Model. Every outside string is sanitised or masked.
 func (s *Screen) View() tea.View {
-	var body string
+	var lines []string
 	switch {
 	case s.form != nil:
-		body = s.form.view()
+		lines = strings.Split(s.form.view(), "\n")
 	case s.detail:
-		body = s.detailView()
+		lines = s.detailView()
 	default:
-		body = s.listView()
+		lines = s.listView()
 	}
-	lines := strings.Split(body, "\n")
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}
@@ -48,32 +46,33 @@ func (s *Screen) footer() []string {
 	return append(out, theme.Dim.Render(listKeys))
 }
 
-func (s *Screen) listView() string {
-	var out []string
+// listView lays the table out as header (warnings, column titles), the
+// rows windowed around the cursor, and a footer that is never cut.
+func (s *Screen) listView() []string {
+	var header []string
 	if !s.loaded {
-		out = append(out, theme.Dim.Render("loading…"))
-		return strings.Join(append(out, s.footer()...), "\n")
+		return s.list.Frame([]string{theme.Dim.Render("loading…")}, nil, s.footer(), s.height)
 	}
 	if s.loadWarn != "" {
-		out = append(out, theme.Warn.Render(s.loadWarn))
+		header = append(header, theme.Warn.Render(s.loadWarn))
 	}
 	if len(s.servers) == 0 {
-		out = append(out, "no MCP servers — press a to add one")
+		header = append(header, "no MCP servers — press a to add one")
 		if s.dirGone {
-			out = append(out, theme.Dim.Render("(mcp/ directory not found)"))
+			header = append(header, theme.Dim.Render("(mcp/ directory not found)"))
 		}
-		return strings.Join(append(out, s.footer()...), "\n")
+		return s.list.Frame(header, nil, s.footer(), s.height)
 	}
 	head := []string{"ID", "TYPE", "TARGET", "ON", "AGENTS"}
-	rows := make([][]string, len(s.servers))
+	cells := make([][]string, len(s.servers))
 	for i, srv := range s.servers {
-		rows[i] = []string{mask.OneLine(srv.ID), mask.OneLine(srv.Type), target(srv), onOff(srv), allowlist(srv)}
+		cells[i] = []string{mask.OneLine(srv.ID), mask.OneLine(srv.Type), target(srv), onOff(srv), allowlist(srv)}
 	}
 	caps := []int{28, 5, 48, 3, 20}
 	widths := make([]int, len(head))
 	for c := range head {
 		widths[c] = ansi.StringWidth(head[c])
-		for _, r := range rows {
+		for _, r := range cells {
 			widths[c] = max(widths[c], min(ansi.StringWidth(r[c]), caps[c]))
 		}
 	}
@@ -89,21 +88,16 @@ func (s *Screen) listView() string {
 		}
 	}
 	widths[2] = max(min(widths[2], s.width-fixed), 12)
-	out = append(out, theme.Bold.Render("  "+joinCells(head, widths)+"  STATE"))
-	foot := s.footer()
-	avail := max(s.height-len(out)-len(foot), 1)
-	start := 0
-	if s.cursor >= avail {
-		start = s.cursor - avail + 1
-	}
-	for i := start; i < len(rows) && i < start+avail; i++ {
-		line := "  " + joinCells(rows[i], widths)
-		if i == s.cursor {
+	header = append(header, theme.Bold.Render("  "+joinCells(head, widths)+"  STATE"))
+	rows := make([]string, len(cells))
+	for i := range cells {
+		line := "  " + joinCells(cells[i], widths)
+		if i == s.list.Cursor {
 			line = theme.Sel.Render("> " + line[2:])
 		}
-		out = append(out, line+"  "+s.stateCell(s.servers[i].ID))
+		rows[i] = line + "  " + s.stateCell(s.servers[i].ID)
 	}
-	return strings.Join(append(out, foot...), "\n")
+	return s.list.Frame(header, rows, s.footer(), s.height)
 }
 
 func joinCells(cells []string, widths []int) string {
@@ -128,15 +122,15 @@ func (s *Screen) stateCell(id string) string {
 	for a := range m {
 		agents = append(agents, a)
 	}
-	sort.Strings(agents)
+	slices.Sort(agents)
 	cells := make([]string, len(agents))
 	for i, a := range agents {
 		cls := m[a]
 		txt := mask.OneLine(a) + ":" + mask.OneLine(cls)
 		switch {
-		case flagged[cls]:
+		case model.NeedsAttention(cls):
 			cells[i] = theme.Bad.Render(txt + "!")
-		case cls == "clean" || cls == "converged":
+		case model.IsSettled(cls):
 			cells[i] = theme.OK.Render(txt)
 		default:
 			cells[i] = theme.Warn.Render(txt)
@@ -177,7 +171,7 @@ func allowlist(srv source.Server) string {
 	return strings.Join(names, ",")
 }
 
-func (s *Screen) detailView() string {
+func (s *Screen) detailView() []string {
 	srv, ok := s.selected()
 	if !ok {
 		return s.listView()
@@ -212,7 +206,7 @@ func (s *Screen) detailView() string {
 	if s.note != "" {
 		out = append(out, theme.Warn.Render(s.note))
 	}
-	return strings.Join(out, "\n")
+	return out
 }
 
 // appendKV renders a map as sorted "KEY = <masked value>" lines.
@@ -225,7 +219,7 @@ func appendKV(out []string, title string, m map[string]string) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	for _, k := range keys {
 		out = append(out, "    "+mask.OneLine(mask.Text(k))+" = "+mask.OneLine(mask.Value(m[k])))
 	}
@@ -244,7 +238,7 @@ func extraLines(extra map[string]any) []string {
 	if len(keys) == 0 {
 		return nil
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	out := []string{"  other:"}
 	for _, k := range keys {
 		var v string

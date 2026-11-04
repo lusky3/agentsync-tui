@@ -103,3 +103,37 @@ func TestParseErrors(t *testing.T) {
 		t.Fatalf("diff err = %v", err)
 	}
 }
+
+func TestClassHelpersAndPointer(t *testing.T) {
+	for _, c := range []string{"drift", "conflict", "foreign-collision", "orphan-drifted"} {
+		if !NeedsAttention(c) || IsSettled(c) {
+			t.Errorf("%s: NeedsAttention=%v IsSettled=%v", c, NeedsAttention(c), IsSettled(c))
+		}
+	}
+	for _, c := range []string{"clean", "converged"} {
+		if NeedsAttention(c) || !IsSettled(c) {
+			t.Errorf("%s: NeedsAttention=%v IsSettled=%v", c, NeedsAttention(c), IsSettled(c))
+		}
+	}
+	for _, c := range []string{"new", "pending", "orphan", ""} {
+		if NeedsAttention(c) || IsSettled(c) {
+			t.Errorf("%s: classed", c)
+		}
+	}
+	cases := map[string]struct {
+		id string
+		ok bool
+	}{
+		"/mcpServers/x":        {"x", true},
+		"/mcpServers/a~1b~0c":  {"a/b~c", true},
+		"/mcpServers/":         {"", false},
+		"/mcpServers/x/args/1": {"", false},
+		"/other/x":             {"", false},
+		"mcpServers/x":         {"", false},
+	}
+	for in, want := range cases {
+		if id, ok := MCPServerID(in); id != want.id || ok != want.ok {
+			t.Errorf("MCPServerID(%q) = %q, %v", in, id, ok)
+		}
+	}
+}

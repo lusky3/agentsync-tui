@@ -6,44 +6,35 @@ package agents
 
 import (
 	"context"
-	"strconv"
+	"slices"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
-	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/model"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
-)
-
-// listTimeout bounds one `agent list --all` refresh; verifyTimeout bounds the
-// pre-mutation re-read, which the user is waiting on.
-const (
-	listTimeout   = 30 * time.Second
-	verifyTimeout = 5 * time.Second
 )
 
 const staleNote = "agent list changed — refreshed"
 
 // Screen is the agents tab.
 type Screen struct {
-	d     ui.Deps
+	base  context.Context
+	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
 	run   runner.Runner
-	scope runner.Scope
-	gen   int // refresh generation; older results are dropped
+	reads ui.Rounds // the list read; superseded rounds are cancelled
 
 	loaded bool
 	agents []model.Agent
-	cursor int
+	list   ui.List
 	// loadNote explains why the last refresh failed (display-safe); the
 	// last good list is kept.
 	loadNote string
 	note     string // last screen message, display-safe
-	// verifying is set while a pre-mutation re-read is in flight; vreq
-	verifying bool
-	vreq      int
+
+	verify ui.Verifier // the pre-mutation re-read
 
 	width, height int
 }
@@ -55,9 +46,8 @@ type listMsg struct {
 	note   string // non-empty: the read failed
 }
 
-// verifyMsg carries the fresh list read for one pending mutation.
-type verifyMsg struct {
-	req   int
+// verification is what the pre-mutation re-read brings back.
+type verification struct {
 	key   string
 	sel   model.Agent
 	fresh listMsg
@@ -65,7 +55,7 @@ type verifyMsg struct {
 
 // New returns the agents screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{d: d, run: d.Runner, scope: d.Scope, width: 80, height: 20}
+	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, width: 80, height: 20}
 }
 
 // Title implements ui.Screen.
@@ -75,46 +65,42 @@ func (s *Screen) Title() string { return "Agents" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
-	s.run, s.scope = r, sc
+func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, _ string) {
+	s.run = r
+	s.reads.Supersede()
 	s.invalidate()
+}
+
+// Shutdown implements ui.Shutdowner.
+func (s *Screen) Shutdown() {
+	s.reads.Cancel()
+	s.verify.Invalidate()
 }
 
 // invalidate drops any in-flight verification: its result will be ignored.
 func (s *Screen) invalidate() {
-	if s.verifying {
-		s.verifying, s.note = false, ""
+	if s.verify.Busy() {
+		s.note = ""
 	}
-	s.vreq++
+	s.verify.Invalidate()
 }
 
 // CapturesKeys implements ui.KeyCapturer: this screen has no text input.
 func (s *Screen) CapturesKeys() bool { return false }
 
-// Refresh re-reads the agent list through the Runner.
+// Refresh re-reads the agent list through the Runner, cancelling the
+// previous read.
 func (s *Screen) Refresh() tea.Cmd {
-	s.gen++
 	s.invalidate()
-	gen, r, base := s.gen, s.run, ui.BaseCtx(s.d)
-	return func() tea.Msg { return readList(base, gen, r, listTimeout) }
+	gen, ctx := s.reads.Next(s.base)
+	r, limit := s.run, s.limit
+	return func() tea.Msg { return readList(ctx, gen, r, limit) }
 }
 
-func readList(base context.Context, gen int, r runner.Runner, timeout time.Duration) listMsg {
-	if r == nil {
-		return listMsg{gen: gen, note: "no runner"}
-	}
-	ctx, cancel := context.WithTimeout(base, timeout)
-	defer cancel()
-	res, err := r.Run(ctx, "agent", "list", "--all")
-	if err != nil {
-		return listMsg{gen: gen, note: mask.OneLine(mask.Text(err.Error()))}
-	}
-	if res.ExitCode != 0 {
-		n := "agent list exited " + strconv.Itoa(res.ExitCode)
-		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
-			n += ": " + l
-		}
-		return listMsg{gen: gen, note: n}
+func readList(ctx context.Context, gen int, r runner.Runner, timeout time.Duration) listMsg {
+	res, err := ui.Read(ctx, r, timeout, "agent", "list", "--all")
+	if note := ui.ReadNote("agent list", res, err); note != "" {
+		return listMsg{gen: gen, note: note}
 	}
 	list, err := model.ParseAgentList(res.Stdout)
 	if err != nil {
@@ -129,11 +115,13 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width, s.height = msg.Width, msg.Height
 	case listMsg:
-		if msg.gen == s.gen {
+		if s.reads.Current(msg.gen) {
 			s.apply(msg)
 		}
-	case verifyMsg:
-		return s, s.verified(msg)
+	case ui.VerifiedMsg:
+		if v, ok := s.verify.Accept(msg); ok {
+			return s, s.verified(v.(verification))
+		}
 	case tea.KeyPressMsg:
 		return s, s.key(msg.String())
 	}
@@ -147,24 +135,22 @@ func (s *Screen) apply(m listMsg) {
 		return
 	}
 	s.loadNote, s.agents = "", m.agents
-	s.cursor = max(min(s.cursor, len(s.agents)-1), 0)
+	s.list.Clamp(len(s.agents))
 }
 
 func (s *Screen) selected() (model.Agent, bool) {
-	if s.cursor < 0 || s.cursor >= len(s.agents) {
+	if s.list.Cursor < 0 || s.list.Cursor >= len(s.agents) {
 		return model.Agent{}, false
 	}
-	return s.agents[s.cursor], true
+	return s.agents[s.list.Cursor], true
 }
 
 func (s *Screen) key(k string) tea.Cmd {
+	if s.list.Key(k, len(s.agents)) {
+		s.invalidate()
+		return nil
+	}
 	switch k {
-	case "up", "k":
-		s.cursor = max(s.cursor-1, 0)
-		s.invalidate()
-	case "down", "j":
-		s.cursor = max(min(s.cursor+1, len(s.agents)-1), 0)
-		s.invalidate()
 	case "r":
 		s.note = ""
 		return s.Refresh()
@@ -178,7 +164,7 @@ func (s *Screen) key(k string) tea.Cmd {
 // read of the list; the action is only built and emitted in verified, once
 // the result arrives and still applies.
 func (s *Screen) mutate(k string) tea.Cmd {
-	if s.verifying {
+	if s.verify.Busy() {
 		s.note = "still verifying the agent list — wait"
 		return nil
 	}
@@ -198,33 +184,27 @@ func (s *Screen) mutate(k string) tea.Cmd {
 		s.note = "not registered — press a to add it first"
 		return nil
 	}
-	s.vreq++
-	s.verifying, s.note = true, "verifying…"
-	req, r, base := s.vreq, s.run, ui.BaseCtx(s.d)
-	return func() tea.Msg {
-		return verifyMsg{req: req, key: k, sel: sel, fresh: readList(base, 0, r, verifyTimeout)}
-	}
+	s.note = "verifying…"
+	r := s.run
+	return s.verify.Start(s.base, func(ctx context.Context) any {
+		return verification{key: k, sel: sel, fresh: readList(ctx, 0, r, ui.VerifyTimeout)}
+	})
 }
 
-// verified handles a re-read result: stale requests are dropped; a current
-// request always ends the verifying state, and a failed read or a changed
-// or re-ordered agent then emits nothing.
-func (s *Screen) verified(m verifyMsg) tea.Cmd {
-	if !s.verifying || m.req != s.vreq {
-		return nil
-	}
-	s.verifying = false
-	if cur, ok := s.selected(); !ok || cur.Name != m.sel.Name {
+// verified handles a current re-read result: a failed read or a changed or
+// re-ordered agent emits nothing.
+func (s *Screen) verified(v verification) tea.Cmd {
+	if cur, ok := s.selected(); !ok || cur.Name != v.sel.Name {
 		s.note = ""
 		return nil
 	}
-	sel, k, fresh := m.sel, m.key, m.fresh
+	sel, k, fresh := v.sel, v.key, v.fresh
 	if fresh.note != "" {
 		s.note = "cannot verify the agent list: " + fresh.note
 		return nil
 	}
-	now, found := find(fresh.agents, sel.Name)
-	if !found || now.Registered != sel.Registered || now.Enabled != sel.Enabled || now.Scope != sel.Scope {
+	i := slices.IndexFunc(fresh.agents, func(a model.Agent) bool { return a.Name == sel.Name })
+	if i < 0 || fresh.agents[i] != sel {
 		s.apply(fresh)
 		s.note = staleNote
 		return s.Refresh()
@@ -243,19 +223,5 @@ func (s *Screen) verified(m verifyMsg) tea.Cmd {
 	default:
 		act, err = actions.AgentEnable(sel.Name)
 	}
-	if err != nil {
-		s.note = "error: " + mask.FirstLine(mask.Text(err.Error()))
-		return nil
-	}
-	s.note = ""
-	return func() tea.Msg { return ui.DoMsg{Action: act} }
-}
-
-func find(list []model.Agent, name string) (model.Agent, bool) {
-	for _, a := range list {
-		if a.Name == name {
-			return a, true
-		}
-	}
-	return model.Agent{}, false
+	return ui.DoOr(act, err, &s.note)
 }

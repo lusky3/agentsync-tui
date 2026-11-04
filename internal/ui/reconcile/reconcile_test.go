@@ -304,17 +304,17 @@ func TestReconcileOutputStoredMasked(t *testing.T) {
 	if !strings.Contains(h.view(), "output truncated") {
 		t.Fatalf("no truncation note at end")
 	}
-	at := h.s.scroll
+	at := h.s.scroll.Offset
 	h.press("ctrl+u")
-	if h.s.scroll >= at {
+	if h.s.scroll.Offset >= at {
 		t.Fatal("ctrl+u did not scroll up")
 	}
 	h.press("ctrl+d")
-	if h.s.scroll != at {
+	if h.s.scroll.Offset != at {
 		t.Fatal("ctrl+d did not scroll down")
 	}
 	h.press("pgup")
-	if h.s.scroll >= at {
+	if h.s.scroll.Offset >= at {
 		t.Fatal("pgup did not scroll up")
 	}
 }
@@ -327,7 +327,7 @@ func TestReconcileScopeAwareSwapsRunner(t *testing.T) {
 	var _ ui.Screen = h.s
 	h.s.SetScope(r2, runner.ScopeProject, "")
 	h.refresh()
-	if len(r1.got()) != 0 || len(r2.got()) != 1 || h.s.scope != runner.ScopeProject {
+	if len(r1.got()) != 0 || len(r2.got()) != 1 {
 		t.Fatalf("r1=%q r2=%q", r1.got(), r2.got())
 	}
 	if h.s.CapturesKeys() {

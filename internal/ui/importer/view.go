@@ -9,17 +9,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
-const (
-	keysTxt = "a/A agent • c/C component • n name • p preview • i import • r reload agents • ctrl+d/ctrl+u scroll"
-	// headLines is the number of fixed lines above the output body.
-	headLines = 8
-)
-
-// avail is how many output lines fit under the header and above the footer.
-func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
+const keysTxt = "a/A agent • c/C component • n name • p preview • i import • r reload agents • " + ui.ScrollKeys
 
 func (s *Screen) outLines() []string {
 	if s.out == nil {
@@ -27,8 +21,6 @@ func (s *Screen) outLines() []string {
 	}
 	return s.out.Lines()
 }
-
-func (s *Screen) maxScroll() int { return max(len(s.outLines())-s.avail(), 0) }
 
 func (s *Screen) agentLine() string {
 	switch {
@@ -54,14 +46,15 @@ func (s *Screen) agentLine() string {
 	return line
 }
 
-// View implements tea.Model. Every outside string is sanitised or masked.
-func (s *Screen) View() tea.View {
+// header is every fixed line above the output: the form, the command, the
+// status and the output title. The body gets whatever height is left.
+func (s *Screen) header() []string {
 	lines := []string{
 		theme.Bold.Render("Import") + theme.Dim.Render("  adopt an agent's native config into the canonical source"),
 		s.agentLine(),
 		"  component: " + theme.Bold.Render(compLabel(s.comp)),
 	}
-	name := mask.OneLine(s.name)
+	name := mask.OneLine(s.name.Value)
 	switch {
 	case s.typing:
 		name = theme.Sel.Render(name + " ")
@@ -97,12 +90,12 @@ func (s *Screen) View() tea.View {
 			head += "  " + theme.Bad.Render(mask.OneLine(s.out.Note))
 		}
 	}
-	lines = append(lines, head)
-	body := s.outLines()
-	start := min(s.scroll, s.maxScroll())
-	end := min(start+s.avail(), len(body))
-	lines = append(lines, body[start:end]...)
-	lines = append(lines, theme.Dim.Render(keysTxt))
+	return append(lines, head)
+}
+
+// View implements tea.Model. Every outside string is sanitised or masked.
+func (s *Screen) View() tea.View {
+	lines := s.scroll.Frame(s.header(), s.outLines(), []string{theme.Dim.Render(keysTxt)}, s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}

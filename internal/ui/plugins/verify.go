@@ -1,31 +1,27 @@
 package plugins
 
 import (
+	"context"
+	"slices"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
-	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/model"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
 // guard refuses mutating keys while a pre-mutation check is in flight.
 func (s *Screen) guard() bool {
-	if s.verifying {
+	if s.verify.Busy() {
 		s.note = "still verifying the list — wait"
 		return false
 	}
 	return true
 }
 
-func (s *Screen) emit(act actions.Action, err error) tea.Cmd {
-	if err != nil {
-		s.note = "error: " + mask.FirstLine(err.Error())
-		return nil
-	}
-	s.note = ""
-	return func() tea.Msg { return ui.DoMsg{Action: act} }
-}
+// emit hands a built action to the shell, or shows the builder error.
+func (s *Screen) emit(act actions.Action, err error) tea.Cmd { return ui.DoOr(act, err, &s.note) }
 
 // mutate gates e/x/u on the selection, then starts an asynchronous fresh
 // read of the pane's list; the action is only built and emitted in verified,
@@ -34,7 +30,7 @@ func (s *Screen) mutate(k string) tea.Cmd {
 	if !s.guard() {
 		return nil
 	}
-	v := verifyMsg{req: s.vreq + 1, key: k, pane: s.pane}
+	v := verification{key: k, pane: s.pane}
 	switch {
 	case s.pane == panePlugins && k != "e" && k != "x" && k != "u":
 		return nil
@@ -57,95 +53,77 @@ func (s *Screen) mutate(k string) tea.Cmd {
 		}
 		v.m = m
 	}
-	s.vreq++
-	s.verifying, s.note = true, "verifying…"
-	r, base := s.run, ui.BaseCtx(s.d)
-	return func() tea.Msg {
+	s.note = "verifying…"
+	r := s.run
+	return s.verify.Start(s.base, func(ctx context.Context) any {
 		if v.pane == panePlugins {
-			v.pf = readPlugins(base, 0, r, verifyTimeout)
+			v.pf = readPlugins(ctx, 0, r, ui.VerifyTimeout)
 		} else {
-			v.mf = readMarkets(base, 0, r, verifyTimeout)
+			v.mf = readMarkets(ctx, 0, r, ui.VerifyTimeout)
 		}
 		return v
-	}
+	})
 }
 
-// verified handles a re-read result. A stale request is dropped; a matching
-// request always ends the verifying state, whatever it then decides.
-func (s *Screen) verified(m verifyMsg) tea.Cmd {
-	if !s.verifying || m.req != s.vreq {
-		return nil
-	}
-	s.verifying = false
-	if m.pane != s.pane {
+// verified handles a current re-read result, whatever it then decides.
+func (s *Screen) verified(v verification) tea.Cmd {
+	if v.pane != s.pane {
 		s.note = ""
 		return nil
 	}
-	if m.pane == panePlugins {
-		return s.verifiedPlugin(m)
+	if v.pane == panePlugins {
+		return s.verifiedPlugin(v)
 	}
-	return s.verifiedMarket(m)
+	return s.verifiedMarket(v)
 }
 
-func (s *Screen) verifiedPlugin(m verifyMsg) tea.Cmd {
-	if cur, ok := s.selPlugin(); !ok || cur.Name != m.p.Name {
+func (s *Screen) verifiedPlugin(v verification) tea.Cmd {
+	if cur, ok := s.selPlugin(); !ok || cur.Name != v.p.Name {
 		s.note = ""
 		return nil
 	}
-	if m.pf.note != "" {
-		s.note = "cannot verify the plugin list: " + m.pf.note
+	if v.pf.note != "" {
+		s.note = "cannot verify the plugin list: " + v.pf.note
 		return nil
 	}
-	now, found := model.Plugin{}, false
-	for _, p := range m.pf.plugins {
-		if p.Name == m.p.Name {
-			now, found = p, true
-			break
-		}
-	}
-	if !found || now != m.p {
-		s.applyPlugins(m.pf)
+	i := slices.IndexFunc(v.pf.plugins, func(p model.Plugin) bool { return p.Name == v.p.Name })
+	if i < 0 || v.pf.plugins[i] != v.p {
+		s.applyPlugins(v.pf)
 		s.note = staleNote
 		return s.Refresh()
 	}
-	switch m.key {
+	switch v.key {
 	case "x":
-		a, err := actions.PluginRemove(m.p.Name)
+		a, err := actions.PluginRemove(v.p.Name)
 		a.Warning = "Removes the plugin and its cached files. This cannot be undone."
 		return s.emit(a, err)
 	case "u":
-		return s.emit(actions.PluginUpgrade(m.p.Name))
+		return s.emit(actions.PluginUpgrade(v.p.Name))
 	case "e":
-		if m.p.Enabled {
-			return s.emit(actions.PluginDisable(m.p.Name))
+		if v.p.Enabled {
+			return s.emit(actions.PluginDisable(v.p.Name))
 		}
-		return s.emit(actions.PluginEnable(m.p.Name))
+		return s.emit(actions.PluginEnable(v.p.Name))
 	}
 	return nil
 }
 
-func (s *Screen) verifiedMarket(m verifyMsg) tea.Cmd {
-	if cur, ok := s.selMarket(); !ok || cur.Name != m.m.Name {
+func (s *Screen) verifiedMarket(v verification) tea.Cmd {
+	if cur, ok := s.selMarket(); !ok || cur.Name != v.m.Name {
 		s.note = ""
 		return nil
 	}
-	if m.mf.note != "" {
-		s.note = "cannot verify the marketplace list: " + m.mf.note
+	if v.mf.note != "" {
+		s.note = "cannot verify the marketplace list: " + v.mf.note
 		return nil
 	}
-	now, found := model.Marketplace{}, false
-	for _, x := range m.mf.markets {
-		if x.Name == m.m.Name {
-			now, found = x, true
-			break
-		}
-	}
-	if !found || now != m.m {
-		s.applyMarkets(m.mf)
+	i := slices.IndexFunc(v.mf.markets, func(m model.Marketplace) bool { return m.Name == v.m.Name })
+	if i < 0 || v.mf.markets[i] != v.m {
+		s.applyMarkets(v.mf)
 		s.note = staleNote
 		return s.Refresh()
 	}
-	a, err := actions.MarketplaceRemove(m.m.Name)
+	a, err := actions.MarketplaceRemove(v.m.Name)
 	a.Warning = "Removes the marketplace and its cached files. This cannot be undone."
 	return s.emit(a, err)
 }

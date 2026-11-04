@@ -27,23 +27,48 @@ type StatusItem struct {
 	State   string `json:"class"`
 }
 
-// driftStates are classifications that mean the destination will be
-// overwritten or reclaimed (the legend's ✗ entries).
-var driftStates = map[string]bool{
-	"drift": true, "conflict": true, "foreign-collision": true, "orphan-drifted": true,
-}
+// attention lists the classifications that mean the destination will be
+// overwritten or reclaimed (the legend's ✗ entries); settled the ones where
+// destination and canonical agree.
+var (
+	attention = map[string]bool{"drift": true, "conflict": true, "foreign-collision": true, "orphan-drifted": true}
+	settled   = map[string]bool{"clean": true, "converged": true}
+)
+
+// NeedsAttention reports whether class means the destination was edited
+// outside agentsync (the drift filter, the red state cell).
+func NeedsAttention(class string) bool { return attention[class] }
+
+// IsSettled reports whether class means destination and canonical agree.
+func IsSettled(class string) bool { return settled[class] }
 
 // Drifted returns the items whose destination was edited outside agentsync.
 func (r StatusReport) Drifted() []StatusItem {
 	var out []StatusItem
 	for _, a := range r.Agents {
 		for _, it := range a.Items {
-			if driftStates[it.State] {
+			if NeedsAttention(it.State) {
 				out = append(out, it)
 			}
 		}
 	}
 	return out
+}
+
+// MCPServerID returns <id> for a JSON pointer of exactly "/mcpServers/<id>"
+// (pointer-unescaped: ~1 is '/', ~0 is '~'); ok is false for any other
+// shape, including deeper pointers.
+func MCPServerID(pointer string) (id string, ok bool) {
+	rest, ok := strings.CutPrefix(pointer, "/mcpServers/")
+	if !ok || rest == "" || strings.Contains(rest, "/") {
+		return "", false
+	}
+	return UnescapePointer(rest), true
+}
+
+// UnescapePointer undoes JSON-pointer escaping (RFC 6901) on one segment.
+func UnescapePointer(seg string) string {
+	return strings.NewReplacer("~1", "/", "~0", "~").Replace(seg)
 }
 
 // ParseStatus parses `agentsync status --json` stdout.

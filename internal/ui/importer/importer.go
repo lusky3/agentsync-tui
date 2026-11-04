@@ -2,9 +2,9 @@
 // component and optionally one item name, preview `agentsync import
 // <selector> --dry-run`, then run the real import. The real command is only
 // offered after a successful preview of the same selector in the same scope
-// (see gate), and it is emitted as a ui.DoMsg so the shell's confirm modal
-// stands between the user and the mutation. The screen never runs an import
-// itself; its only direct read is `agent list`.
+// (see gate.Gate), and it is emitted as a ui.DoMsg so the shell's confirm
+// modal stands between the user and the mutation. The screen never runs an
+// import itself; its only direct read is `agent list`.
 //
 // Command output is free text that can carry resolved values, so only the
 // mask.Text-then-Sanitize form is ever stored or rendered.
@@ -13,23 +13,22 @@ package importer
 import (
 	"context"
 	"errors"
-	"strconv"
+	"slices"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
-	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/model"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/gate"
 )
 
-// readTimeout bounds the agent list read.
-const readTimeout = 30 * time.Second
-
 const msgPreviewFirst = "preview first"
+
+// maxName caps the item-name field (bytes); identifiers are far shorter.
+const maxName = 256
 
 // components in cycle order; "" is "all" (the agent's full native config).
 var components = []string{"", "mcp", "skill", "subagent", "command", "hook", "lsp", "memory", "plugin"}
@@ -51,23 +50,24 @@ type agentsMsg struct {
 
 // Screen is the import tab.
 type Screen struct {
-	d     ui.Deps
+	base  context.Context
+	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
 	run   runner.Runner
-	scope runner.Scope
+	scope runner.Scope // the preview is bound to it (gate.Gate)
+	reads ui.Rounds    // the agent list read; superseded rounds are cancelled
 
-	agen   int // agent list generation; older results are dropped
 	loaded bool
 	agents []model.Agent // registered agents only
 	note   string        // why the agent list is unavailable, display-safe
 
-	agent  string // selected agent name
-	comp   string // selected component ("" = all)
-	name   string // optional item name
-	typing bool   // the name field has focus
+	agent  string   // selected agent name
+	comp   string   // selected component ("" = all)
+	name   ui.Field // optional item name
+	typing bool     // the name field has focus
 
 	g      gate.Gate
 	out    *ui.Output
-	scroll int
+	scroll ui.Scroll
 	msg    string
 
 	width, height int
@@ -75,7 +75,10 @@ type Screen struct {
 
 // New returns the import screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{d: d, run: d.Runner, scope: d.Scope, width: 80, height: 20}
+	return &Screen{
+		base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, scope: d.Scope,
+		name: ui.Field{Max: maxName}, width: 80, height: 20,
+	}
 }
 
 // Title implements ui.Screen.
@@ -84,36 +87,24 @@ func (s *Screen) Title() string { return "Import" }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// Refresh reloads the agent list. It deliberately keeps the preview: the
-// shell refreshes the screen after every run, including the dry run itself.
+// Refresh reloads the agent list, cancelling the previous read. It
+// deliberately keeps the preview: the shell refreshes the screen after every
+// run, including the dry run itself.
 func (s *Screen) Refresh() tea.Cmd {
-	s.agen++
-	gen, r, base := s.agen, s.run, ui.BaseCtx(s.d)
-	return func() tea.Msg { return readAgents(base, gen, r) }
+	gen, ctx := s.reads.Next(s.base)
+	r, limit := s.run, s.limit
+	return func() tea.Msg { return readAgents(ctx, gen, r, limit) }
 }
 
-func readAgents(base context.Context, gen int, r runner.Runner) agentsMsg {
+func readAgents(ctx context.Context, gen int, r runner.Runner, timeout time.Duration) agentsMsg {
 	m := agentsMsg{gen: gen}
-	if r == nil {
-		m.note = "agent list unavailable: no runner"
-		return m
-	}
-	ctx, cancel := context.WithTimeout(base, readTimeout)
-	defer cancel()
-	res, err := r.Run(ctx, "agent", "list")
-	if err != nil {
-		m.note = "agent list unavailable: " + mask.FirstLine(err.Error())
+	res, err := ui.Read(ctx, r, timeout, "agent", "list")
+	if m.note = ui.ReadNote("agent list", res, err); m.note != "" {
 		return m
 	}
 	list, perr := model.ParseAgentList(res.Stdout)
-	if perr != nil || res.ExitCode != 0 {
-		m.note = "agent list failed"
-		if res.ExitCode != 0 {
-			m.note += " (exit " + strconv.Itoa(res.ExitCode) + ")"
-		}
-		if l := mask.FirstLine(res.Stderr); l != "" {
-			m.note += ": " + l
-		}
+	if perr != nil {
+		m.note = "agent list output unreadable"
 		return m
 	}
 	for _, a := range list {
@@ -129,24 +120,24 @@ func readAgents(base context.Context, gen int, r runner.Runner) agentsMsg {
 // list, the preview and any output.
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
-	s.agen++
+	s.reads.Supersede()
 	s.loaded, s.agents, s.note = false, nil, ""
 	s.g.Reset()
-	s.out, s.scroll, s.msg = nil, 0, ""
+	s.out, s.scroll, s.msg = nil, ui.Scroll{}, ""
 }
+
+// Shutdown implements ui.Shutdowner.
+func (s *Screen) Shutdown() { s.reads.Cancel() }
 
 // CapturesKeys implements ui.KeyCapturer: true while the name field has focus.
 func (s *Screen) CapturesKeys() bool { return s.typing }
-
-func (s *Screen) agentName() string { return s.agent }
-func (s *Screen) component() string { return s.comp }
 
 // pair returns the dry run and the real import for the current inputs.
 func (s *Screen) pair() (actions.Previewed, error) {
 	if s.agent == "" {
 		return actions.Previewed{}, errNoAgent
 	}
-	return actions.ImportPair(s.agent, s.comp, s.name)
+	return actions.ImportPair(s.agent, s.comp, s.name.Value)
 }
 
 var errNoAgent = errors.New("no agent selected")
@@ -156,9 +147,8 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width, s.height = msg.Width, msg.Height
-		s.scroll = min(s.scroll, s.maxScroll())
 	case agentsMsg:
-		if msg.gen == s.agen {
+		if s.reads.Current(msg.gen) {
 			s.onAgents(msg)
 		}
 	case ui.RunMsg:
@@ -183,10 +173,8 @@ func (s *Screen) onAgents(m agentsMsg) {
 		return
 	}
 	s.agents = m.agents
-	for _, a := range s.agents {
-		if a.Name == s.agent {
-			return
-		}
+	if slices.ContainsFunc(s.agents, func(a model.Agent) bool { return a.Name == s.agent }) {
+		return
 	}
 	// The selection is gone: pick the first agent. The selector changed, so
 	// the preview no longer describes the real command: drop it (the gate's
@@ -206,21 +194,8 @@ func (s *Screen) typed(k tea.KeyPressMsg) {
 	case "enter", "esc":
 		s.typing = false
 		return
-	case "backspace":
-		if r := []rune(s.name); len(r) > 0 {
-			s.name = string(r[:len(r)-1])
-			s.edited()
-		}
-		return
-	case "ctrl+u":
-		if s.name != "" {
-			s.name = ""
-			s.edited()
-		}
-		return
 	}
-	if k.Text != "" && k.Mod&(tea.ModCtrl|tea.ModAlt) == 0 {
-		s.name += mask.Sanitize(k.Text)
+	if _, changed := s.name.Key(k); changed {
 		s.edited()
 	}
 }
@@ -232,7 +207,9 @@ func (s *Screen) edited() {
 }
 
 func (s *Screen) key(k string) tea.Cmd {
-	page := max(s.avail()/2, 1)
+	if s.scroll.Key(k, len(s.outLines())) {
+		return nil
+	}
 	switch k {
 	case "a":
 		s.cycleAgent(1)
@@ -250,12 +227,7 @@ func (s *Screen) key(k string) tea.Cmd {
 		return s.commit()
 	case "r":
 		return s.Refresh()
-	case "ctrl+d", "pgdown":
-		s.scroll += page
-	case "ctrl+u", "pgup":
-		s.scroll = max(s.scroll-page, 0)
 	}
-	s.scroll = min(s.scroll, s.maxScroll())
 	return nil
 }
 
@@ -264,23 +236,13 @@ func (s *Screen) cycleAgent(d int) {
 	if n == 0 {
 		return
 	}
-	i := 0
-	for j, a := range s.agents {
-		if a.Name == s.agent {
-			i = j
-		}
-	}
+	i := max(slices.IndexFunc(s.agents, func(a model.Agent) bool { return a.Name == s.agent }), 0)
 	s.agent = s.agents[((i+d)%n+n)%n].Name
 	s.edited()
 }
 
 func (s *Screen) cycleComp(d int) {
-	i := 0
-	for j, c := range components {
-		if c == s.comp {
-			i = j
-		}
-	}
+	i := max(slices.Index(components, s.comp), 0)
 	n := len(components)
 	s.comp = components[((i+d)%n+n)%n]
 	s.edited()
@@ -350,5 +312,5 @@ func (s *Screen) onEdit(m ui.EditOutcomeMsg) {
 // store keeps only the masked, capped form of the run's output (ui.OutputOf).
 func (s *Screen) store(m ui.RunMsg) {
 	o := ui.OutputOf(m)
-	s.out, s.scroll = &o, 0
+	s.out, s.scroll = &o, ui.Scroll{}
 }

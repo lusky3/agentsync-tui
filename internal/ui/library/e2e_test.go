@@ -422,7 +422,7 @@ func TestOwnCheckShownAfterSuccessfulEdit(t *testing.T) {
 	}
 	fileIs(t, p, "x\npwned\n")
 	s := e.screens[Skill]
-	if s.check == nil || s.check.state != "passed" || !strings.Contains(scrView(s), "check passed") {
+	if s.check == nil || s.check.state != checkPassed || !strings.Contains(scrView(s), "check passed") {
 		t.Errorf("own check missing: %v\n%s", s.check, scrView(s))
 	}
 	if s.awaiting {
@@ -497,8 +497,9 @@ func TestOutcomeStateMachine(t *testing.T) {
 }
 
 // TestEachScreenKeepsItsOwnList: with every kind registered in one real App,
-// App.Init makes all screens refresh with the same generation; each must
-// still show only its own list.
+// Every screen refreshes when it is first shown, with its own generation
+// counter; each must still show only its own list, not the broadcast
+// results of the others.
 func TestEachScreenKeepsItsOwnList(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "memory", "fragments"), 0o700); err != nil {
@@ -518,6 +519,9 @@ func TestEachScreenKeepsItsOwnList(t *testing.T) {
 	}}
 	kinds := []Kind{Skill, Subagent, Command, Hook, LSP, Memory}
 	e := startE2E(t, home, fr, kinds...)
+	for range kinds[1:] {
+		e.sendKey("tab") // show each screen once so it loads
+	}
 	e.waitLists(len(kinds))
 	e.finish()
 	want := map[Kind][]string{

@@ -1,58 +1,61 @@
 package secrets
 
 import (
-	"sort"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
-	listKeys    = "n new • u update selected • E edit all in $EDITOR • x remove • j/k move • r refresh"
+	listKeys    = "n new • u update selected • E edit all in $EDITOR • x remove • r refresh • " + ui.ScrollKeys
 	fieldKeys   = "enter set (agentsync prompts for the value) • esc cancel"
 	emptyNotice = "no secrets stored — press n to add one"
 )
 
 // View implements tea.Model. Every outside string is sanitised or masked;
-// secret values are never held, so none can be shown.
+// secret values are never held, so none can be shown. The rows are
+// windowed around the cursor so the footer is always visible.
 func (s *Screen) View() tea.View {
-	var out []string
+	var header, rows []string
 	switch {
 	case !s.loaded:
-		out = append(out, theme.Dim.Render("loading…"))
+		header = append(header, theme.Dim.Render("loading…"))
 	case s.vault == vaultNotConfigured:
-		out = append(out, s.notConfigured()...)
+		header = append(header, s.notConfigured()...)
 	case len(s.keys) == 0 && s.vault == vaultOK:
-		out = append(out, emptyNotice)
+		header = append(header, emptyNotice)
 	default:
-		out = append(out, s.rows()...)
+		header, rows = s.table()
 	}
+	var footer []string
 	if s.loaded {
-		out = append(out, s.crossCheck()...)
+		footer = append(footer, s.crossCheck()...)
 	}
 	if s.loadNote != "" {
-		out = append(out, theme.Dim.Render("secret list unavailable: "+s.loadNote))
+		footer = append(footer, theme.Dim.Render("secret list unavailable: "+s.loadNote))
 	}
 	if s.srvNote != "" {
-		out = append(out, theme.Dim.Render("servers unavailable: "+s.srvNote))
+		footer = append(footer, theme.Dim.Render("servers unavailable: "+s.srvNote))
 	}
 	if s.note != "" {
-		out = append(out, theme.Warn.Render(s.note))
+		footer = append(footer, theme.Warn.Render(s.note))
 	}
 	if s.typing {
-		out = append(out, theme.Bold.Render("key name: ")+display(s.input)+"▏")
+		footer = append(footer, theme.Bold.Render("key name: ")+display(s.input.Value)+"▏")
 		if s.fieldErr != "" {
-			out = append(out, theme.Warn.Render(s.fieldErr))
+			footer = append(footer, theme.Warn.Render(s.fieldErr))
 		}
-		out = append(out, theme.Dim.Render(fieldKeys))
+		footer = append(footer, theme.Dim.Render(fieldKeys))
 	} else {
-		out = append(out, theme.Dim.Render(listKeys))
+		footer = append(footer, theme.Dim.Render(listKeys))
 	}
-	lines := strings.Split(strings.Join(out, "\n"), "\n")
+	lines := s.list.Frame(header, rows, footer, s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}
@@ -69,21 +72,22 @@ func (s *Screen) notConfigured() []string {
 		"see `agentsync secret --help`")
 }
 
-func (s *Screen) rows() []string {
-	out := []string{theme.Bold.Render("  " + theme.Pad("KEY", 30) + "USED BY")}
+// table returns the column header and one row per key.
+func (s *Screen) table() (header, rows []string) {
+	header = []string{theme.Bold.Render("  " + theme.Pad("KEY", 30) + "USED BY")}
 	for i, k := range s.keys {
 		users := "(none)"
 		if ids := s.uses[k]; len(ids) > 0 {
 			users = strings.Join(ids, ", ")
 		}
 		line := theme.Pad(display(k), 30) + "used by: " + users
-		if i == s.cursor {
-			out = append(out, theme.Sel.Render("> "+line))
+		if i == s.list.Cursor {
+			rows = append(rows, theme.Sel.Render("> "+line))
 		} else {
-			out = append(out, "  "+line)
+			rows = append(rows, "  "+line)
 		}
 	}
-	return out
+	return header, rows
 }
 
 // crossCheck lists referenced keys that the vault does not hold, or says the
@@ -95,17 +99,13 @@ func (s *Screen) crossCheck() []string {
 	if s.vault != vaultOK {
 		return []string{theme.Warn.Render("cannot check — vault unavailable")}
 	}
-	have := map[string]bool{}
-	for _, k := range s.keys {
-		have[k] = true
-	}
 	var missing []string
 	for k := range s.uses {
-		if !have[k] {
+		if !slices.Contains(s.keys, k) {
 			missing = append(missing, k)
 		}
 	}
-	sort.Strings(missing)
+	slices.Sort(missing)
 	var out []string
 	for _, k := range missing {
 		out = append(out, theme.Warn.Render("missing: "+display(k)+" (used by "+strings.Join(s.uses[k], ", ")+")"))

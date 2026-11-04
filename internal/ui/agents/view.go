@@ -5,40 +5,45 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
-	listKeys    = "a add • e enable/disable • x remove • D disable+purge (deletes owned files) • j/k move • r refresh"
+	listKeys    = "a add • e enable/disable • x remove • D disable+purge (deletes owned files) • r refresh • " + ui.ScrollKeys
 	emptyNotice = "no agents registered — press a on an available agent to add it"
 )
 
 // View implements tea.Model. Every outside string is sanitised or masked.
+// The rows are windowed around the cursor so the footer is always visible.
 func (s *Screen) View() tea.View {
-	var out []string
+	var header, rows []string
 	switch {
 	case !s.loaded:
-		out = append(out, theme.Dim.Render("loading…"))
+		header = append(header, theme.Dim.Render("loading…"))
 	default:
-		out = append(out, s.rows()...)
+		header, rows = s.table()
 	}
+	var footer []string
 	if s.loadNote != "" {
-		out = append(out, theme.Dim.Render("agent list unavailable: "+s.loadNote))
+		footer = append(footer, theme.Dim.Render("agent list unavailable: "+s.loadNote))
 	}
 	if s.note != "" {
-		out = append(out, theme.Warn.Render(s.note))
+		footer = append(footer, theme.Warn.Render(s.note))
 	}
-	out = append(out, theme.Dim.Render(listKeys))
-	lines := strings.Split(strings.Join(out, "\n"), "\n")
+	footer = append(footer, theme.Dim.Render(listKeys))
+	lines := s.list.Frame(header, rows, footer, s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}
 	return tea.NewView(strings.Join(lines, "\n"))
 }
 
-func (s *Screen) rows() []string {
-	var out []string
+// table returns the header lines (empty notice, column titles) and one row
+// per agent.
+func (s *Screen) table() (header, rows []string) {
 	registered := 0
 	for _, a := range s.agents {
 		if a.Registered {
@@ -46,12 +51,12 @@ func (s *Screen) rows() []string {
 		}
 	}
 	if registered == 0 {
-		out = append(out, emptyNotice)
+		header = append(header, emptyNotice)
 	}
 	if len(s.agents) == 0 {
-		return out
+		return header, nil
 	}
-	out = append(out, theme.Bold.Render("  "+theme.Pad("AGENT", 20)+theme.Pad("STATUS", 12)+theme.Pad("STATE", 10)+"SCOPE"))
+	header = append(header, theme.Bold.Render("  "+theme.Pad("AGENT", 20)+theme.Pad("STATUS", 12)+theme.Pad("STATE", 10)+"SCOPE"))
 	for i, a := range s.agents {
 		status, state, scope := "available", "-", "-"
 		if a.Registered {
@@ -65,7 +70,7 @@ func (s *Screen) rows() []string {
 		}
 		line := theme.Pad(mask.OneLine(a.Name), 20) + theme.Pad(status, 12) + theme.Pad(state, 10) + scope
 		switch {
-		case i == s.cursor:
+		case i == s.list.Cursor:
 			line = theme.Sel.Render("> " + line)
 		case a.Registered && a.Enabled:
 			line = "  " + theme.OK.Render(line)
@@ -74,7 +79,7 @@ func (s *Screen) rows() []string {
 		default:
 			line = "  " + line
 		}
-		out = append(out, line)
+		rows = append(rows, line)
 	}
-	return out
+	return header, rows
 }

@@ -106,7 +106,7 @@ func moveTo(t *testing.T, s *Screen, name string) {
 	t.Helper()
 	for i, a := range s.agents {
 		if a.Name == name {
-			s.cursor = i
+			s.list.Cursor = i
 			return
 		}
 	}
@@ -284,8 +284,8 @@ func TestNoActionBeforeVerifyResult(t *testing.T) {
 		t.Fatal("runner ran inside Update")
 	}
 	close(g.release)
-	if _, ok := cmd().(verifyMsg); !ok {
-		t.Fatal("cmd must yield a verifyMsg, not a DoMsg")
+	if _, ok := cmd().(ui.VerifiedMsg); !ok {
+		t.Fatal("cmd must yield a ui.VerifiedMsg, not a DoMsg")
 	}
 }
 
@@ -296,7 +296,7 @@ func TestVerifySupersededRequestDropped(t *testing.T) {
 	<-g.started
 	close(g.release)
 	old := <-ch
-	s.vreq++ // a newer request superseded it
+	s.verify.Invalidate() // a newer request superseded it
 	if msgs := deliver(s, old); len(msgs) != 0 {
 		t.Fatalf("superseded result emitted %v", msgs)
 	}
@@ -395,7 +395,7 @@ func TestStaleListRefreshesBeforeMutation(t *testing.T) {
 		if !strings.Contains(view(s), "agent list changed — refreshed") {
 			t.Errorf("%s: no stale note", key)
 		}
-		if s.agents[s.cursor].Enabled {
+		if s.agents[s.list.Cursor].Enabled {
 			t.Errorf("%s: list not refreshed", key)
 		}
 	}
@@ -507,15 +507,15 @@ func TestKeyCapturerFalse(t *testing.T) {
 func TestNavigation(t *testing.T) {
 	s, _ := loaded(t, fixture(t, "agent-list.txt"))
 	press(s, "j")
-	if s.cursor != 1 {
+	if s.list.Cursor != 1 {
 		t.Fatal("j")
 	}
 	press(s, "j")
-	if s.cursor != 1 {
+	if s.list.Cursor != 1 {
 		t.Fatal("clamp")
 	}
 	press(s, "k")
-	if s.cursor != 0 {
+	if s.list.Cursor != 0 {
 		t.Fatal("k")
 	}
 }
@@ -530,15 +530,14 @@ func TestVerifyEndsWhenIdentityChanged(t *testing.T) {
 	if !ok {
 		t.Fatal("nothing selected")
 	}
-	s.vreq++
-	s.verifying, s.note = true, "verifying…"
+	s.note = "verifying…"
 	other := sel
 	other.Name = "someone-else"
-	if cmd := s.verified(verifyMsg{req: s.vreq, key: "x", sel: other, fresh: listMsg{}}); cmd != nil {
+	if cmd := s.verified(verification{key: "x", sel: other, fresh: listMsg{}}); cmd != nil {
 		t.Errorf("emitted %v", cmd())
 	}
-	if s.verifying || s.note != "" {
-		t.Errorf("verifying=%v note=%q after an identity mismatch", s.verifying, s.note)
+	if s.verify.Busy() || s.note != "" {
+		t.Errorf("busy=%v note=%q after an identity mismatch", s.verify.Busy(), s.note)
 	}
 	_, cmd := s.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if strings.Contains(s.note, "still verifying") {

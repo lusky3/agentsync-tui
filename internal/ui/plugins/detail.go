@@ -12,36 +12,24 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
-// maxField caps the add field (bytes).
-const maxField = 2048
-
 // typingKey handles a key while the add field has focus.
 func (s *Screen) typingKey(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
 	case "esc":
-		s.typing, s.buf, s.inlineE = -1, "", ""
-	case "ctrl+u":
-		s.buf, s.inlineE = "", ""
-	case "backspace":
-		if s.buf != "" {
-			_, n := utf8.DecodeLastRuneInString(s.buf)
-			s.buf = s.buf[:len(s.buf)-n]
-		}
-		s.inlineE = ""
+		s.typing, s.inlineE = -1, ""
+		s.buf.Clear()
 	case "enter":
 		return s.submitAdd()
 	default:
-		if k.Text != "" {
-			s.insert(k.Text)
+		if _, changed := s.buf.Key(k); changed {
+			s.inlineE = ""
 		}
 	}
 	return nil
 }
 
 func (s *Screen) insert(t string) {
-	t = strings.NewReplacer("\n", "", "\t", "", "\r", "").Replace(mask.Sanitize(t))
-	if len(s.buf)+len(t) <= maxField {
-		s.buf += t
+	if changed, _ := s.buf.Insert(t); changed {
 		s.inlineE = ""
 	}
 }
@@ -51,25 +39,26 @@ func (s *Screen) insert(t string) {
 func (s *Screen) submitAdd() tea.Cmd {
 	var act actions.Action
 	var err error
-	val := s.buf
+	val := strings.TrimSpace(s.buf.Value)
 	if s.typing == panePlugins {
-		act, err = actions.PluginAdd(strings.TrimSpace(val))
+		act, err = actions.PluginAdd(val)
 	} else {
-		act, err = actions.MarketplaceAdd(strings.TrimSpace(val))
+		act, err = actions.MarketplaceAdd(val)
 	}
 	if err != nil {
 		s.inlineE = mask.FirstLine(err.Error())
 		return nil
 	}
-	s.typing, s.buf, s.inlineE, s.note = -1, "", "", ""
-	return func() tea.Msg { return ui.DoMsg{Action: act} }
+	s.typing, s.inlineE, s.note = -1, "", ""
+	s.buf.Clear()
+	return ui.Do(act)
 }
 
 // liveField renders the buffer for display. Credentials in a URL's
 // authority cannot be told from a host until '@' or '/' is typed, so the
 // authority is bulleted while it is still open; everything is masked.
 func (s *Screen) liveField() string {
-	v := s.buf
+	v := s.buf.Value
 	if s.typing == paneMarkets {
 		if i := strings.Index(v, "://"); i >= 0 {
 			rest := v[i+3:]
@@ -82,22 +71,22 @@ func (s *Screen) liveField() string {
 }
 
 // checkOutdated runs `plugin outdated` (network) on demand through the
-// Runner, bounded by the network read timeout (ui.Deps.Limits().Read).
+// Runner, bounded by the read timeout (ui.Deps.Limits().Read).
 func (s *Screen) checkOutdated() tea.Cmd {
 	if s.oChecking {
 		s.note = "already checking for updates"
 		return nil
 	}
-	s.oreq++
 	s.oChecking, s.note = true, "checking for updates (network)…"
-	req, r, base, limit := s.oreq, s.run, ui.BaseCtx(s.d), s.d.Limits().Read
+	gen, ctx := s.oreads.Next(s.base)
+	r, limit := s.run, s.limit
 	return func() tea.Msg {
-		out, note := runRead(base, r, limit, "plugin", "outdated")
-		if note != "" {
-			return outdatedMsg{req: req, note: note}
+		res, err := ui.Read(ctx, r, limit, "plugin", "outdated")
+		if note := ui.ReadNote("plugin outdated", res, err); note != "" {
+			return outdatedMsg{gen: gen, note: note}
 		}
-		list, err := model.ParseOutdated(out)
-		m := outdatedMsg{req: req, raw: capText(out), checked: true}
+		list, err := model.ParseOutdated(res.Stdout)
+		m := outdatedMsg{gen: gen, raw: capText(res.Stdout), checked: true}
 		if err == nil {
 			m.list, m.parsed = list, true
 		}
@@ -106,7 +95,7 @@ func (s *Screen) checkOutdated() tea.Cmd {
 }
 
 func (s *Screen) applyOutdated(m outdatedMsg) {
-	if m.req != s.oreq {
+	if !s.oreads.Current(m.gen) {
 		return
 	}
 	s.oChecking = false
@@ -126,8 +115,7 @@ func (s *Screen) applyOutdated(m outdatedMsg) {
 // openDetail opens the overlay for the selected item: `plugin explain` for
 // a plugin (read-only, asynchronous), a local summary for a marketplace.
 func (s *Screen) openDetail() tea.Cmd {
-	s.dreq++
-	s.scroll, s.detailOpen = 0, true
+	s.dscroll, s.detailOpen = ui.Scroll{}, true
 	if s.pane == paneMarkets {
 		m, ok := s.selMarket()
 		if !ok {
@@ -144,15 +132,16 @@ func (s *Screen) openDetail() tea.Cmd {
 		return nil
 	}
 	s.detailFor, s.detail, s.detailBusy = p.Name, "", true
-	req, r, name, base := s.dreq, s.run, p.Name, ui.BaseCtx(s.d)
+	gen, ctx := s.dreads.Next(s.base)
+	r, name, limit := s.run, p.Name, s.limit
 	return func() tea.Msg {
-		out, note := runRead(base, r, explainTimeout, "plugin", "explain", name)
-		return explainMsg{req: req, name: name, text: capText(out), note: note}
+		res, err := ui.Read(ctx, r, limit, "plugin", "explain", name)
+		return explainMsg{gen: gen, name: name, text: capText(res.Stdout), note: ui.ReadNote("plugin explain", res, err)}
 	}
 }
 
 func (s *Screen) applyExplain(m explainMsg) {
-	if m.req != s.dreq || !s.detailOpen {
+	if !s.dreads.Current(m.gen) || !s.detailOpen {
 		return
 	}
 	s.detailBusy = false
@@ -167,20 +156,8 @@ func (s *Screen) detailKey(k string) tea.Cmd {
 	switch k {
 	case "esc", "enter", "q":
 		s.closeDetail()
-	case "down", "j":
-		s.scroll = min(s.scroll+1, s.maxScroll())
-	case "up", "k":
-		s.scroll = max(s.scroll-1, 0)
-	case "pgdown", " ":
-		s.scroll = min(s.scroll+s.bodyLines(), s.maxScroll())
-	case "pgup":
-		s.scroll = max(s.scroll-s.bodyLines(), 0)
+	default:
+		s.dscroll.Key(k, len(strings.Split(s.detail, "\n")))
 	}
 	return nil
-}
-
-func (s *Screen) bodyLines() int { return max(s.height-3, 3) }
-
-func (s *Screen) maxScroll() int {
-	return max(len(strings.Split(s.detail, "\n"))-s.bodyLines(), 0)
 }

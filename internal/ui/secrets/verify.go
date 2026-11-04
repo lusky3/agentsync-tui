@@ -1,6 +1,8 @@
 package secrets
 
 import (
+	"context"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -16,7 +18,7 @@ const maxWarnUsers = 5
 // remove starts the asynchronous freshness check for removing the selected
 // key; the destructive action is only built in verified.
 func (s *Screen) remove() tea.Cmd {
-	if s.verifying {
+	if s.verify.Busy() {
 		s.note = "still verifying the vault — wait"
 		return nil
 	}
@@ -28,47 +30,42 @@ func (s *Screen) remove() tea.Cmd {
 		s.note = "invalid secret key"
 		return nil
 	}
-	s.vreq++
-	s.verifying, s.vkey, s.note = true, key, "verifying…"
-	req, r, base := s.vreq, s.run, ui.BaseCtx(s.d)
-	return func() tea.Msg {
-		return verifyMsg{req: req, key: key, fresh: readList(base, 0, r, verifyTimeout)}
-	}
+	s.vkey, s.note = key, "verifying…"
+	r := s.run
+	return s.verify.Start(s.base, func(ctx context.Context) any {
+		return verification{key: key, fresh: readList(ctx, 0, r, ui.VerifyTimeout)}
+	})
 }
 
-// verified handles a re-read result: stale requests are dropped; a failed
-// read or a vanished key emits nothing.
-func (s *Screen) verified(m verifyMsg) tea.Cmd {
-	if !s.verifying || m.req != s.vreq {
+// verified handles a current re-read result: a failed read or a vanished key
+// emits nothing.
+func (s *Screen) verified(v verification) tea.Cmd {
+	if s.selected() != v.key {
+		s.note = ""
 		return nil
 	}
-	if s.selected() != m.key {
-		s.verifying, s.note = false, ""
-		return nil
-	}
-	s.verifying = false
-	if m.fresh.note != "" || m.fresh.vault != vaultOK {
+	if v.fresh.note != "" || v.fresh.vault != vaultOK {
 		s.note = "cannot verify the vault"
-		if m.fresh.note != "" {
-			s.note += ": " + m.fresh.note
+		if v.fresh.note != "" {
+			s.note += ": " + v.fresh.note
 		}
 		return nil
 	}
-	if !contains(m.fresh.keys, m.key) {
-		s.keys = m.fresh.keys
-		s.cursor = max(min(s.cursor, len(s.keys)-1), 0)
+	if !slices.Contains(v.fresh.keys, v.key) {
+		s.keys = v.fresh.keys
+		s.list.Clamp(len(s.keys))
 		cmd := s.Refresh()
 		s.note = staleNote
 		return cmd
 	}
-	act, err := actions.SecretRemove(m.key)
+	act, err := actions.SecretRemove(v.key)
 	if err != nil {
 		s.note = "invalid secret key"
 		return nil
 	}
-	act.Warning = s.removeWarning(m.key)
+	act.Warning = s.removeWarning(v.key)
 	s.note = ""
-	return func() tea.Msg { return ui.DoMsg{Action: act} }
+	return ui.Do(act)
 }
 
 func (s *Screen) removeWarning(key string) string {

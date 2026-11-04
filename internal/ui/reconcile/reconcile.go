@@ -12,12 +12,15 @@
 //
 // The report is read directly through the Runner, not via ui.DoMsg: the shell
 // refreshes the active screen after every run, so a Refresh that emitted a
-// DoMsg would loop forever.
+// DoMsg would loop forever. `reconcile --auto-safe` takes agentsync's global
+// write lock, so the shell only refreshes this screen while it is the active
+// tab (lazy screens), never at startup or on every scope switch.
 package reconcile
 
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,15 +33,12 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
-// readTimeout bounds one report run.
-const readTimeout = 30 * time.Second
-
 // Screen is the reconcile tab.
 type Screen struct {
-	d     ui.Deps
+	base  context.Context
+	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
 	run   runner.Runner
-	scope runner.Scope
-	gen   int // refresh generation; older results are dropped
+	reads ui.Rounds // the report read; superseded rounds are cancelled
 
 	loaded bool
 	report string // masked + sanitised, capped
@@ -46,7 +46,7 @@ type Screen struct {
 	exit   int    // exit code of the last good report
 	note   string // why the last refresh failed, display-safe
 	handed string // outcome of the last interactive handover, display-safe
-	scroll int
+	scroll ui.Scroll
 
 	width, height int
 }
@@ -63,7 +63,7 @@ type reportMsg struct {
 
 // New returns the reconcile screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{d: d, run: d.Runner, scope: d.Scope, width: 80, height: 20}
+	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, width: 80, height: 20}
 }
 
 // Title implements ui.Screen.
@@ -73,45 +73,38 @@ func (s *Screen) Title() string { return "Reconcile" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware: swap the runner and forget the report.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
-	s.run, s.scope = r, sc
-	s.gen++
-	s.loaded, s.report, s.trunc, s.exit, s.note, s.handed, s.scroll = false, "", false, 0, "", "", 0
+func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, _ string) {
+	s.run = r
+	s.reads.Supersede()
+	s.loaded, s.report, s.trunc, s.exit, s.note, s.handed, s.scroll = false, "", false, 0, "", "", ui.Scroll{}
 }
+
+// Shutdown implements ui.Shutdowner.
+func (s *Screen) Shutdown() { s.reads.Cancel() }
 
 // CapturesKeys implements ui.KeyCapturer: the screen has no text inputs.
 func (s *Screen) CapturesKeys() bool { return false }
 
-// Refresh re-runs the read-only report through the Runner (never a DoMsg).
+// Refresh re-runs the read-only report through the Runner (never a DoMsg),
+// cancelling the previous run.
 func (s *Screen) Refresh() tea.Cmd {
-	s.gen++
-	gen, r, base := s.gen, s.run, ui.BaseCtx(s.d)
-	return func() tea.Msg { return readReport(base, gen, r) }
+	gen, ctx := s.reads.Next(s.base)
+	r, limit := s.run, s.limit
+	return func() tea.Msg { return readReport(ctx, gen, r, limit) }
 }
 
-func readReport(base context.Context, gen int, r runner.Runner) reportMsg {
+func readReport(ctx context.Context, gen int, r runner.Runner, timeout time.Duration) reportMsg {
 	m := reportMsg{gen: gen}
-	if r == nil {
-		m.note = "reconcile report unavailable: no runner"
-		return m
-	}
-	ctx, cancel := context.WithTimeout(base, readTimeout)
-	defer cancel()
-	res, err := r.Run(ctx, actions.ReconcileReport().Argv...)
+	res, err := ui.Read(ctx, r, timeout, actions.ReconcileReport().Argv...)
 	if err != nil {
-		m.note = "reconcile report unavailable: " + mask.FirstLine(err.Error())
+		m.note = ui.ReadNote("reconcile report", res, err)
 		return m
 	}
 	text, trunc := mask.Capped(res.Stdout, ui.MaxOutput)
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && res.ExitCode != 0 {
 		// Nothing to show: a non-zero exit is a failure, exit 0 an empty report.
-		if res.ExitCode != 0 {
-			m.note = "reconcile report failed (exit " + strconv.Itoa(res.ExitCode) + ")"
-			if l := mask.FirstLine(res.Stderr); l != "" {
-				m.note += ": " + l
-			}
-			return m
-		}
+		m.note = ui.ReadNote("reconcile report", res, nil)
+		return m
 	}
 	m.ok, m.text, m.trunc, m.exit = true, text, trunc, res.ExitCode
 	return m
@@ -122,16 +115,15 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width, s.height = msg.Width, msg.Height
-		s.scroll = min(s.scroll, s.maxScroll())
 	case reportMsg:
-		if msg.gen != s.gen {
+		if !s.reads.Current(msg.gen) {
 			return s, nil
 		}
 		s.loaded = true
 		s.note = msg.note
 		if msg.ok { // a failed refresh keeps the last good report
 			s.report, s.trunc, s.exit = msg.text, msg.trunc, msg.exit
-			s.scroll = min(s.scroll, s.maxScroll())
+			s.scroll.Clamp(len(s.lines()))
 		}
 	case ui.RunMsg:
 		s.onRun(msg)
@@ -144,7 +136,7 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // onRun notes how the interactive handover ended; the shell refreshes the
 // screen afterwards, which re-runs the report.
 func (s *Screen) onRun(m ui.RunMsg) {
-	if !m.Action.Interactive || strings.Join(m.Action.Argv, " ") != "reconcile" {
+	if !m.Action.Interactive || !slices.Equal(m.Action.Argv, actions.Reconcile().Argv) {
 		return
 	}
 	switch {
@@ -160,22 +152,14 @@ func (s *Screen) onRun(m ui.RunMsg) {
 }
 
 func (s *Screen) key(k string) tea.Cmd {
-	page := max(s.avail()/2, 1)
+	if s.scroll.Key(k, len(s.lines())) {
+		return nil
+	}
 	switch k {
 	case "x":
-		act := actions.Reconcile()
-		return func() tea.Msg { return ui.DoMsg{Action: act} }
+		return ui.Do(actions.Reconcile())
 	case "r":
 		return s.Refresh()
-	case "ctrl+d", "pgdown":
-		s.scroll += page
-	case "ctrl+u", "pgup":
-		s.scroll = max(s.scroll-page, 0)
-	case "down", "j":
-		s.scroll++
-	case "up", "k":
-		s.scroll = max(s.scroll-1, 0)
 	}
-	s.scroll = min(s.scroll, s.maxScroll())
 	return nil
 }

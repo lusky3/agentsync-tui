@@ -7,18 +7,15 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
 	revertHint = "revert only moves the destination; the next apply re-renders from the canonical source"
-	applyKeys  = "m mode • e agents • p preview • a apply • ctrl+d/ctrl+u scroll"
-	revertKeys = "m mode • e target • A all • t --to • p preview • v revert • ctrl+d/ctrl+u scroll"
-	headLines  = 8
+	applyKeys  = "m mode • e agents • p preview • a apply • " + ui.ScrollKeys
+	revertKeys = "m mode • e target • A all • t --to • p preview • v revert • " + ui.ScrollKeys
 )
-
-// avail is how many output lines fit under the fixed header and footer.
-func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
 
 func (s *Screen) outLines() []string {
 	if o := s.out[s.mode]; o != nil {
@@ -27,9 +24,10 @@ func (s *Screen) outLines() []string {
 	return nil
 }
 
-func (s *Screen) maxScroll() int { return max(len(s.outLines())-s.avail(), 0) }
+// maxScroll is the largest offset that still fills the body.
+func (s *Screen) maxScroll() int { return s.scroll[s.mode].MaxOffset(len(s.outLines())) }
 
-func (s *Screen) field(label, val string, focused bool) string {
+func (s *Screen) fieldLine(label, val string, focused bool) string {
 	v := mask.OneLine(val)
 	if focused {
 		v = theme.Sel.Render(v + " ")
@@ -37,8 +35,9 @@ func (s *Screen) field(label, val string, focused bool) string {
 	return "  " + label + " " + v
 }
 
-// View implements tea.Model. Every outside string is sanitised or masked.
-func (s *Screen) View() tea.View {
+// header is every fixed line above the output: the mode tabs, the form,
+// the command, the status and the output title. The body gets the rest.
+func (s *Screen) header() []string {
 	var lines []string
 	apply, revert := "Apply", "Revert"
 	if s.mode == modeApply {
@@ -49,26 +48,26 @@ func (s *Screen) View() tea.View {
 	lines = append(lines, apply+" "+revert)
 	if s.mode == modeApply {
 		lines = append(lines, theme.Warn.Render("apply writes destination files (agent config on disk)"))
-		agents := s.agents
-		if agents == "" && s.focus == fNone {
+		agents := s.agents.Value
+		if agents == "" && s.focus == focusNone {
 			agents = "(all enabled)"
 		}
-		lines = append(lines, s.field("agents:", agents, s.focus == fTarget))
+		lines = append(lines, s.fieldLine("agents:", agents, s.focus == focusTarget))
 		lines = append(lines, "")
 	} else {
 		lines = append(lines, theme.Warn.Render("revert is destructive: it rewinds destination files to a checkpoint"))
-		target := s.target
+		target := s.target.Value
 		if s.all {
 			target = "all (--all)"
-		} else if target == "" && s.focus != fTarget {
+		} else if target == "" && s.focus != focusTarget {
 			target = "(none: press e, or A for all)"
 		}
-		lines = append(lines, s.field("target:", target, s.focus == fTarget))
-		to := s.to
-		if to == "" && s.focus != fTo {
+		lines = append(lines, s.fieldLine("target:", target, s.focus == focusTarget))
+		to := s.to.Value
+		if to == "" && s.focus != focusTo {
 			to = "(previous checkpoint)"
 		}
-		lines = append(lines, s.field("--to:  ", to, s.focus == fTo))
+		lines = append(lines, s.fieldLine("--to:  ", to, s.focus == focusTo))
 	}
 	p, err := s.pair()
 	if err != nil {
@@ -96,16 +95,16 @@ func (s *Screen) View() tea.View {
 			head += "  " + theme.Bad.Render(mask.OneLine(o.Note))
 		}
 	}
-	lines = append(lines, head)
-	body := s.outLines()
-	start := min(s.scroll[s.mode], s.maxScroll())
-	end := min(start+s.avail(), len(body))
-	lines = append(lines[:min(len(lines), headLines)], body[start:end]...)
+	return append(lines, head)
+}
+
+// View implements tea.Model. Every outside string is sanitised or masked.
+func (s *Screen) View() tea.View {
 	keys := applyKeys
 	if s.mode == modeRevert {
 		keys = revertKeys
 	}
-	lines = append(lines, theme.Dim.Render(keys))
+	lines := s.scroll[s.mode].Frame(s.header(), s.outLines(), []string{theme.Dim.Render(keys)}, s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}

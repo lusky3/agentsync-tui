@@ -15,13 +15,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
-	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
-
-// readTimeout bounds one read-only CLI call.
-const readTimeout = 30 * time.Second
 
 // section is one command's last good result.
 type section struct {
@@ -35,14 +31,13 @@ type section struct {
 
 // Screen is the health tab.
 type Screen struct {
-	d     ui.Deps
+	base  context.Context
+	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
 	run   runner.Runner
-	scope runner.Scope
-	gen   int // refresh generation; older results are dropped
+	reads ui.Rounds // the doctor+check round; superseded rounds are cancelled
 
 	doctor, check section
-	cancel        context.CancelFunc // the current round; superseded rounds are cancelled
-	scroll        int
+	scroll        ui.Scroll
 
 	width, height int
 }
@@ -61,7 +56,7 @@ type resultMsg struct {
 
 // New returns the health screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{d: d, run: d.Runner, scope: d.Scope, width: 80, height: 20}
+	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, width: 80, height: 20}
 }
 
 // Title implements ui.Screen.
@@ -71,44 +66,35 @@ func (s *Screen) Title() string { return "Health" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware: swap the runner and forget both outputs.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
-	s.run, s.scope = r, sc
-	s.gen++
-	s.Shutdown()
-	s.doctor, s.check, s.scroll = section{}, section{}, 0
+func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, _ string) {
+	s.run = r
+	s.reads.Supersede()
+	s.doctor, s.check, s.scroll = section{}, section{}, ui.Scroll{}
 }
 
 // CapturesKeys implements ui.KeyCapturer: the screen has no text inputs.
 func (s *Screen) CapturesKeys() bool { return false }
 
-// Refresh re-runs doctor and check concurrently through the Runner.
+// Refresh re-runs doctor and check concurrently through the Runner; the
+// superseded round's children die now, not at their bound.
 func (s *Screen) Refresh() tea.Cmd {
-	s.gen++
-	s.Shutdown() // the superseded round's children die now, not after readTimeout
-	gen, r := s.gen, s.run
-	ctx, cancel := context.WithCancel(ui.BaseCtx(s.d))
-	s.cancel = cancel
+	gen, ctx := s.reads.Next(s.base)
+	r, limit := s.run, s.limit
 	return tea.Batch(
-		func() tea.Msg { return readOne(ctx, gen, r, "doctor", actions.Doctor().Argv) },
-		func() tea.Msg { return readOne(ctx, gen, r, "check", actions.Check().Argv) },
+		func() tea.Msg { return readOne(ctx, gen, r, limit, "doctor", actions.Doctor().Argv) },
+		func() tea.Msg { return readOne(ctx, gen, r, limit, "check", actions.Check().Argv) },
 	)
 }
 
-func readOne(parent context.Context, gen int, r runner.Runner, kind string, argv []string) resultMsg {
+func readOne(ctx context.Context, gen int, r runner.Runner, timeout time.Duration, kind string, argv []string) resultMsg {
 	m := resultMsg{gen: gen, kind: kind}
-	if r == nil {
-		m.note = kind + " unavailable: no runner"
-		return m
-	}
-	ctx, cancel := context.WithTimeout(parent, readTimeout)
-	defer cancel()
-	res, err := r.Run(ctx, argv...)
+	res, err := ui.Read(ctx, r, timeout, argv...)
 	if errors.Is(err, context.Canceled) {
 		m.superseded = true // cancelled by a newer round, a scope switch or quit: not a failure
 		return m
 	}
 	if err != nil {
-		m.note = kind + " unavailable: " + mask.FirstLine(err.Error())
+		m.note = ui.ReadNote(kind, res, err)
 		return m
 	}
 	// Problems are reported on stderr as often as on stdout: show both.
@@ -122,9 +108,8 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width, s.height = msg.Width, msg.Height
-		s.scroll = min(s.scroll, s.maxScroll())
 	case resultMsg:
-		if msg.gen != s.gen || msg.superseded {
+		if !s.reads.Current(msg.gen) || msg.superseded {
 			return s, nil
 		}
 		sec := &s.doctor
@@ -135,7 +120,7 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ok { // a failed refresh keeps the last good output
 			sec.ok, sec.text, sec.trunc, sec.exit = true, msg.text, msg.trunc, msg.exit
 		}
-		s.scroll = min(s.scroll, s.maxScroll())
+		s.scroll.Clamp(len(s.lines()))
 	case tea.KeyPressMsg:
 		return s, s.key(msg.String())
 	}
@@ -143,20 +128,12 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *Screen) key(k string) tea.Cmd {
-	page := max(s.avail()/2, 1)
-	switch k {
-	case "r":
-		return s.Refresh()
-	case "ctrl+d", "pgdown":
-		s.scroll += page
-	case "ctrl+u", "pgup":
-		s.scroll = max(s.scroll-page, 0)
-	case "down", "j":
-		s.scroll++
-	case "up", "k":
-		s.scroll = max(s.scroll-1, 0)
+	if s.scroll.Key(k, len(s.lines())) {
+		return nil
 	}
-	s.scroll = min(s.scroll, s.maxScroll())
+	if k == "r" {
+		return s.Refresh()
+	}
 	return nil
 }
 
@@ -173,11 +150,5 @@ func (sec section) summary(name, bad string) string {
 	return name + ": " + bad + " (exit " + strconv.Itoa(sec.exit) + ")"
 }
 
-// Shutdown implements ui.Shutdowner: it cancels the in-flight round (also
-// used by Refresh and SetScope to supersede it).
-func (s *Screen) Shutdown() {
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
-	}
-}
+// Shutdown implements ui.Shutdowner: it cancels the in-flight round.
+func (s *Screen) Shutdown() { s.reads.Cancel() }

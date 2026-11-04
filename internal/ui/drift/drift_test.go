@@ -244,7 +244,7 @@ func TestStatusFailureShowsNote(t *testing.T) {
 	}}
 	s := newLoaded(t, r)
 	v := view(s)
-	if !strings.Contains(v, "status failed") || !strings.Contains(v, "boom") {
+	if !strings.Contains(v, "status exited 1") || !strings.Contains(v, "boom") {
 		t.Errorf("want failure note:\n%s", v)
 	}
 	if strings.Contains(v, "CANARYx1") || strings.Contains(v, "second") || strings.Contains(s.View().Content, "\x1b[2J") {
@@ -253,13 +253,13 @@ func TestStatusFailureShowsNote(t *testing.T) {
 	// Spawn errors and a missing binary are notes too, never crashes.
 	for _, e := range []error{errors.New("spawn: nope"), runner.ErrNotInstalled} {
 		s = newLoaded(t, &fakeRunner{err: e})
-		if !strings.Contains(view(s), "status failed") {
+		if !strings.Contains(view(s), "status unavailable") {
 			t.Errorf("err %v: %s", e, view(s))
 		}
 	}
 	// Unparseable JSON at exit 0.
 	s = newLoaded(t, statusRunner("not json"))
-	if !strings.Contains(view(s), "status failed") {
+	if !strings.Contains(view(s), "status output unreadable") {
 		t.Errorf("parse failure: %s", view(s))
 	}
 }
@@ -428,7 +428,7 @@ func TestStaleDetailResultDropped(t *testing.T) {
 		t.Fatalf("fresh result should show:\n%s", view(s))
 	}
 	// A result for the previous seq must not overwrite the current one.
-	old := detailMsg{seq: s.seq - 1, kind: kindDiff, note: "OLDNOTE"}
+	old := detailMsg{gen: s.dreads.Gen() - 1, kind: kindDiff, note: "OLDNOTE"}
 	s.Update(old)
 	if strings.Contains(view(s), "OLDNOTE") {
 		t.Error("stale detail applied")
@@ -462,19 +462,19 @@ func TestDetailScroll(t *testing.T) {
 	s := newLoaded(t, detailRunner(hunkJSON(big, big), `{}`))
 	s.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
 	press(s, "enter")
-	if s.scroll != 0 {
+	if s.dscroll.Offset != 0 {
 		t.Fatal("scroll should start at 0")
 	}
 	press(s, "ctrl+d")
-	if s.scroll == 0 {
+	if s.dscroll.Offset == 0 {
 		t.Error("ctrl+d should scroll")
 	}
 	press(s, "ctrl+u")
-	if s.scroll != 0 {
+	if s.dscroll.Offset != 0 {
 		t.Error("ctrl+u should scroll back")
 	}
 	press(s, "ctrl+u")
-	if s.scroll != 0 {
+	if s.dscroll.Offset != 0 {
 		t.Error("scroll must clamp at 0")
 	}
 }
@@ -504,7 +504,7 @@ func TestNonZeroExitWithJSONIsFailure(t *testing.T) {
 	}}
 	s := newLoaded(t, r)
 	v := view(s)
-	if !strings.Contains(v, "status failed") || !strings.Contains(v, "boom") {
+	if !strings.Contains(v, "status exited 1") || !strings.Contains(v, "boom") {
 		t.Errorf("want failure note:\n%s", v)
 	}
 	if strings.Contains(v, "no agents registered") {
@@ -518,7 +518,7 @@ func TestFailedRefreshKeepsLoadedReport(t *testing.T) {
 	r.res["status --json"] = runner.Result{Stdout: `{"error":"x"}`, ExitCode: 1, Stderr: "error: boom"}
 	drive(s, s.Refresh())
 	v := view(s)
-	if !strings.Contains(v, "status failed") || !strings.Contains(v, "d1") {
+	if !strings.Contains(v, "status exited 1") || !strings.Contains(v, "d1") {
 		t.Errorf("want note and the previous report:\n%s", v)
 	}
 }
@@ -547,15 +547,15 @@ func TestRefreshDuringLegendLoadKeepsLegend(t *testing.T) {
 
 func TestStaleStatusResultDropped(t *testing.T) {
 	s := newLoaded(t, statusRunner(multiStatus))
-	oldGen := s.gen
+	oldGen := s.reads.Gen()
 	s.SetScope(statusRunner(`{"agents":[{"agent":"newagent","items":[]}]}`), runner.ScopeProject, "")
-	stale := readStatus(context.Background(), oldGen, statusRunner(multiStatus))
+	stale := readStatus(context.Background(), oldGen, statusRunner(multiStatus), 0)
 	s.Update(stale)
 	if strings.Contains(view(s), "antigravity") || s.loaded {
 		t.Errorf("status from before scope switch applied:\n%s", view(s))
 	}
 	cmd := s.Refresh()
-	old := statusMsg{gen: s.gen - 1, note: "OLDSTATUSNOTE"}
+	old := statusMsg{gen: s.reads.Gen() - 1, note: "OLDSTATUSNOTE"}
 	drive(s, cmd)
 	s.Update(old)
 	if strings.Contains(view(s), "OLDSTATUSNOTE") {

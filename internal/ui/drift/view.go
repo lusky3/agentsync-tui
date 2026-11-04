@@ -2,7 +2,7 @@ package drift
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -11,16 +11,54 @@ import (
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/model"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
 const (
-	listKeys   = "enter detail • f filter • g legend • r refresh • j/k move"
-	detailKeys = "esc close • ctrl+d/ctrl+u scroll"
+	listKeys   = "enter detail • f filter • g legend • r refresh • " + ui.ScrollKeys
+	detailKeys = "esc close • " + ui.ScrollKeys
 )
 
 // classOrder lists known classes in display order; unknown ones follow sorted.
 var classOrder = []string{"clean", "converged", "new", "pending", "drift", "conflict", "foreign-collision", "orphan", "orphan-drifted"}
+
+// rendered is the list for one (report, filter): every string masked and
+// styled once. Only the cursor row changes between renders.
+type rendered struct {
+	items   []model.StatusItem // visible items in display order
+	rows    []string           // group headers and item rows, unselected form
+	itemRow []int              // rows index of each item
+	inner   []string           // itemLine of each item, for the selected form
+	path    []string           // the dim masked path of each item
+	summary string             // "N need attention" or "no drift"
+}
+
+// rebuild renders the report once (masking every path, agent and class) so
+// View only windows and marks the cursor.
+func (s *Screen) rebuild() {
+	r := &rendered{}
+	if n := len(s.rep.Drifted()); n > 0 {
+		r.summary = theme.Bad.Render(strconv.Itoa(n) + " need attention")
+	} else {
+		r.summary = theme.OK.Render("no drift")
+	}
+	for _, a := range s.rep.Agents {
+		r.rows = append(r.rows, theme.Bold.Render(mask.OneLine(mask.Text(a.Agent))+"  "+counts(a.Items)))
+		for _, it := range s.visible(a) {
+			inner, path := itemLine(it), theme.Dim.Render(mask.OneLine(mask.Text(it.Path)))
+			r.items = append(r.items, it)
+			r.itemRow = append(r.itemRow, len(r.rows))
+			r.inner = append(r.inner, inner)
+			r.path = append(r.path, path)
+			r.rows = append(r.rows, "  "+inner+"  "+path)
+		}
+	}
+	if len(r.items) == 0 {
+		r.rows = append(r.rows, theme.Dim.Render("  no items match this filter"))
+	}
+	s.rows = r
+}
 
 // View implements tea.Model. Every outside string is sanitised or masked.
 func (s *Screen) View() tea.View {
@@ -50,45 +88,32 @@ func (s *Screen) listLines() []string {
 	if len(s.rep.Agents) == 0 {
 		return append([]string{"no agents registered"}, foot...)
 	}
+	r := s.rows
+	if r == nil {
+		s.rebuild()
+		r = s.rows
+	}
 	filter := "all"
 	if !s.all {
 		filter = "needs attention"
 	}
-	summary := "no drift"
-	if n := len(s.rep.Drifted()); n > 0 {
-		summary = theme.Bad.Render(strconv.Itoa(n) + " need attention")
-	} else {
-		summary = theme.OK.Render(summary)
-	}
-	head := []string{summary + theme.Dim.Render("  filter: "+filter), ""}
+	head := []string{r.summary + theme.Dim.Render("  filter: "+filter), ""}
 	if s.note != "" { // failed refresh: last good report stays visible
 		head = append([]string{theme.Dim.Render(s.note)}, head...)
 	}
-
-	var body []string
-	selLine, idx := 0, 0
-	for _, a := range s.rep.Agents {
-		body = append(body, theme.Bold.Render(mask.OneLine(mask.Text(a.Agent))+"  "+counts(a.Items)))
-		for _, it := range s.visible(a) {
-			line := "  " + itemLine(it)
-			if idx == s.cursor {
-				selLine = len(body)
-				line = theme.Sel.Render("> " + line[2:])
-			}
-			body = append(body, line+"  "+theme.Dim.Render(mask.OneLine(mask.Text(it.Path))))
-			idx++
-		}
+	anchor := 0
+	if s.list.Cursor >= 0 && s.list.Cursor < len(r.itemRow) {
+		anchor = r.itemRow[s.list.Cursor]
 	}
-	if idx == 0 {
-		body = append(body, theme.Dim.Render("  no items match this filter"))
+	start, end := s.list.WindowAt(anchor, len(r.rows), s.height-len(head)-len(foot))
+	out := make([]string, 0, len(head)+end-start+len(foot))
+	out = append(out, head...)
+	out = append(out, r.rows[start:end]...)
+	if anchor >= start && anchor < end && len(r.items) > 0 {
+		c := s.list.Cursor
+		out[len(head)+anchor-start] = theme.Sel.Render("> "+r.inner[c]) + "  " + r.path[c]
 	}
-	avail := max(s.height-len(head)-len(foot), 1)
-	start := 0
-	if selLine >= avail {
-		start = selLine - avail + 1
-	}
-	end := min(start+avail, len(body))
-	return append(append(head, body[start:end]...), foot...)
+	return append(out, foot...)
 }
 
 // counts renders "12 clean · 3 drift" over every item of an agent.
@@ -110,7 +135,7 @@ func counts(items []model.StatusItem) string {
 			rest = append(rest, c)
 		}
 	}
-	sort.Strings(rest)
+	slices.Sort(rest)
 	parts := make([]string, 0, len(n))
 	for _, c := range append(order, rest...) {
 		parts = append(parts, strconv.Itoa(n[c])+" "+mask.OneLine(mask.Text(c)))
@@ -126,21 +151,22 @@ func itemLine(it model.StatusItem) string {
 	cls := mask.OneLine(mask.Text(it.State))
 	label := pointerLabel(it.Pointer)
 	switch {
-	case flagged[it.State]:
+	case model.NeedsAttention(it.State):
 		return theme.Bad.Render("! "+cls) + " " + label
-	case it.State == "clean" || it.State == "converged":
+	case model.IsSettled(it.State):
 		return theme.OK.Render("  "+cls) + " " + label
 	}
 	return theme.Warn.Render("  "+cls) + " " + label
 }
 
 // pointerLabel maps /mcpServers/<id> to <id> (pointer-unescaped); any other
-// pointer is shown as is.
+// pointer is shown as is, unescaped.
 func pointerLabel(p string) string {
-	if rest, ok := strings.CutPrefix(p, "/mcpServers/"); ok && rest != "" && !strings.Contains(rest, "/") {
-		p = rest
+	if id, ok := model.MCPServerID(p); ok {
+		p = id
+	} else {
+		p = model.UnescapePointer(p)
 	}
-	p = strings.NewReplacer("~1", "/", "~0", "~").Replace(p)
 	return mask.OneLine(mask.Text(p))
 }
 
@@ -159,18 +185,12 @@ func (s *Screen) legendLines() []string {
 	return append(out, "", theme.Dim.Render("esc close"))
 }
 
-// detailAvail is how many content lines the detail pane shows.
-func (s *Screen) detailAvail() int { return max(s.height-3, 1) }
-
-func (s *Screen) maxScroll() int { return max(len(s.detailBody())-s.detailAvail(), 0) }
-
 func (s *Screen) detailPane() []string {
-	body := s.detailBody()
-	start := min(s.scroll, s.maxScroll())
-	end := min(start+s.detailAvail(), len(body))
-	head := theme.Bold.Render(pointerLabel(s.item.Pointer)) + "  " + theme.Dim.Render(mask.OneLine(mask.Text(s.item.State)))
-	out := append([]string{head, theme.Dim.Render(mask.OneLine(mask.Text(s.item.Path)))}, body[start:end]...)
-	return append(out, theme.Dim.Render(detailKeys))
+	head := []string{
+		theme.Bold.Render(pointerLabel(s.item.Pointer)) + "  " + theme.Dim.Render(mask.OneLine(mask.Text(s.item.State))),
+		theme.Dim.Render(mask.OneLine(mask.Text(s.item.Path))),
+	}
+	return s.dscroll.Frame(head, s.detailBody(), []string{theme.Dim.Render(detailKeys)}, s.height)
 }
 
 // detailBody renders provenance then the masked hunks, one string per line.

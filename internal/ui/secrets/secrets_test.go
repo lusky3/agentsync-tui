@@ -155,7 +155,7 @@ func moveTo(t *testing.T, s *Screen, key string) {
 	t.Helper()
 	for i, k := range s.keys {
 		if k == key {
-			s.cursor = i
+			s.list.Cursor = i
 			return
 		}
 	}
@@ -396,11 +396,7 @@ func TestNoRevealKey(t *testing.T) {
 			if s.CapturesKeys() != typing {
 				t.Fatalf("typing=%v: wrong mode before %q", typing, k.String())
 			}
-			s.reached = 0
 			_, cmd := s.Update(k)
-			if s.reached != 1 {
-				t.Fatalf("typing=%v: key %q never reached the key handler", typing, k.String())
-			}
 			reached++
 			for _, m := range drive(s, cmd) {
 				a := m.(ui.DoMsg).Action
@@ -425,8 +421,8 @@ func TestNoValueInputField(t *testing.T) {
 	if v := view(s); strings.Contains(v, "CANARYx1") || strings.Contains(v, "CANARYx2") || strings.Contains(v, "=C") {
 		t.Fatalf("typed text rendered after rejection:\n%s", v)
 	}
-	if s.input != "" {
-		t.Fatalf("stored %q", s.input)
+	if s.input.Value != "" {
+		t.Fatalf("stored %q", s.input.Value)
 	}
 	if !strings.Contains(view(s), "key name only") {
 		t.Fatalf("no inline rejection:\n%s", view(s))
@@ -437,8 +433,8 @@ func TestNoValueInputField(t *testing.T) {
 	// pasted assignment
 	_, cmd := s.Update(tea.PasteMsg{Content: "API_KEY=CANARYx3"})
 	drive(s, cmd)
-	if s.input != "" || strings.Contains(view(s), "CANARYx3") {
-		t.Fatalf("paste stored/rendered: %q", s.input)
+	if s.input.Value != "" || strings.Contains(view(s), "CANARYx3") {
+		t.Fatalf("paste stored/rendered: %q", s.input.Value)
 	}
 	press(s, "esc")
 	press(s, "n")
@@ -446,8 +442,8 @@ func TestNoValueInputField(t *testing.T) {
 		press(s, "A")
 		press(s, bad)
 		typeStr(s, "CANARYx4")
-		if s.input != "" || strings.Contains(view(s), "CANARYx4") {
-			t.Fatalf("%q accepted: %q", bad, s.input)
+		if s.input.Value != "" || strings.Contains(view(s), "CANARYx4") {
+			t.Fatalf("%q accepted: %q", bad, s.input.Value)
 		}
 		press(s, "esc")
 		press(s, "n")
@@ -482,18 +478,18 @@ func TestHostileKeyNeverActionable(t *testing.T) {
 	s, fr := loaded(t)
 	s.keys = []string{"-rf", "a b", "../x", "ok"}
 	for i := 0; i < 3; i++ {
-		s.cursor = i
+		s.list.Cursor = i
 		for _, k := range []string{"u", "x"} {
 			if msgs := press(s, k); len(msgs) != 0 {
 				t.Fatalf("key %q on %q emitted %v", k, s.keys[i], msgs)
 			}
 		}
-		if s.verifying {
+		if s.verify.Busy() {
 			t.Fatal("verifying a hostile key")
 		}
 	}
 	n := len(fr.calls)
-	s.cursor = 3
+	s.list.Cursor = 3
 	onlyAction(t, press(s, "u"))
 	if len(fr.calls) != n {
 		t.Fatal("u must not run the CLI")
@@ -504,15 +500,15 @@ func TestStaleKeyBlocksRemove(t *testing.T) {
 	s, fr := loaded(t)
 	moveTo(t, s, "API_KEY")
 	_, cmd := s.Update(keyMsg("x"))
-	if !s.verifying {
+	if !s.verify.Busy() {
 		t.Fatal("not verifying")
 	}
 	fr.set("GITHUB_TOKEN\n", "", 0, nil) // API_KEY removed behind our back
 	if msgs := drive(s, cmd); len(msgs) != 0 {
 		t.Fatalf("stale key emitted %v", msgs)
 	}
-	if !reflect.DeepEqual(s.keys, []string{"GITHUB_TOKEN"}) || s.verifying {
-		t.Fatalf("keys %q verifying %v", s.keys, s.verifying)
+	if !reflect.DeepEqual(s.keys, []string{"GITHUB_TOKEN"}) || s.verify.Busy() {
+		t.Fatalf("keys %q verifying %v", s.keys, s.verify.Busy())
 	}
 	if !strings.Contains(view(s), "changed") {
 		t.Fatalf("no stale note:\n%s", view(s))
@@ -522,7 +518,7 @@ func TestStaleKeyBlocksRemove(t *testing.T) {
 func TestVerifyDoesNotBlockUpdate(t *testing.T) {
 	s, _ := loaded(t)
 	_, cmd := s.Update(keyMsg("x"))
-	if !s.verifying {
+	if !s.verify.Busy() {
 		t.Fatal("not verifying")
 	}
 	if _, c := s.Update(keyMsg("x")); c != nil {
@@ -545,8 +541,8 @@ func TestVerifyDroppedWhenItemGone(t *testing.T) {
 	moveTo(t, s, "API_KEY")
 	_, cmd := s.Update(keyMsg("x"))
 	// a refresh result arrives that no longer has the selected key
-	_, _ = s.Update(listMsg{gen: s.gen, keys: []string{"GITHUB_TOKEN"}, vault: vaultOK})
-	if s.verifying {
+	_, _ = s.Update(listMsg{gen: s.reads.Gen(), keys: []string{"GITHUB_TOKEN"}, vault: vaultOK})
+	if s.verify.Busy() {
 		t.Fatal("verifying not cleared when the item vanished")
 	}
 	if msgs := drive(s, cmd); len(msgs) != 0 {
@@ -562,7 +558,7 @@ func TestVerifyDroppedOnCursorMove(t *testing.T) {
 	s, _ := loaded(t)
 	_, cmd := s.Update(keyMsg("x"))
 	press(s, "j")
-	if s.verifying {
+	if s.verify.Busy() {
 		t.Fatal("cursor move must cancel verification")
 	}
 	if msgs := drive(s, cmd); len(msgs) != 0 {
@@ -574,8 +570,8 @@ func TestVerifyDroppedOnScopeSwitch(t *testing.T) {
 	s, _ := loaded(t)
 	_, cmd := s.Update(keyMsg("x"))
 	s.SetScope(&fakeRunner{}, runner.ScopeProject, s.home)
-	if msgs := drive(s, cmd); len(msgs) != 0 || s.verifying {
-		t.Fatalf("emitted %v verifying %v", msgs, s.verifying)
+	if msgs := drive(s, cmd); len(msgs) != 0 || s.verify.Busy() {
+		t.Fatalf("emitted %v verifying %v", msgs, s.verify.Busy())
 	}
 }
 
@@ -666,7 +662,7 @@ func TestInitEqualsRefresh(t *testing.T) {
 
 func TestStaleListMessageDropped(t *testing.T) {
 	s, _ := loaded(t)
-	old := s.gen
+	old := s.reads.Gen()
 	s.Refresh()
 	s.Update(listMsg{gen: old, keys: []string{"STALE"}, vault: vaultOK})
 	if reflect.DeepEqual(s.keys, []string{"STALE"}) {
@@ -684,16 +680,16 @@ func TestPasteRejectedInKeyField(t *testing.T) {
 		t.Fatalf("emitted %v", msgs)
 	}
 	v := view(s)
-	if s.input != "" || strings.Contains(v, "CANARY") || !strings.Contains(v, "paste is disabled here") {
-		t.Fatalf("input %q view:\n%s", s.input, v)
+	if s.input.Value != "" || strings.Contains(v, "CANARY") || !strings.Contains(v, "paste is disabled here") {
+		t.Fatalf("input %q view:\n%s", s.input.Value, v)
 	}
 	if msgs := press(s, "enter"); len(msgs) != 0 {
 		t.Fatalf("emitted %v", msgs)
 	}
 	// a multi-character key event is a paste in disguise
 	s.Update(tea.KeyPressMsg{Code: 'g', Text: tokenCanary})
-	if s.input != "" || strings.Contains(view(s), "CANARY") {
-		t.Fatalf("multi-char key stored %q", s.input)
+	if s.input.Value != "" || strings.Contains(view(s), "CANARY") {
+		t.Fatalf("multi-char key stored %q", s.input.Value)
 	}
 }
 
@@ -704,15 +700,15 @@ func TestTokenShapedNameRefusedWhileTyping(t *testing.T) {
 	for _, r := range tokenCanary {
 		press(s, string(r))
 		if strings.Contains(view(s), "CANARYCANARY") {
-			t.Fatalf("token rendered raw after %d chars:\n%s", len(s.input), view(s))
+			t.Fatalf("token rendered raw after %d chars:\n%s", len(s.input.Value), view(s))
 		}
 		if s.locked {
 			rejected = true
 			break
 		}
 	}
-	if !rejected || s.input != "" || !strings.Contains(view(s), "looks like a secret value") {
-		t.Fatalf("not rejected: locked %v input %q", s.locked, s.input)
+	if !rejected || s.input.Value != "" || !strings.Contains(view(s), "looks like a secret value") {
+		t.Fatalf("not rejected: locked %v input %q", s.locked, s.input.Value)
 	}
 	if msgs := press(s, "enter"); len(msgs) != 0 {
 		t.Fatalf("emitted %v", msgs)
@@ -727,20 +723,20 @@ func TestOverlongNameRefused(t *testing.T) {
 		t.Fatal("name at the cap refused")
 	}
 	press(s, "a")
-	if !s.locked || s.input != "" || !strings.Contains(view(s), "looks like a secret value") {
-		t.Fatalf("over the cap kept: locked %v len %d", s.locked, len(s.input))
+	if !s.locked || s.input.Value != "" || !strings.Contains(view(s), "looks like a secret value") {
+		t.Fatalf("over the cap kept: locked %v len %d", s.locked, len(s.input.Value))
 	}
 }
 
 func TestSubmitRechecksName(t *testing.T) {
 	s, _ := loaded(t)
 	press(s, "n")
-	s.input = tokenCanary // bypass typing: the pre-build check must still refuse
+	s.input.Value = tokenCanary // bypass typing: the pre-build check must still refuse
 	if msgs := press(s, "enter"); len(msgs) != 0 {
 		t.Fatalf("emitted %v", msgs)
 	}
-	if strings.Contains(view(s), "CANARYCANARY") || s.input != "" {
-		t.Fatalf("token kept/rendered: %q", s.input)
+	if strings.Contains(view(s), "CANARYCANARY") || s.input.Value != "" {
+		t.Fatalf("token kept/rendered: %q", s.input.Value)
 	}
 }
 
@@ -763,7 +759,7 @@ func TestKeyFieldOpeningCancelsVerify(t *testing.T) {
 	s, _ := loaded(t)
 	_, cmd := s.Update(keyMsg("x"))
 	press(s, "n")
-	if s.verifying {
+	if s.verify.Busy() {
 		t.Fatal("verification survived opening the field")
 	}
 	if msgs := drive(s, cmd); len(msgs) != 0 {

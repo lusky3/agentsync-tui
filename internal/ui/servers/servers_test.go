@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
+	"github.com/lusky3/agentsync-tui/internal/model"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/source"
 	"github.com/lusky3/agentsync-tui/internal/ui"
@@ -197,7 +198,7 @@ func selectID(t *testing.T, s *Screen, id string) {
 	t.Helper()
 	for i, srv := range s.servers {
 		if srv.ID == id {
-			s.cursor = i
+			s.list.Cursor = i
 			return
 		}
 	}
@@ -245,13 +246,16 @@ func TestListShowsServersAndPerAgentState(t *testing.T) {
 	if strings.Contains(v, "conflict") || strings.Contains(v, "orphan") {
 		t.Errorf("non-server pointers leaked into state:\n%s", v)
 	}
-	for in, want := range map[string]string{
-		"/mcpServers/a~1b": "a/b", "/mcpServers/a~0b": "a~b", "/mcpServers/x": "x",
-		"/mcpServers/x/env": "", "/other/x": "", "/mcpServers/": "", "mcpServers/x": "",
-	} {
-		if got := pointerID(in); got != want {
-			t.Errorf("pointerID(%q) = %q, want %q", in, got, want)
-		}
+	// statesByServer keys by model.MCPServerID: only exact /mcpServers/<id>
+	// pointers (unescaped) become a server's state.
+	rep := model.StatusReport{Agents: []model.AgentStatus{{Agent: "a", Items: []model.StatusItem{
+		{Pointer: "/mcpServers/a~1b", State: "clean"}, {Pointer: "/mcpServers/a~0b", State: "drift"},
+		{Pointer: "/mcpServers/x/env", State: "drift"}, {Pointer: "/other/x", State: "drift"},
+		{Pointer: "/mcpServers/", State: "drift"}, {Pointer: "mcpServers/x", State: "drift"},
+	}}}}
+	got := statesByServer(rep)
+	if len(got) != 2 || got["a/b"]["a"] != "clean" || got["a~b"]["a"] != "drift" {
+		t.Errorf("statesByServer = %v", got)
 	}
 }
 
@@ -504,5 +508,54 @@ func TestRefreshKeyAndStaleResultsDropped(t *testing.T) {
 	drive(s, old)
 	if !strings.Contains(view(s), "new-srv") {
 		t.Errorf("stale refresh result was applied:\n%s", view(s))
+	}
+}
+
+// The pre-mutation re-read of the source tree runs on its own goroutine,
+// like the other list screens' checks: mutate hands back a verification
+// read, never a DoMsg, and nothing is emitted until its result has been
+// processed. (Before, Update read the disk itself.)
+func TestMutateVerifiesAsynchronously(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	selectID(t, s, "stdio-srv")
+	_, cmd := s.Update(key("e"))
+	if cmd == nil {
+		t.Fatal("mutate returned nothing")
+	}
+	if !s.verify.Busy() || !strings.Contains(view(s), "verifying…") {
+		t.Fatalf("not verifying: busy=%v view:\n%s", s.verify.Busy(), view(s))
+	}
+	m, ok := cmd().(ui.VerifiedMsg)
+	if !ok {
+		t.Fatalf("mutate emitted %#v straight away, want a ui.VerifiedMsg", m)
+	}
+	if got := press(s, "x"); len(got) != 0 || !strings.Contains(s.note, "still verifying") {
+		t.Fatalf("a second mutation while verifying: %v note=%q", got, s.note)
+	}
+	_, next := s.Update(m)
+	if got := drive(s, next); len(got) != 1 || !reflect.DeepEqual(got[0], ui.DoMsg{Action: mustAct(actions.McpDisable("stdio-srv"))}) {
+		t.Fatalf("after the verification: %#v", got)
+	}
+	if s.verify.Busy() {
+		t.Error("busy after the result was processed")
+	}
+}
+
+// A verification read superseded by a cursor move or a scope switch is
+// dropped, so the action it would have built never reaches the shell.
+func TestMutateVerificationDroppedWhenSuperseded(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	selectID(t, s, "stdio-srv")
+	_, cmd := s.Update(key("e"))
+	m := cmd()
+	press(s, "j")
+	if got := drive(s, func() tea.Msg { return m }); len(got) != 0 || s.verify.Busy() {
+		t.Fatalf("stale verification emitted %v (busy=%v)", got, s.verify.Busy())
+	}
+	_, cmd = s.Update(key("e"))
+	m = cmd()
+	s.SetScope(okRunner(), runner.ScopeProject, t.TempDir())
+	if got := drive(s, func() tea.Msg { return m }); len(got) != 0 {
+		t.Fatalf("verification from the old scope emitted %v", got)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/shellwords"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
@@ -53,8 +54,9 @@ type kv struct{ k, v string }
 
 // form is the "add MCP server" form. Values typed into it may be secrets:
 // it renders env/header values masked and never echoes a literal value.
+// Every text input is a ui.Field, so the editing rules are the shared ones.
 type form struct {
-	vals     [nFields]string
+	vals     [nFields]ui.Field
 	focus    int
 	typ      int
 	env      []kv
@@ -63,7 +65,13 @@ type form struct {
 	err      string // display-safe
 }
 
-func newForm(existing map[string]bool) *form { return &form{existing: existing} }
+func newForm(existing map[string]bool) *form {
+	f := &form{existing: existing}
+	for i := range f.vals {
+		f.vals[i].Max = maxField
+	}
+	return f
+}
 
 // update applies one key press and reports whether to cancel or submit.
 func (f *form) update(k tea.KeyPressMsg) formResult {
@@ -78,7 +86,7 @@ func (f *form) update(k tea.KeyPressMsg) formResult {
 		f.focus = (f.focus + nFields - 1) % nFields
 	case "enter":
 		switch {
-		case (f.focus == fEnv || f.focus == fHeader) && strings.TrimSpace(f.vals[f.focus]) != "":
+		case (f.focus == fEnv || f.focus == fHeader) && strings.TrimSpace(f.vals[f.focus].Value) != "":
 			f.addEntry()
 		case f.focus == fAgents:
 			return formSubmit
@@ -105,16 +113,9 @@ func (f *form) update(k tea.KeyPressMsg) formResult {
 		} else if f.focus == fHeader && len(f.headers) > 0 {
 			f.headers = f.headers[:len(f.headers)-1]
 		}
-	case "ctrl+u":
-		f.vals[f.focus] = ""
-	case "backspace":
-		if v := f.vals[f.focus]; v != "" {
-			_, n := utf8.DecodeLastRuneInString(v)
-			f.vals[f.focus] = v[:len(v)-n]
-		}
 	default:
-		if k.Text != "" {
-			f.insert(k.Text)
+		if f.focus != fType {
+			f.vals[f.focus].Key(k)
 		}
 	}
 	return formNone
@@ -127,25 +128,23 @@ func (f *form) insert(s string) {
 	if f.focus == fType {
 		return
 	}
-	s = strings.NewReplacer("\n", " ", "\t", " ").Replace(mask.Sanitize(s))
-	if len(f.vals[f.focus])+len(s) <= maxField {
-		f.vals[f.focus] += s
-	}
+	f.vals[f.focus].Insert(s)
 }
 
 // addEntry moves the focused env/header input into its list.
 func (f *form) addEntry() {
 	var err error
 	if f.focus == fEnv {
-		f.env, err = addKV(f.env, f.vals[fEnv], "=")
+		f.env, err = addKV(f.env, f.vals[fEnv].Value, "=")
 	} else {
-		f.headers, err = addKV(f.headers, f.vals[fHeader], ":")
+		f.headers, err = addKV(f.headers, f.vals[fHeader].Value, ":")
 	}
 	if err != nil {
 		f.err = err.Error()
 		return
 	}
-	f.vals[f.focus], f.err = "", ""
+	f.vals[f.focus].Clear()
+	f.err = ""
 }
 
 // addKV parses "K<sep>V" and adds it to list, replacing an existing key.
@@ -174,13 +173,13 @@ func addKV(list []kv, in, sep string) ([]kv, error) {
 // spec builds the AddSpec from the form, including any pending env/header
 // input that has not been added with enter yet.
 func (f *form) spec() (actions.AddSpec, error) {
-	s := actions.AddSpec{ID: strings.TrimSpace(f.vals[fID]), Type: serverTypes[f.typ]}
-	if t := strings.TrimSpace(f.vals[fTarget]); s.Type == "stdio" {
+	s := actions.AddSpec{ID: strings.TrimSpace(f.vals[fID].Value), Type: serverTypes[f.typ]}
+	if t := strings.TrimSpace(f.vals[fTarget].Value); s.Type == "stdio" {
 		s.Command = t
 	} else {
 		s.URL = t
 	}
-	args, err := shellwords.Split(f.vals[fArgs])
+	args, err := shellwords.Split(f.vals[fArgs].Value)
 	if err != nil {
 		return s, fmt.Errorf("args: %v", err)
 	}
@@ -188,13 +187,13 @@ func (f *form) spec() (actions.AddSpec, error) {
 		s.Args = args
 	}
 	env, headers := f.env, f.headers
-	if strings.TrimSpace(f.vals[fEnv]) != "" {
-		if env, err = addKV(env, f.vals[fEnv], "="); err != nil {
+	if strings.TrimSpace(f.vals[fEnv].Value) != "" {
+		if env, err = addKV(env, f.vals[fEnv].Value, "="); err != nil {
 			return s, err
 		}
 	}
-	if strings.TrimSpace(f.vals[fHeader]) != "" {
-		if headers, err = addKV(headers, f.vals[fHeader], ":"); err != nil {
+	if strings.TrimSpace(f.vals[fHeader].Value) != "" {
+		if headers, err = addKV(headers, f.vals[fHeader].Value, ":"); err != nil {
 			return s, err
 		}
 	}
@@ -207,7 +206,7 @@ func (f *form) spec() (actions.AddSpec, error) {
 	for _, h := range headers {
 		s.Headers = append(s.Headers, h.k+": "+h.v)
 	}
-	for _, a := range strings.Split(f.vals[fAgents], ",") {
+	for _, a := range strings.Split(f.vals[fAgents].Value, ",") {
 		if a = strings.TrimSpace(a); a != "" {
 			s.Agents = append(s.Agents, a)
 		}
@@ -227,7 +226,7 @@ func (f *form) submit() (actions.Action, error) {
 		act, err = actions.McpAdd(s)
 	}
 	if err != nil {
-		f.err = mask.FirstLine(mask.Text(err.Error()))
+		f.err = mask.FirstLine(err.Error())
 		return actions.Action{}, err
 	}
 	return act, nil
@@ -253,7 +252,7 @@ func echo(v string) string {
 
 // live renders the focused-or-not input text of field i, masked.
 func (f *form) live(i int) string {
-	v := f.vals[i]
+	v := f.vals[i].Value
 	switch i {
 	case fType:
 		return "‹" + serverTypes[f.typ] + "›"
@@ -283,7 +282,7 @@ func (f *form) view() string {
 	if serverTypes[f.typ] != "stdio" {
 		labels[fTarget] = "url"
 	}
-	id := strings.TrimSpace(f.vals[fID])
+	id := strings.TrimSpace(f.vals[fID].Value)
 	if !actions.ValidID(id) {
 		id = "<id>"
 	}

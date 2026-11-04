@@ -11,12 +11,7 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
 
-const (
-	headLines = 3 // title, summary, status
-	keysTxt   = "r refresh • ctrl+d/ctrl+u pgdn/pgup scroll"
-)
-
-func (s *Screen) avail() int { return max(s.height-headLines-1, 1) }
+const keysTxt = "r refresh • " + ui.ScrollKeys
 
 func sectionLines(title string, sec section) []string {
 	ls := []string{theme.Bold.Render(title)}
@@ -35,7 +30,8 @@ func (s *Screen) lines() []string {
 	return append(ls, sectionLines("check — config validity", s.check)...)
 }
 
-func (s *Screen) maxScroll() int { return max(len(s.lines())-s.avail(), 0) }
+// maxScroll is the largest offset that still fills the body.
+func (s *Screen) maxScroll() int { return s.scroll.MaxOffset(len(s.lines())) }
 
 func verdict(sec section, text string) string {
 	switch {
@@ -47,25 +43,25 @@ func verdict(sec section, text string) string {
 	return theme.Dim.Render(text)
 }
 
-// View implements tea.Model. Both outputs are stored masked and sanitised.
-func (s *Screen) View() tea.View {
+// header is every fixed line above the output: title, verdicts, status.
+func (s *Screen) header() []string {
 	status := ""
 	for _, n := range []string{s.doctor.note, s.check.note} {
 		if n != "" {
 			status += mask.OneLine(n) + "  "
 		}
 	}
-	lines := []string{
+	return []string{
 		theme.Bold.Render("Health") + theme.Dim.Render("  doctor + check (read-only)"),
 		verdict(s.doctor, s.doctor.summary("doctor", "problems found")) + "  " +
 			verdict(s.check, s.check.summary("check", "failed")),
 		theme.Dim.Render(strings.TrimSpace(status)),
 	}
-	body := s.lines()
-	start := min(s.scroll, s.maxScroll())
-	end := min(start+s.avail(), len(body))
-	lines = append(lines, body[start:end]...)
-	lines = append(lines, theme.Dim.Render(keysTxt))
+}
+
+// View implements tea.Model. Both outputs are stored masked and sanitised.
+func (s *Screen) View() tea.View {
+	lines := s.scroll.Frame(s.header(), s.lines(), []string{theme.Dim.Render(keysTxt)}, s.height)
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, s.width, "…")
 	}

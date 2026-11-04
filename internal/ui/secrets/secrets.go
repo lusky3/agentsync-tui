@@ -19,8 +19,7 @@ package secrets
 import (
 	"context"
 	"regexp"
-	"sort"
-	"strconv"
+	"slices"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,13 +30,6 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/source"
 	"github.com/lusky3/agentsync-tui/internal/ui"
-)
-
-// listTimeout bounds one `secret list` refresh; verifyTimeout bounds the
-// pre-removal re-read, which the user is waiting on.
-const (
-	listTimeout   = 30 * time.Second
-	verifyTimeout = 5 * time.Second
 )
 
 const (
@@ -60,11 +52,11 @@ var refRe = regexp.MustCompile(`\$\{secret:([A-Za-z0-9][A-Za-z0-9._-]*)\}`)
 
 // Screen is the secrets tab.
 type Screen struct {
-	d     ui.Deps
+	base  context.Context
+	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
 	run   runner.Runner
-	scope runner.Scope
-	home  string // canonical tree whose servers the cross-check scans
-	gen   int    // refresh generation; older results are dropped
+	home  string    // canonical tree whose servers the cross-check scans
+	reads ui.Rounds // the list read; superseded rounds are cancelled
 
 	loaded bool
 	keys   []string // as the CLI returned them
@@ -75,28 +67,24 @@ type Screen struct {
 	// the servers referencing it, including keys that are not in the vault.
 	uses    map[string][]string
 	srvNote string // why the server cross-check is incomplete (display-safe)
-	cursor  int
+	list    ui.List
 	// loadNote explains why the last `secret list` failed (display-safe);
 	// the last good list is kept.
 	loadNote string
 	note     string // last screen message, display-safe
 
-	// verifying is set while a pre-removal re-read of vkey is in flight.
-	verifying bool
-	vreq      int
-	vkey      string
+	// verify is the pre-removal re-read of vkey.
+	verify ui.Verifier
+	vkey   string
 
 	// The key-name field. locked means an invalid character was typed: the
 	// buffer was wiped and further input is ignored until esc.
 	typing   bool
-	input    string
+	input    ui.Field
 	locked   bool
 	fieldErr string
 
 	width, height int
-
-	// reached counts key presses that reached a key handler (tests only).
-	reached int
 }
 
 // listMsg carries one `secret list` read plus the server cross-check data.
@@ -110,16 +98,18 @@ type listMsg struct {
 	srv   string // server load note
 }
 
-// verifyMsg carries the fresh read for one pending removal.
-type verifyMsg struct {
-	req   int
+// verification is what the pre-removal re-read brings back.
+type verification struct {
 	key   string
 	fresh listMsg
 }
 
 // New returns the secrets screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{d: d, run: d.Runner, scope: d.Scope, home: ui.HomeFor(d, d.Scope), width: 80, height: 20}
+	return &Screen{
+		base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, home: ui.HomeFor(d, d.Scope),
+		input: ui.Field{Accept: keyRune}, width: 80, height: 20,
+	}
 }
 
 // Title implements ui.Screen.
@@ -130,60 +120,57 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware: swap the runner and the home the
 // cross-check scans, and drop the uses loaded from the old tree.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
-	s.run, s.scope, s.home = r, sc, home
-	s.gen++
+func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, home string) {
+	s.run, s.home = r, home
+	s.reads.Supersede()
 	s.uses, s.srvNote = nil, ""
 	s.invalidate()
 }
 
+// Shutdown implements ui.Shutdowner.
+func (s *Screen) Shutdown() {
+	s.reads.Cancel()
+	s.verify.Invalidate()
+}
+
 // invalidate drops any in-flight verification: its result will be ignored.
 func (s *Screen) invalidate() {
-	if s.verifying {
-		s.verifying, s.note = false, ""
+	if s.verify.Busy() {
+		s.note = ""
 	}
-	s.vreq++
+	s.verify.Invalidate()
 }
 
 // CapturesKeys implements ui.KeyCapturer: true while the key-name field has
 // focus.
 func (s *Screen) CapturesKeys() bool { return s.typing }
 
-// Refresh re-reads the vault keys and the servers' references.
+// Refresh re-reads the vault keys and the servers' references, cancelling
+// the previous read.
 func (s *Screen) Refresh() tea.Cmd {
-	s.gen++
 	s.invalidate()
-	gen, r, home, base := s.gen, s.run, s.home, ui.BaseCtx(s.d)
+	gen, ctx := s.reads.Next(s.base)
+	r, home, limit := s.run, s.home, s.limit
 	return func() tea.Msg {
-		m := readList(base, gen, r, listTimeout)
+		m := readList(ctx, gen, r, limit)
 		m.uses, m.srv = loadUses(home)
 		return m
 	}
 }
 
-func readList(base context.Context, gen int, r runner.Runner, timeout time.Duration) listMsg {
-	if r == nil {
-		return listMsg{gen: gen, note: "no runner"}
-	}
-	ctx, cancel := context.WithTimeout(base, timeout)
-	defer cancel()
-	res, err := r.Run(ctx, "secret", "list")
-	if err != nil {
-		return listMsg{gen: gen, note: mask.OneLine(mask.Text(err.Error()))}
-	}
-	if res.ExitCode != 0 {
+func readList(ctx context.Context, gen int, r runner.Runner, timeout time.Duration) listMsg {
+	res, err := ui.Read(ctx, r, timeout, "secret", "list")
+	if err == nil && res.ExitCode != 0 {
 		if model.IsBackendNotConfigured(res.Stderr) || model.IsBackendNotConfigured(res.Stdout) {
 			text := res.Stderr
 			if !model.IsBackendNotConfigured(text) {
 				text = res.Stdout
 			}
-			return listMsg{gen: gen, vault: vaultNotConfigured, msg: mask.FirstLine(mask.Text(text))}
+			return listMsg{gen: gen, vault: vaultNotConfigured, msg: mask.FirstLine(text)}
 		}
-		n := "secret list exited " + strconv.Itoa(res.ExitCode)
-		if l := mask.FirstLine(mask.Text(res.Stderr)); l != "" {
-			n += ": " + l
-		}
-		return listMsg{gen: gen, note: n}
+	}
+	if note := ui.ReadNote("secret list", res, err); note != "" {
+		return listMsg{gen: gen, note: note}
 	}
 	keys, err := model.ParseSecretKeys(res.Stdout)
 	if err != nil {
@@ -221,11 +208,11 @@ func loadUses(home string) (map[string][]string, string) {
 		}
 	}
 	for _, ids := range uses {
-		sort.Strings(ids)
+		slices.Sort(ids)
 	}
 	note := ""
 	if err != nil {
-		note = mask.FirstLine(mask.Text(err.Error()))
+		note = mask.FirstLine(err.Error())
 	}
 	return uses, note
 }
@@ -236,17 +223,18 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width, s.height = msg.Width, msg.Height
 	case listMsg:
-		if msg.gen == s.gen {
+		if s.reads.Current(msg.gen) {
 			s.apply(msg)
 		}
-	case verifyMsg:
-		return s, s.verified(msg)
+	case ui.VerifiedMsg:
+		if v, ok := s.verify.Accept(msg); ok {
+			return s, s.verified(v.(verification))
+		}
 	case tea.PasteMsg:
 		if s.typing {
 			s.rejectPaste()
 		}
 	case tea.KeyPressMsg:
-		s.reached++
 		if s.typing {
 			return s, s.typingKey(msg)
 		}
@@ -267,34 +255,33 @@ func (s *Screen) apply(m listMsg) {
 	default:
 		s.keys, s.vault, s.vaultMsg, s.loadNote = m.keys, vaultOK, "", ""
 	}
-	s.cursor = max(min(s.cursor, len(s.keys)-1), 0)
-	if s.verifying && s.selected() != s.vkey {
+	s.list.Clamp(len(s.keys))
+	if s.verify.Busy() && s.selected() != s.vkey {
 		s.invalidate()
 	}
 }
 
 // selected returns the key under the cursor, or "".
 func (s *Screen) selected() string {
-	if s.cursor < 0 || s.cursor >= len(s.keys) {
+	if s.list.Cursor < 0 || s.list.Cursor >= len(s.keys) {
 		return ""
 	}
-	return s.keys[s.cursor]
+	return s.keys[s.list.Cursor]
 }
 
 func (s *Screen) key(k string) tea.Cmd {
+	if s.list.Key(k, len(s.keys)) {
+		s.invalidate()
+		return nil
+	}
 	switch k {
-	case "up", "k":
-		s.cursor = max(s.cursor-1, 0)
-		s.invalidate()
-	case "down", "j":
-		s.cursor = max(min(s.cursor+1, len(s.keys)-1), 0)
-		s.invalidate()
 	case "r":
 		s.note = ""
 		return s.Refresh()
 	case "n":
 		s.invalidate() // a pending verification must not open a modal mid-typing
-		s.typing, s.input, s.locked, s.fieldErr = true, "", false, ""
+		s.typing, s.locked, s.fieldErr = true, false, ""
+		s.input.Clear()
 	case "u":
 		return s.emit(actions.SecretSet(s.selected()))
 	case "E":
@@ -305,21 +292,13 @@ func (s *Screen) key(k string) tea.Cmd {
 	return nil
 }
 
-// emit hands a built action to the shell; a builder error is shown instead.
+// emit hands a built action to the shell; a builder error is shown as an
+// invalid key (the only input these builders validate).
 func (s *Screen) emit(act actions.Action, err error) tea.Cmd {
 	if err != nil {
 		s.note = "invalid secret key"
 		return nil
 	}
 	s.note = ""
-	return func() tea.Msg { return ui.DoMsg{Action: act} }
-}
-
-func contains(l []string, s string) bool {
-	for _, x := range l {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return ui.Do(act)
 }

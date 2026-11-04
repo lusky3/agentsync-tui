@@ -431,7 +431,7 @@ func TestHostileNameNeverActionable(t *testing.T) {
 	// White box: even if a hostile item reached the list, nothing is emitted.
 	for _, bad := range []string{"-rf", "../x", "a\x1b[0mb", "a/b", ""} {
 		s.items = append(s.items[:1], itemOf(bad))
-		s.cursor = 1
+		s.list.Cursor = 1
 		if got := press(s, "E", "enter"); len(got) != 0 {
 			t.Errorf("hostile %q emitted %#v", bad, got)
 		}
@@ -532,16 +532,16 @@ func TestCheckResultCappedAndScrollable(t *testing.T) {
 		t.Fatalf("first line missing:\n%s", view(s))
 	}
 	for _, k := range []string{"ctrl+d", "pgdown"} {
-		before := s.check.scroll
+		before := s.check.scroll.Offset
 		press(s, k)
-		if s.check.scroll <= before {
+		if s.check.scroll.Offset <= before {
 			t.Errorf("%s did not scroll", k)
 		}
 	}
 	for _, k := range []string{"ctrl+u", "pgup"} {
-		before := s.check.scroll
+		before := s.check.scroll.Offset
 		press(s, k)
-		if s.check.scroll >= before {
+		if s.check.scroll.Offset >= before {
 			t.Errorf("%s did not scroll back", k)
 		}
 	}
@@ -653,8 +653,8 @@ func TestStaleListResultsDropped(t *testing.T) {
 	if !reflect.DeepEqual(names(s), []string{"a"}) {
 		t.Errorf("items %v", names(s))
 	}
-	s.gen++
-	s.Update(listMsg{id: s.id, gen: s.gen - 1, items: nil})
+	s.reads.Supersede()
+	s.Update(listMsg{id: s.id, gen: s.reads.Gen() - 1, items: nil})
 	if len(s.items) != 1 {
 		t.Error("stale listMsg applied")
 	}
