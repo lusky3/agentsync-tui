@@ -127,6 +127,7 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 		a.setStatus(statusOK, "done: "+title)
 	}
 	cmds := a.broadcast(m)
+	cmds = append(cmds, a.next())
 	if s := a.current(); s != nil && !a.noProject {
 		cmds = append(cmds, s.Refresh())
 	}
@@ -154,7 +155,12 @@ type quitDeadlineMsg struct{}
 
 // record appends one activity-log entry.
 func (a *App) record(act actions.Action, outcome string, dur time.Duration) {
-	if err := a.log.add(entry{Time: time.Now(), Display: act.Display(), Outcome: outcome, Duration: dur}); err != nil {
+	a.recordDisplay(act.Display(), outcome, dur)
+}
+
+// recordDisplay appends an entry whose display text is already masked.
+func (a *App) recordDisplay(display, outcome string, dur time.Duration) {
+	if err := a.log.add(entry{Time: time.Now(), Display: display, Outcome: outcome, Duration: dur}); err != nil {
 		a.logNote = "activity log file unavailable"
 	}
 }

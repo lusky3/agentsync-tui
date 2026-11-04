@@ -54,7 +54,7 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 	m := a.modal
 	s := k.String()
 	if s == "esc" {
-		a.modal = nil
+		a.modal, a.queue = nil, nil
 		a.setStatus(statusInfo, "not run: "+mask.Sanitize(m.act.Title))
 		return nil
 	}
@@ -64,7 +64,7 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 			a.modal = nil
 			return a.start(m.act)
 		case "n":
-			a.modal = nil
+			a.modal, a.queue = nil, nil
 			a.setStatus(statusInfo, "not run: "+mask.Sanitize(m.act.Title))
 		}
 		return nil

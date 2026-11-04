@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 )
@@ -82,7 +83,8 @@ type App struct {
 	status     string
 	statusKind statusKind
 	running    *running
-	quitting   bool // q pressed while running: exit once the run is logged
+	queue      []actions.Action // follow-ups (EditFileMsg.After) run in order
+	quitting   bool             // q pressed while running: exit once the run is logged
 }
 
 // NewApp builds the shell around screens.
@@ -131,6 +133,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.request(msg.Action)
 	case RunMsg:
 		return a, a.finish(msg)
+	case EditFileMsg:
+		return a, a.editFile(msg)
+	case editDoneMsg:
+		return a, a.editDone(msg)
 	case quitDeadlineMsg:
 		if a.quitting {
 			return a, a.quitDeadline()
