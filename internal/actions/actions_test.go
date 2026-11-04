@@ -461,3 +461,46 @@ func TestPluginUpgradeAll(t *testing.T) {
 		t.Errorf("title = %q", a.Title)
 	}
 }
+
+// TestMcpAddRejectsBackslashInCommaJoinedValues: agentsync splits --env (and
+// --args, --agents) with its escape-aware splitter, where `\,` is a literal
+// comma. A value ending in `\` would therefore swallow the separator after
+// it and merge two entries: the dialog would show A_OPT and B_TOKEN as two
+// entries while the file stored one. Every comma-joined argv value must
+// refuse a backslash.
+func TestMcpAddRejectsBackslashInCommaJoinedValues(t *testing.T) {
+	cases := []struct {
+		name string
+		s    AddSpec
+		want string
+	}{
+		{"env value ending in backslash", AddSpec{ID: "a", Type: "stdio", Command: "c",
+			Env: map[string]string{"A_OPT": `xx\`, "B_TOKEN": "${secret:B}"}}, "env value for A_OPT contains a backslash"},
+		{"env value with inner backslash", AddSpec{ID: "a", Type: "stdio", Command: "c",
+			Env: map[string]string{"K": `C:\tmp`}}, "env value for K contains a backslash"},
+		{"arg with backslash", AddSpec{ID: "a", Type: "stdio", Command: "c",
+			Args: []string{`a\`, "b"}}, "backslash"},
+		{"env key with backslash", AddSpec{ID: "a", Type: "stdio", Command: "c",
+			Env: map[string]string{`K\`: "v"}}, "invalid env key"},
+		{"agent with backslash", AddSpec{ID: "a", Type: "stdio", Command: "c",
+			Agents: []string{`claude\`, "codex"}}, "invalid agent"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, err := McpAdd(c.s)
+			if err == nil {
+				t.Fatalf("accepted: argv %q", a.Argv)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err %q, want it to mention %q", err, c.want)
+			}
+		})
+	}
+	if _, err := Apply(false, `claude\`); err == nil {
+		t.Error("apply --agents accepted a backslash")
+	}
+	// A plain value still passes.
+	if _, err := McpAdd(AddSpec{ID: "a", Type: "stdio", Command: "c", Env: map[string]string{"K": "v/1"}}); err != nil {
+		t.Errorf("plain env value rejected: %v", err)
+	}
+}

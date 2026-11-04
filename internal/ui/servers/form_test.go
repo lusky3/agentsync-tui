@@ -103,6 +103,28 @@ func TestAddFormBuildsAddSpec(t *testing.T) {
 	})
 }
 
+// TestAddEnvBackslashBlocksSubmit: an env value ending in a backslash would
+// merge with the next entry in the CLI's comma splitter, so what the dialog
+// shows would not be what is written. The form refuses it inline.
+func TestAddEnvBackslashBlocksSubmit(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a")
+	typeText(s, "srv")
+	press(s, "tab", "tab")
+	typeText(s, "npx")
+	press(s, "tab", "tab")
+	typeText(s, `A_OPT=xx\`)
+	press(s, "enter")
+	typeText(s, "B_TOKEN=${secret:B}")
+	press(s, "enter")
+	if msgs := press(s, "ctrl+s"); len(msgs) != 0 {
+		t.Fatalf("submitted: %#v", msgs)
+	}
+	if s.form == nil || !strings.Contains(view(s), "env value for A_OPT contains a backslash") {
+		t.Errorf("view:\n%s", view(s))
+	}
+}
+
 func TestAddExistingIDIsRefused(t *testing.T) {
 	s := newLoaded(t, fixtureHome(t), okRunner())
 	press(s, "a")

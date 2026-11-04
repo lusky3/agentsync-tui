@@ -350,6 +350,13 @@ func McpAdd(s AddSpec) (Action, error) {
 			if strings.Contains(v, ",") {
 				return Action{}, fmt.Errorf("env value for %s contains a comma, which the CLI cannot express", k)
 			}
+			// The CLI's splitter reads `\,` as a literal comma, so a value ending
+			// in a backslash would swallow the separator and merge it with the
+			// next entry: the confirm dialog would show two entries while the
+			// file stores one. Refuse every backslash, as for --args.
+			if strings.Contains(v, `\`) {
+				return Action{}, fmt.Errorf("env value for %s contains a backslash, which the CLI cannot express safely", k)
+			}
 			if err := checkNoControl("env value", v); err != nil {
 				return Action{}, err
 			}
