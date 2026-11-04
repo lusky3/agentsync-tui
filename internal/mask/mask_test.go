@@ -267,3 +267,59 @@ func TestNoOpaqueCanaryInHunk(t *testing.T) {
 		noCanary(t, "Hunk.Dest", h.Dest)
 	}
 }
+
+func TestHunkPointerContext(t *testing.T) {
+	cases := []struct{ ptr, side string }{
+		{"/mcpServers/gg/env/MY_VAR", `"FAKEenv4"`},
+		{"/mcpServers/gg/env", `{"MY_VAR":"FAKEenv4"}`},
+		{"/mcpServers/gg/headers", `{"X-Custom":"FAKEhdr7"}`},
+		{"/mcpServers/gg/args", `["--token","FAKEopaque1","-e","API_KEY=FAKEs2"]`},
+		{"/mcpServers/gg/headers/Authorization", `"Bearer FAKEauth"`},
+	}
+	for _, c := range cases {
+		h := Hunk(model.Hunk{Pointer: c.ptr, Source: c.side, Dest: c.side})
+		if strings.Contains(h.Source, "FAKE") || strings.Contains(h.Dest, "FAKE") {
+			t.Errorf("%s leaked: %q", c.ptr, h.Source)
+		}
+	}
+	h := Hunk(model.Hunk{Pointer: "/mcpServers/gg/env/K", Source: `"${secret:K}"`})
+	if h.Source != `"${secret:K}"` {
+		t.Errorf("ref lost: %q", h.Source)
+	}
+}
+
+func TestHunkKeysSanitisedAndScrubbed(t *testing.T) {
+	h := Hunk(model.Hunk{Pointer: "/x", Source: "{\"a‮b\":1,\"c\u009bd\":2,\"Bearer FAKEkey9\":3}"})
+	if strings.ContainsRune(h.Source, '‮') || strings.ContainsRune(h.Source, '\u009b') || strings.Contains(h.Source, "FAKE") {
+		t.Errorf("key leak: %q", h.Source)
+	}
+}
+
+func TestHunkKeyCollisionKeepsBothValues(t *testing.T) {
+	h := Hunk(model.Hunk{Pointer: "/x", Source: `{"Bearer FAKEa":"one","Bearer FAKEb":"two"}`})
+	if strings.Count(h.Source, "Bearer") != 2 || strings.Contains(h.Source, "FAKE") {
+		t.Errorf("collision: %q", h.Source)
+	}
+	if again := Hunk(model.Hunk{Pointer: "/x", Source: `{"Bearer FAKEa":"one","Bearer FAKEb":"two"}`}); again.Source != h.Source {
+		t.Errorf("unstable")
+	}
+}
+
+func TestHunkUnparseableSides(t *testing.T) {
+	for _, c := range []struct{ ptr, side string }{
+		{"/env/API_TOKEN", `FAKEraw1`},
+		{"/mcpServers/gg", `{"env":{"A":"FAKEtg"}} x`},
+		{"/mcpServers/gg/env", `{"A":"FAKEtg"} {}`},
+	} {
+		h := Hunk(model.Hunk{Pointer: c.ptr, Source: c.side})
+		if strings.Contains(h.Source, "FAKE") {
+			t.Errorf("%q leaked: %q", c.side, h.Source)
+		}
+	}
+	if h := Hunk(model.Hunk{Pointer: "/env/T", Source: `${secret:T}`}); h.Source != "${secret:T}" {
+		t.Errorf("raw ref changed: %q", h.Source)
+	}
+	if h := Hunk(model.Hunk{Pointer: "/a", Source: `plain text`}); h.Source != "plain text" {
+		t.Errorf("plain changed: %q", h.Source)
+	}
+}

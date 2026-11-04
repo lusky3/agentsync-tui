@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lusky3/agentsync-tui/internal/model"
@@ -161,33 +163,49 @@ func flagValue(v string) string {
 // Hunk returns h with its content made safe to display. Path and Pointer are
 // structural and only sanitised.
 func Hunk(h model.Hunk) model.Hunk {
-	sens := sensitiveRe.MatchString(lastSegment(h.Pointer))
 	h.Path = Sanitize(h.Path)
 	h.Pointer = Sanitize(h.Pointer)
-	h.Source = hunkSide(h.Source, sens)
-	h.Dest = hunkSide(h.Dest, sens)
+	forced := false
+	last := ""
+	for _, seg := range strings.Split(h.Pointer, "/") {
+		forced = forced || secretKey(seg)
+		last = seg
+	}
+	h.Source = hunkSide(h.Source, last, forced)
+	h.Dest = hunkSide(h.Dest, last, forced)
 	return h
 }
 
-func hunkSide(s string, sensitiveKey bool) string {
+// hunkSide masks one side of a hunk. It walks the first JSON document and
+// handles any remainder recursively, so trailing bytes or extra documents
+// cannot smuggle a value past the walk. Unparseable input is masked outright
+// under a secret-bearing pointer and scrubbed with Text otherwise.
+func hunkSide(s, key string, forced bool) string {
 	s = Sanitize(s)
+	if strings.TrimSpace(s) == "" {
+		return s
+	}
 	dec := json.NewDecoder(strings.NewReader(s))
 	dec.UseNumber()
 	var v any
-	if err := dec.Decode(&v); err != nil || dec.More() {
-		return Text(s)
-	}
-	if _, err := dec.Token(); err == nil {
+	if err := dec.Decode(&v); err != nil {
+		if forced {
+			return Value(key, s)
+		}
 		return Text(s)
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if enc.Encode(walk(v, "", sensitiveKey)) != nil {
-		return Text(s)
+	if enc.Encode(walk(v, key, forced)) != nil {
+		return Mask
 	}
-	return strings.TrimRight(buf.String(), "\n")
+	out := strings.TrimRight(buf.String(), "\n")
+	if rest := s[dec.InputOffset():]; strings.TrimSpace(rest) != "" {
+		out += "\n" + hunkSide(rest, key, forced)
+	}
+	return out
 }
 
 func secretKey(k string) bool {
@@ -209,9 +227,22 @@ func walk(v any, key string, forced bool) any {
 		}
 		return Text(x)
 	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
 		out := make(map[string]any, len(x))
-		for k, c := range x {
-			out[k] = walk(c, k, forced || secretKey(k))
+		for _, k := range keys {
+			mk := Text(k)
+			for n := 2; ; n++ { // masked keys may collide; never drop a value
+				if _, dup := out[mk]; !dup {
+					break
+				}
+				mk = Text(k) + "#" + strconv.Itoa(n)
+			}
+			sk := Sanitize(k)
+			out[mk] = walk(x[k], sk, forced || secretKey(sk))
 		}
 		return out
 	case []any:
