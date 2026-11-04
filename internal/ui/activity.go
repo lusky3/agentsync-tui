@@ -126,18 +126,18 @@ func appendLine(path, line string) error {
 	if err := ownedDir(dir); err != nil {
 		return err
 	}
-	return appendFile(path, line)
+	return appendFile(path, "activity log", line)
 }
 
-// appendFile appends one line to the log file at path, creating it 0600 if
-// needed. It never follows a symlink at the path (Lstat first, and
+// appendFile appends one line to the log file at path (what names it in
+// errors), creating it 0600 if needed. It never follows a symlink at the path (Lstat first, and
 // O_NOFOLLOW where the platform has it), tightens a pre-existing file to
 // 0600 before writing, and rotates the file once it has reached
 // logRotateBytes (path.1 … path.logKeep, newest first). The directory is
 // left exactly as it is: a --debug-log file may sit in the user's project
 // directory or in /tmp.
-func appendFile(path, line string) error {
-	f, err := openLog(path)
+func appendFile(path, what, line string) error {
+	f, err := openLog(path, what)
 	if err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func appendFile(path, line string) error {
 		if err := rotate(path); err != nil {
 			return err
 		}
-		if f, err = openLog(path); err != nil {
+		if f, err = openLog(path, what); err != nil {
 			return err
 		}
 	}
@@ -179,9 +179,10 @@ func ownedDir(dir string) error {
 
 // openLog opens (creating if needed) the log file for appending, refusing a
 // symlink or anything but a regular file, and tightens its mode to 0600.
-func openLog(path string) (*os.File, error) {
+// what names the file in errors ("activity log", "debug log").
+func openLog(path, what string) (*os.File, error) {
 	if fi, err := os.Lstat(path); err == nil && (fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular()) {
-		return nil, errors.New("activity log is not a regular file")
+		return nil, errors.New(what + " is not a regular file")
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|openNoFollow, 0o600)
 	if err != nil {
@@ -189,7 +190,7 @@ func openLog(path string) (*os.File, error) {
 	}
 	fi, err := f.Stat()
 	if err == nil && !fi.Mode().IsRegular() {
-		err = errors.New("activity log is not a regular file")
+		err = errors.New(what + " is not a regular file")
 	}
 	if err == nil && fi.Mode().Perm()&0o077 != 0 {
 		err = f.Chmod(0o600)

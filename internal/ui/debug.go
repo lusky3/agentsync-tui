@@ -31,7 +31,7 @@ func SetDebugLog(path string) error {
 	debugLog.mu.Lock()
 	defer debugLog.mu.Unlock()
 	if path != "" {
-		f, err := openLog(path)
+		f, err := openLog(path, "debug log")
 		if err != nil {
 			return err
 		}
@@ -67,7 +67,7 @@ func Unreadable(name string, res runner.Result, err error) string {
 		time.Now().UTC().Format(time.RFC3339), logSafe(name), "exit " + strconv.Itoa(res.ExitCode), reason,
 		"stdout: " + debugHead(res.Stdout), "stderr: " + debugHead(res.Stderr),
 	}
-	_ = appendFile(debugLog.path, strings.Join(rec, "\t")+"\n") // best effort after the startup check; the note is the user-facing part
+	_ = appendFile(debugLog.path, "debug log", strings.Join(rec, "\t")+"\n") // best effort after the startup check; the note is the user-facing part
 	return note
 }
 

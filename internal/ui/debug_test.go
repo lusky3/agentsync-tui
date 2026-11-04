@@ -124,8 +124,8 @@ func TestSetDebugLogFailsLoudly(t *testing.T) {
 			t.Errorf("symlink target written: %q", b)
 		}
 	}
-	if err := SetDebugLog(root); err == nil {
-		t.Error("a directory accepted as the log file")
+	if err := SetDebugLog(root); err == nil || !strings.Contains(err.Error(), "debug log") {
+		t.Errorf("a directory as the log file: %v, want a refusal naming the debug log", err)
 	}
 	if err := SetDebugLog(""); err != nil {
 		t.Errorf("clearing: %v", err)
