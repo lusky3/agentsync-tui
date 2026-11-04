@@ -199,10 +199,15 @@ func (s *Screen) onAgents(m agentsMsg) {
 		}
 	}
 	// The selection is gone: pick the first agent. The selector changed, so
-	// any preview no longer matches the real command (gate compares argv).
+	// the preview no longer describes the real command: drop it (the gate's
+	// argv comparison would refuse it too; this is defence in depth).
+	prev := s.agent
 	s.agent = ""
 	if len(s.agents) > 0 {
 		s.agent = s.agents[0].Name
+	}
+	if s.agent != prev {
+		s.edited()
 	}
 }
 

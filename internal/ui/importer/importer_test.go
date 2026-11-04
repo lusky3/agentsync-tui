@@ -534,3 +534,64 @@ func TestImportKeyCapturerWhileTyping(t *testing.T) {
 		t.Fatal("typed keys changed the selection")
 	}
 }
+
+// reloadAgents makes the next `agent list` return list and delivers it.
+func (h *shell) reloadAgents(list string) {
+	h.r.mu.Lock()
+	h.r.by["agent list"] = runner.Result{Stdout: list}
+	h.r.mu.Unlock()
+	h.pump(h.s.Refresh())
+}
+
+func TestImportAgentReloadDroppingSelectionNeedsPreview(t *testing.T) {
+	h := claudeShell(t, "plan")
+	h.setComponent("mcp")
+	h.press("p")
+	h.reloadAgents("antigravity enabled=true scope=user\n") // claude is gone
+	if h.s.agentName() != "antigravity" {
+		t.Fatalf("selection = %q", h.s.agentName())
+	}
+	h.press("i")
+	if len(h.asked) != 0 {
+		t.Fatalf("import of another agent without its own preview: %+v", h.asked)
+	}
+	if !strings.Contains(h.view(), "preview first") {
+		t.Fatalf("no hint:\n%s", h.view())
+	}
+}
+
+func TestImportAgentReloadKeepingSelectionKeepsPreview(t *testing.T) {
+	h := claudeShell(t, "plan")
+	h.setComponent("mcp")
+	h.press("p")
+	h.reloadAgents(agentsTwo + "codex enabled=true scope=user\n")
+	if h.s.agentName() != "claude" {
+		t.Fatalf("selection = %q", h.s.agentName())
+	}
+	h.press("i")
+	asked1(t, h, "import claude:mcp")
+}
+
+// Defence in depth: a reload that changes the selection invalidates the gate
+// itself, so the argv comparison in allows is not the only guard.
+func TestImportAgentReloadChangingSelectionInvalidatesGate(t *testing.T) {
+	h := claudeShell(t, "plan")
+	h.setComponent("mcp")
+	h.press("p")
+	if h.s.g.ok == "" {
+		t.Fatal("preview did not arm the gate")
+	}
+	seq := h.s.g.seq
+	h.reloadAgents("antigravity enabled=true scope=user\n")
+	if h.s.g.ok != "" || h.s.g.seq == seq {
+		t.Fatalf("gate not invalidated: ok=%q seq %d -> %d", h.s.g.ok, seq, h.s.g.seq)
+	}
+	// a harmless reload does not
+	h = claudeShell(t, "plan")
+	h.setComponent("mcp")
+	h.press("p")
+	h.reloadAgents(agentsTwo)
+	if h.s.g.ok == "" {
+		t.Fatal("harmless reload invalidated the gate")
+	}
+}
