@@ -140,6 +140,8 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.width, s.height = msg.Width, msg.Height
 	case ui.RunMsg:
 		s.onRun(msg)
+	case ui.EditOutcomeMsg:
+		s.onEdit(msg)
 	case tea.KeyPressMsg:
 		if s.focus != fNone {
 			s.typing(msg)
@@ -297,6 +299,21 @@ func (s *Screen) onRun(m ui.RunMsg) {
 		if had {
 			s.msg = "preview invalidated by another action — preview again"
 		}
+	}
+}
+
+// onEdit drops both previews when an $EDITOR edit starts or finishes (on any
+// screen, whatever its result): the canonical files a preview described may
+// have changed, and an edit never produces a RunMsg. A refused edit changed
+// nothing and keeps them.
+func (s *Screen) onEdit(m ui.EditOutcomeMsg) {
+	if !m.Started && !m.Finished {
+		return
+	}
+	had := s.req[0] != nil || s.req[1] != nil || s.prev[0] != nil || s.prev[1] != nil
+	s.dropPreviews()
+	if had {
+		s.msg = "preview invalidated by an edit — preview again"
 	}
 }
 

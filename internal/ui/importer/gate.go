@@ -14,9 +14,10 @@ import (
 //   - the real command is allowed only after a successful dry run of the
 //     same argv (minus --dry-run) in the same scope;
 //   - a preview survives Refresh;
-//   - it is dropped by invalidate (input edits, scope switch), by ANY
-//     completed real run of ours (success, failure or cancel) and by any
-//     foreign non-ReadOnly RunMsg; a foreign ReadOnly RunMsg is harmless;
+//   - it is dropped by invalidate (input edits, scope switch), by an $EDITOR
+//     edit starting or finishing (editInvalidate), by ANY completed real run
+//     of ours (success, failure or cancel) and by any foreign non-ReadOnly
+//     RunMsg; a foreign ReadOnly RunMsg is harmless;
 //   - results for requests that are no longer current are dropped.
 type gate struct {
 	seq  int    // bumped by every invalidation; older results are dropped
@@ -56,6 +57,14 @@ func realKey(dry string) string {
 func (g *gate) invalidate() {
 	g.seq++
 	g.req, g.ok = "", ""
+}
+
+// editInvalidate is invalidate for an $EDITOR edit; it reports whether a
+// preview (or a dry run in flight) was dropped.
+func (g *gate) editInvalidate() bool {
+	had := g.req != "" || g.ok != ""
+	g.invalidate()
+	return had
 }
 
 // request records dry as the current preview request.

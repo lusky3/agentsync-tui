@@ -580,6 +580,46 @@ func TestForeignMutationInvalidatesPreviews(t *testing.T) {
 	}
 }
 
+// An $EDITOR edit (any screen) may change the canonical files a preview
+// described; it never produces a RunMsg, so the screen watches
+// EditOutcomeMsg. Both the start and the end of an edit, whatever its
+// result, drop both modes' previews. A refused edit keeps them.
+func TestEditInvalidatesPreviews(t *testing.T) {
+	for name, m := range map[string]ui.EditOutcomeMsg{
+		"started":       {Path: "/x/skill.md", Started: true},
+		"finished":      {Path: "/x/skill.md", Finished: true},
+		"failed finish": {Path: "/x/skill.md", Finished: true, Err: "editor failed (exit 1)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newShell(t, okRunner("plan"))
+			h.press("p")
+			h.press("m")
+			h.typeText("e", "claude")
+			h.press("p")
+			h.send(m)
+			h.press("v")
+			h.press("m", "a")
+			if len(h.asked) != 0 {
+				t.Fatalf("preview survived an edit: %v", h.asked)
+			}
+			if !strings.Contains(h.view(), "preview") {
+				t.Errorf("no hint:\n%s", h.view())
+			}
+			h.press("p", "a")
+			if len(h.asked) != 1 {
+				t.Fatal("stuck: a fresh preview did not re-arm")
+			}
+		})
+	}
+	h := newShell(t, okRunner("plan"))
+	h.press("p")
+	h.send(ui.EditOutcomeMsg{Path: "/x/skill.md", Err: "edit refused: not a regular file"})
+	h.press("a")
+	if len(h.asked) != 1 {
+		t.Fatal("a refused edit invalidated the preview")
+	}
+}
+
 func TestForeignReadOnlyRunKeepsPreview(t *testing.T) {
 	h := newShell(t, okRunner("plan"))
 	h.press("p")

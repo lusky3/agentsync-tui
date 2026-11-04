@@ -89,7 +89,8 @@ Long views scroll with `ctrl+d`/`ctrl+u` or `pgdown`/`pgup`; the plugin detail v
   `agent disable --purge` needs the word `purge`, so it cannot be confirmed as
   a plain disable.
 - Apply, revert and import require a successful dry-run preview of the same
-  command before the real run is offered.
+  command before the real run is offered. Any other write, and any `E` edit,
+  drops the preview, so you preview again after it.
 - The secrets screen handles key names only: it uses `secret list`, there is
   no `secret get`, and values are entered in agentsync's own prompt or in your
   editor via `secret edit`.

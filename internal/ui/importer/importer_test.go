@@ -307,6 +307,13 @@ func TestImportGateInvalidations(t *testing.T) {
 			a, _ := actions.McpDisable("github")
 			h.send(ui.RunMsg{Action: a})
 		},
+		"edit started": func(h *shell) { h.send(ui.EditOutcomeMsg{Path: "/x/skill.md", Started: true}) },
+		"edit finished": func(h *shell) {
+			h.send(ui.EditOutcomeMsg{Path: "/x/skill.md", Finished: true})
+		},
+		"failed edit finished": func(h *shell) {
+			h.send(ui.EditOutcomeMsg{Path: "/x/skill.md", Finished: true, Err: "editor failed (exit 1)"})
+		},
 	}
 	for name, step := range steps {
 		t.Run(name, func(t *testing.T) {
@@ -329,6 +336,16 @@ func TestImportGateInvalidations(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A refused edit ran no editor, so it changed nothing.
+func TestImportRefusedEditKeepsPreview(t *testing.T) {
+	h := claudeShell(t, "plan")
+	h.setComponent("mcp")
+	h.press("p")
+	h.send(ui.EditOutcomeMsg{Path: "/x/skill.md", Err: "edit refused: outside the agentsync home"})
+	h.press("i")
+	asked1(t, h, "import claude:mcp")
 }
 
 func TestImportForeignReadOnlyKeepsPreview(t *testing.T) {

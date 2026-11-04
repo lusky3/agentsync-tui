@@ -175,6 +175,8 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case ui.RunMsg:
 		s.onRun(msg)
+	case ui.EditOutcomeMsg:
+		s.onEdit(msg)
 	case tea.KeyPressMsg:
 		if s.typing {
 			s.typed(msg)
@@ -343,6 +345,19 @@ func (s *Screen) onRun(m ui.RunMsg) {
 		}
 	case dropped:
 		s.msg = ""
+	}
+}
+
+// onEdit drops the preview when an $EDITOR edit starts or finishes (on any
+// screen, whatever its result): the canonical tree an import preview
+// described may have changed, and an edit never produces a RunMsg. A
+// refused edit changed nothing and keeps it.
+func (s *Screen) onEdit(m ui.EditOutcomeMsg) {
+	if !m.Started && !m.Finished {
+		return
+	}
+	if s.g.editInvalidate() {
+		s.msg = "preview invalidated by an edit — preview again"
 	}
 }
 
