@@ -162,7 +162,7 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 	cmd.Stdout, cmd.Stderr = out, errb
 	err := cmd.Start()
 	if err == nil {
-		track(cmd) // Shutdown can reach the group until Wait returns
+		track(cmd, args, IsWrite(ctx)) // Shutdown can reach the group until Wait returns
 		err = cmd.Wait()
 		untrack(cmd)
 	}

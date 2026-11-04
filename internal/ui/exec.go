@@ -183,12 +183,18 @@ func (a *App) start(act actions.Action) tea.Cmd {
 	// Actions derive from context.Background, not Deps.Ctx: quitting must
 	// not cut a write off (quitAfterWrite waits for it); the running
 	// action is cancelled explicitly (cancelRunning, interrupt) instead.
+	// A write is marked for the runner, whose shutdown gives it the full
+	// grace where a read gets a short wait.
+	base := context.Background()
+	if !act.ReadOnly {
+		base = runner.MarkWrite(base)
+	}
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if limit > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), limit)
+		ctx, cancel = context.WithTimeout(base, limit)
 	} else {
-		ctx, cancel = context.WithCancel(context.Background())
+		ctx, cancel = context.WithCancel(base)
 	}
 	a.running.cancel = cancel
 	r := a.run
@@ -388,4 +394,14 @@ func (a *App) Filter(_ tea.Model, msg tea.Msg) tea.Msg {
 		a.shutdown()
 	}
 	return msg
+}
+
+// RecordShutdown logs what became of each child the runner ended when the
+// program went away (runner.Shutdown): the masked command line, the
+// outcome (exited, killed, orphaned) and how long it took. main calls it
+// after tea.Program.Run has returned, so the entries reach the file only.
+func (a *App) RecordShutdown(ended []runner.Ended) {
+	for _, e := range ended {
+		a.recordDisplay(actions.Action{Argv: e.Args}.Display(), e.Outcome, e.Took)
+	}
 }

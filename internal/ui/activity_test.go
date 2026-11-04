@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lusky3/agentsync-tui/internal/runner"
 )
 
 func logEntry(i int) entry {
@@ -125,5 +127,28 @@ func TestActivityLogRotates(t *testing.T) {
 	b, _ := os.ReadFile(path)
 	if !strings.Contains(string(b), logEntry(n-1).fileLine()) {
 		t.Errorf("last entry missing from the current file: %q", b)
+	}
+}
+
+// What became of each child at shutdown is logged like any run: masked
+// command line, the outcome (exited / killed / orphaned), how long it took.
+func TestRecordShutdownLogsOutcomes(t *testing.T) {
+	d := baseDeps(newFakeRunner())
+	d.LogPath = filepath.Join(t.TempDir(), "activity.log")
+	app := NewApp(d, newScreen("A", "a"))
+	app.RecordShutdown([]runner.Ended{
+		{Args: []string{"status", "--json"}, Outcome: "exited", Took: 120 * time.Millisecond},
+		{Args: []string{"mcp", "add", "x", "--header", "Authorization: Bearer CANARYsd1"}, Write: true, Outcome: "killed", Took: 10 * time.Second},
+	})
+	es := app.log.entries()
+	if len(es) != 2 || es[0].Outcome != "exited" || es[1].Outcome != "killed" {
+		t.Fatalf("entries %+v", es)
+	}
+	b, err := os.ReadFile(d.LogPath)
+	if err != nil || !strings.Contains(string(b), "killed") || !strings.Contains(string(b), "agentsync mcp add x") {
+		t.Errorf("file %q err %v", b, err)
+	}
+	if strings.Contains(string(b), "CANARY") || strings.Contains(es[1].Display, "CANARY") {
+		t.Errorf("unmasked argv logged: %q", b)
 	}
 }

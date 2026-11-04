@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/lusky3/agentsync-tui/internal/actions"
+	"github.com/lusky3/agentsync-tui/internal/runner"
 )
 
 // networkRead is a ReadOnly action with Network set: an import dry run of
@@ -208,6 +211,32 @@ func TestLocalReadActionsBoundedLocally(t *testing.T) {
 		dl, ok := ctx.Deadline()
 		if !ok || time.Until(dl) > c.max {
 			t.Errorf("%s: deadline %v (%v), want one within %v", c.name, ok, time.Until(dl), c.max)
+		}
+		h.final()
+	}
+}
+
+// The runner is told which runs are writes (runner.MarkWrite on the
+// action's context), so a shutdown can give a write the full grace and a
+// read only a short wait.
+func TestWritesMarkedForTheRunner(t *testing.T) {
+	for _, c := range []struct {
+		act   actions.Action
+		write bool
+	}{{mustAct(actions.McpEnable("x")), true}, {actions.Check(), false}, {networkRead(t), false}} {
+		fr := newFakeRunner()
+		h := start(t, baseDeps(fr), newScreen("A", "a"))
+		h.tm.Send(DoMsg{Action: c.act})
+		if !c.act.ReadOnly {
+			h.waitMsg("modal", func(m tea.Msg) bool { _, ok := m.(DoMsg); return ok })
+			h.tm.Send(key("y"))
+		}
+		h.waitStarted()
+		fr.mu.Lock()
+		ctx := fr.ctxs[0]
+		fr.mu.Unlock()
+		if got := runner.IsWrite(ctx); got != c.write {
+			t.Errorf("%q: IsWrite %v, want %v", c.act.Argv, got, c.write)
 		}
 		h.final()
 	}

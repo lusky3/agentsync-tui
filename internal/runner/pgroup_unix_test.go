@@ -87,14 +87,7 @@ func spawn(t *testing.T, grace time.Duration) (self, child int, done <-chan erro
 	for self == 0 || child == 0 {
 		b, _ := os.ReadFile(logPath)
 		if strings.Contains(string(b), "ready") {
-			for _, l := range strings.Split(string(b), "\n") {
-				if v, ok := strings.CutPrefix(l, "child "); ok {
-					child, _ = strconv.Atoi(v)
-				}
-				if v, ok := strings.CutPrefix(l, "self "); ok {
-					self, _ = strconv.Atoi(v)
-				}
-			}
+			self, child = pidsFrom(string(b))
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("helper never reported its pids")
@@ -124,7 +117,7 @@ func TestShutdownTerminatesLiveGroups(t *testing.T) {
 				t.Fatal("precondition: group running")
 			}
 			start := time.Now()
-			Shutdown(c.sig, 300*time.Millisecond)
+			Shutdown(c.sig, 300*time.Millisecond, 300*time.Millisecond)
 			if d := time.Since(start); d > 5*time.Second {
 				t.Errorf("Shutdown took %v", d)
 			}
@@ -141,5 +134,18 @@ func TestShutdownTerminatesLiveGroups(t *testing.T) {
 			}
 		})
 	}
-	Shutdown(os.Interrupt, time.Second) // nothing live: returns at once
+	Shutdown(os.Interrupt, time.Second, time.Second) // nothing live: returns at once
+}
+
+// pidsFrom reads the "self <pid>" and "child <pid>" lines of a helper log.
+func pidsFrom(log string) (self, child int) {
+	for _, l := range strings.Split(log, "\n") {
+		if v, ok := strings.CutPrefix(l, "child "); ok {
+			child, _ = strconv.Atoi(v)
+		}
+		if v, ok := strings.CutPrefix(l, "self "); ok {
+			self, _ = strconv.Atoi(v)
+		}
+	}
+	return self, child
 }

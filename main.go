@@ -42,9 +42,33 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// program is what run needs of a tea.Program.
+type program interface {
+	Run() (tea.Model, error)
+	Send(tea.Msg)
+}
+
+// hooks are the process-level pieces run drives, injectable by tests: the
+// program, and the runner's shutdown of the children.
+type hooks struct {
+	newProgram func(*ui.App) program
+	shutdown   func(sig os.Signal, readWait, writeWait time.Duration) []runner.Ended
+	killAll    func()
+}
+
+var defaultHooks = hooks{
+	newProgram: func(a *ui.App) program { return tea.NewProgram(a, tea.WithFilter(a.Filter)) },
+	shutdown:   runner.Shutdown,
+	killAll:    runner.KillAll,
+}
+
 // run returns the exit code; every path returns through here so the
 // terminal is always restored by tea.Program.Run before the process exits.
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWith(args, stdout, stderr, defaultHooks)
+}
+
+func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	fs := flag.NewFlagSet("agentsync-tui", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print the version and exit")
@@ -118,7 +142,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// cancelled with SIGINT and gets a short wait, a write abandoned to
 	// SIGTERM or SIGHUP gets the interrupt grace, then the group is killed,
 	// so nothing is orphaned.
-	p := tea.NewProgram(a, tea.WithFilter(a.Filter))
+	p := h.newProgram(a)
 	sigs, done := make(chan os.Signal, 4), make(chan struct{})
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGHUP)
 	var exit struct {
@@ -146,7 +170,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Run restores the terminal (alt screen, raw mode) before returning,
 	// including after a recovered panic.
 	_, err = p.Run()
-	signal.Stop(sigs)
+	// The terminal is in cooked mode again, so a ctrl+c now is a real
+	// SIGINT: keep catching it, and SIGTERM and SIGHUP, until the children
+	// are gone, or Go's default handler would end the process with them
+	// alive. The forwarding goroutine stops; endChildren drains the channel.
+	signal.Notify(sigs, os.Interrupt)
 	close(done)
 	select { // a signal delivered as Run was returning
 	case s := <-sigs:
@@ -156,16 +184,36 @@ func run(args []string, stdout, stderr io.Writer) int {
 	exit.Lock()
 	sig := exit.sig
 	exit.Unlock()
-	if sig == nil {
-		runner.Shutdown(os.Interrupt, readShutdownWait) // the cancelled reads
-	} else {
-		runner.Shutdown(sig, runner.InterruptGrace) // a write abandoned to the signal
-	}
+	a.RecordShutdown(endChildren(sig, sigs, h))
+	signal.Stop(sigs)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
 		return 1
 	}
 	return 0
+}
+
+// endChildren ends the agentsync children once the program has returned,
+// forwarding sig (the signal that ended the TUI; nil is a quit, whose reads
+// were already cancelled with SIGINT) with the short read wait and the
+// write grace (runner.Shutdown). A further signal arriving on sigs
+// meanwhile, a second ctrl+c or SIGTERM, escalates: every group is killed
+// at once (killAll) and the shutdown returns with the outcomes. It never
+// returns with a child alive.
+func endChildren(sig os.Signal, sigs <-chan os.Signal, h hooks) []runner.Ended {
+	if sig == nil {
+		sig = os.Interrupt
+	}
+	done := make(chan []runner.Ended, 1)
+	go func() { done <- h.shutdown(sig, readShutdownWait, runner.InterruptGrace) }()
+	for {
+		select {
+		case ended := <-done:
+			return ended
+		case <-sigs:
+			h.killAll()
+		}
+	}
 }
 
 // readShutdownWait is how long a quit waits for the cancelled reads (already

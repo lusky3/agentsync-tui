@@ -2,10 +2,19 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/lusky3/agentsync-tui/internal/runner"
+	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -118,4 +127,104 @@ func TestRunBadDebugLogExitsTwo(t *testing.T) {
 	if !strings.Contains(errb.String(), "debug-log") {
 		t.Errorf("stderr %q", errb.String())
 	}
+}
+
+// fakeProgram stands in for tea.Program: Run returns at once with the
+// configured error.
+type fakeProgram struct {
+	err  error
+	sent []tea.Msg
+}
+
+func (f *fakeProgram) Run() (tea.Model, error) { return nil, f.err }
+func (f *fakeProgram) Send(m tea.Msg)          { f.sent = append(f.sent, m) }
+
+// hermetic points every path the TUI would touch at temp directories.
+func hermetic(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("AGENTSYNC_HOME", filepath.Join(root, ".agentsync"))
+	t.Setenv("AGENTSYNC_TARGET_ROOT", "")
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+}
+
+// Every exit of the program, clean or with an error (a recovered panic
+// comes back as Run's error), ends the children: the shutdown runs with a
+// quit's signal and waits, and its outcomes are logged.
+func TestRunShutsDownChildrenOnEveryExit(t *testing.T) {
+	for _, runErr := range []error{nil, errors.New("boom")} {
+		hermetic(t)
+		var got []shutdownCall
+		h := hooks{
+			newProgram: func(*ui.App) program { return &fakeProgram{err: runErr} },
+			shutdown: func(sig os.Signal, readWait, writeWait time.Duration) []runner.Ended {
+				got = append(got, shutdownCall{sig, readWait, writeWait})
+				return []runner.Ended{{Args: []string{"status", "--json"}, Outcome: "killed", Took: time.Second}}
+			},
+			killAll: func() { t.Error("killAll without a second signal") },
+		}
+		var out, errb bytes.Buffer
+		code := runWith([]string{}, &out, &errb, h)
+		if want := map[bool]int{false: 0, true: 1}[runErr != nil]; code != want {
+			t.Errorf("err %v: exit %d, want %d (%s)", runErr, code, want, errb.String())
+		}
+		if len(got) != 1 || got[0].sig != os.Interrupt || got[0].readWait != readShutdownWait || got[0].writeWait != runner.InterruptGrace {
+			t.Fatalf("err %v: shutdown calls %+v", runErr, got)
+		}
+		b, err := os.ReadFile(filepath.Join(os.Getenv("XDG_STATE_HOME"), "agentsync-tui", "activity.log"))
+		if err != nil || !strings.Contains(string(b), "killed") || !strings.Contains(string(b), "agentsync status --json") {
+			t.Errorf("err %v: shutdown outcome not logged: %q (%v)", runErr, b, err)
+		}
+	}
+}
+
+type shutdownCall struct {
+	sig                 os.Signal
+	readWait, writeWait time.Duration
+}
+
+// A signal that arrives while the children are being ended (a second
+// ctrl+c or SIGTERM, the terminal in cooked mode again) is caught and
+// escalates to an immediate kill of every group; the exit is then bounded
+// and nothing survives. The signal that ended the TUI is forwarded.
+func TestEndChildrenEscalatesOnSecondSignal(t *testing.T) {
+	released := make(chan struct{})
+	killed := 0
+	h := hooks{
+		shutdown: func(sig os.Signal, readWait, writeWait time.Duration) []runner.Ended {
+			if sig != syscall.SIGTERM {
+				t.Errorf("forwarded %v, want SIGTERM", sig)
+			}
+			select {
+			case <-released: // KillAll let the groups go
+			case <-time.After(writeWait):
+				t.Error("shutdown waited out the grace: no escalation")
+			}
+			return []runner.Ended{{Args: []string{"apply"}, Write: true, Outcome: "killed"}}
+		},
+		killAll: func() { killed++; close(released) },
+	}
+	sigs := make(chan os.Signal, 2)
+	done := make(chan []runner.Ended, 1)
+	go func() { done <- endChildren(syscall.SIGTERM, sigs, h) }()
+	time.Sleep(50 * time.Millisecond)
+	sigs <- syscall.SIGTERM
+	select {
+	case ended := <-done:
+		if killed != 1 || len(ended) != 1 || ended[0].Outcome != "killed" {
+			t.Errorf("killAll %d, ended %+v", killed, ended)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("endChildren did not return after the second signal")
+	}
+	// No signal: the forwarded one is a quit's SIGINT and killAll is never called.
+	h.killAll = func() { t.Error("killAll on a plain exit") }
+	h.shutdown = func(sig os.Signal, r, w time.Duration) []runner.Ended {
+		if sig != os.Interrupt || r != readShutdownWait || w != runner.InterruptGrace {
+			t.Errorf("quit: %v %v %v", sig, r, w)
+		}
+		return nil
+	}
+	endChildren(nil, sigs, h)
 }

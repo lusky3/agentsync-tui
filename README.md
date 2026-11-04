@@ -79,9 +79,13 @@ records a stopped read as `cancelled` and a stopped write as `interrupted`.
 If the TUI itself is ended from outside (SIGTERM, SIGHUP when the terminal
 closes, or SIGINT while its input is not a terminal), a command still in
 flight is logged as `abandoned`, its process group is sent the same signal
-(SIGTERM, or SIGHUP as the terminal would have sent it), given 10 seconds,
-and then killed; a quit kills what is left of the cancelled reads after 2
-seconds. Nothing the TUI started outlives it. Because agentsync runs in its
+(SIGTERM, or SIGHUP as the terminal would have sent it), given 10 seconds
+for a write and 2 for a read, and then killed; a quit does the same with
+SIGINT for what is left of the cancelled reads. What became of each child
+(`exited`, `killed`, or `orphaned` if even that failed) is logged. While the
+children are being ended the TUI keeps catching `ctrl+c`, SIGTERM and
+SIGHUP, and a second one kills every group at once. Nothing the TUI started
+outlives it. Because agentsync runs in its
 own process group behind the TUI, its children get `GIT_TERMINAL_PROMPT=0`
 and `SSH_ASKPASS_REQUIRE=never` (and no `GIT_ASKPASS`), so a git clone that
 would ask for credentials on the terminal fails with an error instead of
