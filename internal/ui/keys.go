@@ -16,7 +16,7 @@ const helpText = `Keys
   ctrl+c            cancel the running action, or quit when idle
 
 Confirm dialog
-  y / enter         run          n / esc   cancel
+  y                 run          n / esc   cancel (enter does not confirm)
   destructive actions: type the verb shown, then enter`
 
 const noProjectText = "no project directory: start with --project <path>"

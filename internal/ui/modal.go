@@ -69,10 +69,15 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	if m.verb == "" {
+		// Only y runs it. Enter is refused because the forms (servers,
+		// plugins, secrets) submit on enter: a double-press would open the
+		// modal and confirm it before the command line could be read.
 		switch s {
-		case "y", "enter":
+		case "y":
 			a.modal = nil
 			return a.start(m.act)
+		case "enter":
+			m.hint = "press y to run it"
 		case "n":
 			a.modal, a.queue = nil, nil
 			a.setStatus(statusInfo, "not run: "+mask.Sanitize(m.act.Title))
@@ -196,7 +201,10 @@ func (m *modal) render(w int, mode renderMode) string {
 	}
 	b.WriteString(gap)
 	if m.verb == "" {
-		b.WriteString("Run it? y/enter = yes, n/esc = no")
+		b.WriteString("Run it? y = yes, n/esc = no")
+		if m.hint != "" {
+			b.WriteString("\n" + styleWarn.Render(m.hint))
+		}
 	} else {
 		fmt.Fprintf(&b, "Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input)
 		if m.hint != "" {

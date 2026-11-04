@@ -44,8 +44,9 @@ agentsync-tui --version
 | `q` | quit (`ctrl+c` cancels a running action) |
 
 In lists, `up`/`down` or `k`/`j` move and `r` refreshes. Confirm dialogs take
-`y`/`enter` to run and `n`/`esc` to cancel; destructive actions ask you to type
-a word instead (see the safety model).
+`y` to run and `n`/`esc` to cancel. `enter` does not confirm, so a double
+`enter` on a form cannot run the command before you have read it. Destructive
+actions ask you to type a word instead (see the safety model).
 
 ### Screens
 

@@ -944,7 +944,7 @@ func TestModalLongDisplayKeepsPrompt(t *testing.T) {
 		t.Errorf("view has %d lines", n)
 	}
 	flat := strings.Join(strings.Fields(strings.ReplaceAll(out, "│", " ")), " ")
-	for _, want := range []string{"Run it? y/enter = yes", "[network]", "agentsync mcp add x --command npx --arg value-number-00", "…"} {
+	for _, want := range []string{"Run it? y = yes", "[network]", "agentsync mcp add x --command npx --arg value-number-00", "…"} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("modal missing %q:\n%s", want, out)
 		}
@@ -960,7 +960,7 @@ func TestModalLongDisplayKeepsPrompt(t *testing.T) {
 	// At a normal height the whole command is still readable (wrapped).
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	flat = strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(content(app)), "│", " ")), " ")
-	if !strings.Contains(flat, "value-number-39") || !strings.Contains(flat, "Run it? y/enter = yes") {
+	if !strings.Contains(flat, "value-number-39") || !strings.Contains(flat, "Run it? y = yes") {
 		t.Errorf("tall view lost the command or prompt:\n%s", ansi.Strip(content(app)))
 	}
 }
@@ -1071,5 +1071,48 @@ func TestModalShowsScopeLine(t *testing.T) {
 	app.Update(DoMsg{Action: disable})
 	if out := ansi.Strip(content(app)); !strings.Contains(out, "scope: project — /proj") {
 		t.Errorf("shell modal missing the project scope line:\n%s", out)
+	}
+}
+
+// TestNonDestructiveConfirmNeedsY: enter must not confirm a non-destructive
+// action. The add forms submit on enter, so a double-press would otherwise
+// open the modal and run `mcp add` / `plugin add` before it could be read.
+func TestNonDestructiveConfirmNeedsY(t *testing.T) {
+	fr := newFakeRunner()
+	h := start(t, baseDeps(fr), newScreen("A", "a"))
+	act := mustAct(actions.McpEnable("x"))
+	if act.Destructive || act.ReadOnly {
+		t.Fatal("precondition: a confirmable, non-destructive action")
+	}
+	h.tm.Send(DoMsg{Action: act})
+	for i := 0; i < 2; i++ {
+		if o := h.pressAndWait(key("enter")); !o.modalOpen || o.running {
+			t.Fatalf("enter #%d: modalOpen=%v running=%v, want the modal still open", i+1, o.modalOpen, o.running)
+		}
+	}
+	if n := fr.nCalls(); n != 0 {
+		t.Fatalf("enter ran the action: %d runner calls", n)
+	}
+	if o := h.pressAndWait(key("y")); o.modalOpen || !o.running {
+		t.Fatalf("y: modalOpen=%v running=%v", o.modalOpen, o.running)
+	}
+	h.waitStarted()
+	fr.respond <- fakeResp{}
+	h.waitRun()
+	h.final()
+}
+
+func TestNonDestructiveModalSaysPressY(t *testing.T) {
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(DoMsg{Action: mustAct(actions.McpEnable("x"))})
+	if v := ansi.Strip(content(app)); !strings.Contains(v, "Run it? y = yes, n/esc = no") || strings.Contains(v, "enter") {
+		t.Errorf("prompt should offer y only:\n%s", v)
+	}
+	if _, cmd := app.Update(key("enter")); cmd != nil || app.modal == nil {
+		t.Fatal("enter confirmed the modal")
+	}
+	if v := ansi.Strip(content(app)); !strings.Contains(v, "press y to run it") {
+		t.Errorf("no hint after enter:\n%s", v)
 	}
 }
