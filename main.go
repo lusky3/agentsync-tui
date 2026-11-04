@@ -49,7 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	scopeFlag := fs.String("scope", "", "agentsync scope: user or project (default user; --project implies project)")
 	project := fs.String("project", "", "project directory (implies --scope project)")
 	readTimeout := fs.Duration("read-timeout", ui.DefaultReadTimeout,
-		"bound on every background read (lists, status, import previews, plugin outdated); 0 = none")
+		"bound on network reads (import previews, plugin outdated); 0 = none. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
 	writeTimeout := fs.Duration("write-timeout", 0,
 		"bound on every write (apply, import, plugin upgrade, ...); 0 = none. A write cut off partway can leave agentsync's state and the destination files out of step")
 	if err := fs.Parse(args); err != nil {

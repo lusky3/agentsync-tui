@@ -93,7 +93,7 @@ type Screen struct {
 	id    uint64
 	kind  Kind
 	base  context.Context
-	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
+	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
 	home  string    // canonical tree of the current scope (memory list, edit paths)
 	reads ui.Rounds // the list read; superseded rounds are cancelled
@@ -126,7 +126,7 @@ type listMsg struct {
 // New returns the library screen for kind.
 func New(d ui.Deps, kind Kind) *Screen {
 	return &Screen{
-		id: nextID.Add(1), kind: kind, base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner,
+		id: nextID.Add(1), kind: kind, base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner,
 		home: ui.HomeFor(d, d.Scope), width: 80, height: 24,
 	}
 }

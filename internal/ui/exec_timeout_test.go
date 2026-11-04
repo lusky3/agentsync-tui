@@ -147,3 +147,25 @@ func TestTimeoutDescribed(t *testing.T) {
 		t.Error("timeoutError must unwrap to DeadlineExceeded")
 	}
 }
+
+// Local reads (lists, status, diff, explain, doctor, check, the header
+// chip) are bounded at min(LocalReadBound, Read): --read-timeout can lower
+// the bound but not lift it, and 0 (no network bound) still bounds them.
+func TestTimeoutsLocal(t *testing.T) {
+	if LocalReadBound != 30*time.Second {
+		t.Fatalf("LocalReadBound = %v", LocalReadBound)
+	}
+	for _, c := range []struct{ read, want time.Duration }{
+		{0, LocalReadBound},
+		{2 * time.Minute, LocalReadBound},
+		{10 * time.Second, 10 * time.Second},
+		{LocalReadBound, LocalReadBound},
+	} {
+		if got := (Timeouts{Read: c.read}).Local(); got != c.want {
+			t.Errorf("Read %v: Local %v, want %v", c.read, got, c.want)
+		}
+	}
+	if DefaultTimeouts.Local() != LocalReadBound {
+		t.Errorf("default local bound %v", DefaultTimeouts.Local())
+	}
+}

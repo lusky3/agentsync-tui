@@ -51,7 +51,7 @@ type agentsMsg struct {
 // Screen is the import tab.
 type Screen struct {
 	base  context.Context
-	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
+	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
 	scope runner.Scope // the preview is bound to it (gate.Gate)
 	reads ui.Rounds    // the agent list read; superseded rounds are cancelled
@@ -76,7 +76,7 @@ type Screen struct {
 // New returns the import screen.
 func New(d ui.Deps) *Screen {
 	return &Screen{
-		base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, scope: d.Scope,
+		base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, scope: d.Scope,
 		name: ui.Field{Max: maxName}, width: 80, height: 20,
 	}
 }

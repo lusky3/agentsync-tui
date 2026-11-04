@@ -673,3 +673,18 @@ func TestPluginsNeverEmitWithoutSelection(t *testing.T) {
 		t.Errorf("empty state missing:\n%s", view(s))
 	}
 }
+
+// The list reads are local and bounded at min(30 s, --read-timeout), while
+// `plugin outdated` (network) uses --read-timeout alone.
+func TestListReadsUseLocalBound(t *testing.T) {
+	for _, c := range []struct{ read, max time.Duration }{{0, 30 * time.Second}, {5 * time.Second, 5 * time.Second}, {2 * time.Minute, 30 * time.Second}} {
+		fr := standardFake(t)
+		s := New(ui.Deps{Runner: fr, Scope: runner.ScopeUser, Timeouts: &ui.Timeouts{Read: c.read}})
+		s.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+		drive(s, s.Refresh())
+		dl, ok := fr.ctxs["plugin list"].Deadline()
+		if !ok || time.Until(dl) > c.max {
+			t.Errorf("read timeout %v: plugin list deadline %v (%v), want one within %v", c.read, ok, time.Until(dl), c.max)
+		}
+	}
+}

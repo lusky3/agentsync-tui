@@ -32,10 +32,11 @@ const maxField = 2048
 
 // Screen is the plugins tab.
 type Screen struct {
-	base  context.Context
-	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
-	run   runner.Runner
-	reads ui.Rounds // the two list reads; superseded rounds are cancelled
+	base     context.Context
+	limit    time.Duration // bound on one local read (ui.Deps.Limits().Local())
+	netLimit time.Duration // bound on `plugin outdated` (ui.Deps.Limits().Read)
+	run      runner.Runner
+	reads    ui.Rounds // the two list reads; superseded rounds are cancelled
 
 	pane             int
 	plugins          []model.Plugin
@@ -110,7 +111,7 @@ type explainMsg struct {
 // New returns the plugins screen.
 func New(d ui.Deps) *Screen {
 	return &Screen{
-		base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner,
+		base: ui.BaseCtx(d), limit: d.Limits().Local(), netLimit: d.Limits().Read, run: d.Runner,
 		typing: -1, buf: ui.Field{Max: maxField}, width: 80, height: 24,
 	}
 }

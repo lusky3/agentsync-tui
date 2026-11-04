@@ -105,6 +105,10 @@ func TestScrollFrameAndKeys(t *testing.T) {
 	if out[1] != "row010" {
 		t.Fatalf("page down: %q", out[1])
 	}
+	if !s.Key("space", 30) || s.Offset != 20 { // space is a page-down alias
+		t.Fatalf("space did not page down: %d", s.Offset)
+	}
+	s.Key("ctrl+u", 30)
 	s.Key("end", 30)
 	out = s.Frame([]string{"H"}, body, []string{"F"}, 12)
 	if out[1] != "row020" || out[10] != "row029" || out[11] != "F" {

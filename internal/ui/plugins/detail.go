@@ -79,7 +79,7 @@ func (s *Screen) checkOutdated() tea.Cmd {
 	}
 	s.oChecking, s.note = true, "checking for updates (network)…"
 	gen, ctx := s.oreads.Next(s.base)
-	r, limit := s.run, s.limit
+	r, limit := s.run, s.netLimit
 	return func() tea.Msg {
 		res, err := ui.Read(ctx, r, limit, "plugin", "outdated")
 		if note := ui.ReadNote("plugin outdated", res, err); note != "" {

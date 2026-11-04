@@ -375,13 +375,13 @@ func TestChipNarrowWidth(t *testing.T) {
 	}
 }
 
+// The chip's checks are local reads: bounded at min(LocalReadBound,
+// --read-timeout) like every other local read.
 func TestChipChecksBoundedByTimeout(t *testing.T) {
-	old := chipTimeout
-	chipTimeout = 20 * time.Millisecond
-	t.Cleanup(func() { chipTimeout = old })
 	fr := newChipFake()
 	fr.block = true // never released: only the context can end the call
-	a := chipApp(fr)
+	a := NewApp(Deps{Runner: fr, Scope: runner.ScopeUser, AgentsyncHome: "/nonexistent/agentsync",
+		Timeouts: &Timeouts{Read: 20 * time.Millisecond}}, newScreen("A", "a"))
 	done := make(chan struct{})
 	go func() { defer close(done); settle(a, a.Init()) }()
 	select {
@@ -396,9 +396,6 @@ func TestChipChecksBoundedByTimeout(t *testing.T) {
 	defer fr.mu.Unlock()
 	if len(fr.deadlines) == 0 || !fr.deadlines[0] {
 		t.Fatalf("chip check ran without a deadline: %v", fr.deadlines)
-	}
-	if old != 30*time.Second {
-		t.Errorf("default chip timeout = %v", old)
 	}
 }
 

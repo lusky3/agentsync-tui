@@ -53,7 +53,7 @@ var refRe = regexp.MustCompile(`\$\{secret:([A-Za-z0-9][A-Za-z0-9._-]*)\}`)
 // Screen is the secrets tab.
 type Screen struct {
 	base  context.Context
-	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
+	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
 	home  string    // canonical tree whose servers the cross-check scans
 	reads ui.Rounds // the list read; superseded rounds are cancelled
@@ -107,7 +107,7 @@ type verification struct {
 // New returns the secrets screen.
 func New(d ui.Deps) *Screen {
 	return &Screen{
-		base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, home: ui.HomeFor(d, d.Scope),
+		base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, home: ui.HomeFor(d, d.Scope),
 		input: ui.Field{Accept: keyRune}, width: 80, height: 20,
 	}
 }

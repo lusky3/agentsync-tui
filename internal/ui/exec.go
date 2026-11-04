@@ -29,13 +29,20 @@ type DoMsg struct{ Action actions.Action }
 // DefaultReadTimeout is the default bound on network reads (Timeouts.Read).
 const DefaultReadTimeout = 120 * time.Second
 
+// LocalReadBound caps every local read (the lists, status, diff, explain,
+// doctor and check a screen or the header chip runs): min(LocalReadBound,
+// Timeouts.Read), see Timeouts.Local. A local agentsync call that takes
+// longer is stuck, and a stuck read must not hold a screen for the network
+// bound.
+const LocalReadBound = 30 * time.Second
+
 // Timeouts bound the commands the shell runs; zero means no bound. Past a
 // bound the run is cancelled like ctrl+c (SIGINT, then SIGKILL after
 // runner.InterruptGrace) and reported, and logged, as a timeout.
 type Timeouts struct {
 	// Read bounds network reads: ReadOnly actions with Network set (import
 	// dry runs of plugins or a whole agent) and the plugins screen's
-	// `plugin outdated`. Other reads have their own fixed bounds or none.
+	// `plugin outdated`. Local reads use Local, which it can lower.
 	Read time.Duration
 	// Write bounds every non-ReadOnly action. The default is none: a write
 	// such as `plugin upgrade --all` cut off partway can leave agentsync's
@@ -45,6 +52,16 @@ type Timeouts struct {
 
 // DefaultTimeouts bounds network reads only.
 var DefaultTimeouts = Timeouts{Read: DefaultReadTimeout}
+
+// Local is the bound on a local read: Read when it is set and below
+// LocalReadBound, else LocalReadBound. --read-timeout 0 lifts the network
+// bound only.
+func (t Timeouts) Local() time.Duration {
+	if t.Read > 0 && t.Read < LocalReadBound {
+		return t.Read
+	}
+	return LocalReadBound
+}
 
 // Limits returns d.Timeouts, or DefaultTimeouts when it is nil.
 func (d Deps) Limits() Timeouts {

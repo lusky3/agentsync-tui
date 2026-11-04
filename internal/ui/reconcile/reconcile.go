@@ -36,7 +36,7 @@ import (
 // Screen is the reconcile tab.
 type Screen struct {
 	base  context.Context
-	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
+	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
 	reads ui.Rounds // the report read; superseded rounds are cancelled
 
@@ -63,7 +63,7 @@ type reportMsg struct {
 
 // New returns the reconcile screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, width: 80, height: 20}
+	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, width: 80, height: 20}
 }
 
 // Title implements ui.Screen.

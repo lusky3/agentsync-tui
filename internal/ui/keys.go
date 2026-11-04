@@ -20,6 +20,7 @@ const helpText = `Keys
 Lists and long views (every screen)
   up/k, down/j      move the cursor, or scroll, one row
   ctrl+u, pgup      a page up          ctrl+d, pgdown   a page down
+                                       space            a page down (long views)
   home / end        first / last row
   r                 refresh the screen
 

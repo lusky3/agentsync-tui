@@ -3,16 +3,11 @@ package ui
 import (
 	"context"
 	"errors"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/runner"
 )
-
-// chipTimeout bounds one round of the header chip's background checks. It is
-// a variable only so tests can shorten it.
-var chipTimeout = 30 * time.Second
 
 // chipState is what the header chip shows. The zero value is pending.
 type chipState int
@@ -76,7 +71,7 @@ type chipMsg struct {
 // so they can never re-trigger themselves.
 func (a *App) chipCmd() tea.Cmd {
 	if a.chipCancel != nil {
-		a.chipCancel() // the superseded round's children die now, not after 30 s
+		a.chipCancel() // the superseded round's children die now, not at their bound
 		a.chipCancel = nil
 	}
 	a.chipGen++
@@ -88,8 +83,9 @@ func (a *App) chipCmd() tea.Cmd {
 	a.chip = chipPending
 	round, cancelRound := context.WithCancel(a.root)
 	a.chipCancel = cancelRound
+	limit := a.d.Limits().Local() // the checks are local reads
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.WithValue(round, chipCtxKey{}, true), chipTimeout)
+		ctx, cancel := context.WithTimeout(context.WithValue(round, chipCtxKey{}, true), limit)
 		defer cancel()
 		return chipMsg{gen: gen, state: chipDerive(ctx, r)}
 	}

@@ -26,7 +26,7 @@ const (
 // Screen is the drift tab.
 type Screen struct {
 	base  context.Context
-	limit time.Duration // bound on one read (ui.Deps.Limits().Read)
+	limit time.Duration // bound on one local read (ui.Deps.Limits().Local())
 	run   runner.Runner
 	reads ui.Rounds // the status read; superseded rounds are cancelled
 
@@ -85,7 +85,7 @@ type legendMsg struct {
 
 // New returns the drift screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Read, run: d.Runner, all: true, width: 80, height: 20}
+	return &Screen{base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, all: true, width: 80, height: 20}
 }
 
 // Title implements ui.Screen.

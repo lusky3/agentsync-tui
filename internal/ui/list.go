@@ -2,7 +2,7 @@ package ui
 
 // The scroll keys every list and every long view share (ScrollKeys is the
 // footer hint; the help screen and README list them too).
-const ScrollKeys = "j/k move • ctrl+d/ctrl+u page • home/end"
+const ScrollKeys = "j/k move • ctrl+d/ctrl+u page (space in long views) • home/end"
 
 // defaultPage is the page size before a list has been rendered.
 const defaultPage = 10
@@ -93,8 +93,8 @@ type Scroll struct {
 }
 
 // Key applies a scroll key to a text of n lines and reports whether it was
-// one: up/k and down/j one line, pgup/ctrl+u and pgdown/ctrl+d a page, home
-// and end jump. The offset is clamped by the next Window.
+// one: up/k and down/j one line, pgup/ctrl+u and pgdown/ctrl+d (or space) a
+// page, home and end jump. The offset is clamped by the next Window.
 func (s *Scroll) Key(k string, n int) bool {
 	page := s.page
 	if page <= 0 {
@@ -107,7 +107,7 @@ func (s *Scroll) Key(k string, n int) bool {
 		s.Offset++
 	case "pgup", "ctrl+u":
 		s.Offset -= page
-	case "pgdown", "ctrl+d":
+	case "pgdown", "ctrl+d", "space":
 		s.Offset += page
 	case "home":
 		s.Offset = 0
