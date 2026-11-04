@@ -1,0 +1,71 @@
+package actions
+
+import (
+	"strings"
+	"testing"
+)
+
+const (
+	dCanary  = "CANARYc4n4ry0123456789abcdef"
+	dCanary2 = "CANARYtwo"
+	dShort   = "CANARYs"
+)
+
+// TestMcpAddDisplayMasksLiterals: every literal typed into the add form must
+// be masked in Display() (confirm modal + activity log), refs stay visible.
+func TestMcpAddDisplayMasksLiterals(t *testing.T) {
+	tests := []struct {
+		name string
+		spec AddSpec
+		keep []string // must stay visible in Display()
+	}{
+		{"env DB_PASS", AddSpec{Env: map[string]string{"DB_PASS": dCanary}}, []string{"DB_PASS="}},
+		{"env short secret after harmless", AddSpec{Env: map[string]string{"DEBUG": "1", "SECRET_TOKEN": dShort}}, []string{"SECRET_TOKEN="}},
+		{"env harmless first then MY_PAT", AddSpec{Env: map[string]string{"AAA": "plain", "MY_PAT": dCanary}}, []string{"MY_PAT="}},
+		{"env ref visible", AddSpec{Env: map[string]string{"API_KEY": "${env:A}"}}, []string{"API_KEY=${env:A}"}},
+		{"args --api-key", AddSpec{Args: []string{"-y", "pkg", "--api-key", dCanary}}, []string{"-y", "pkg", "--api-key"}},
+		{"args --token=", AddSpec{Args: []string{"--token=" + dCanary}}, []string{"--token="}},
+		{"args header bearer", AddSpec{Args: []string{"--header", "Authorization: Bearer " + dCanary}}, []string{"--header"}},
+		{"header literal", AddSpec{Headers: []string{"X-Custom: " + dCanary}}, []string{"X-Custom: "}},
+		{"header bearer ref", AddSpec{Headers: []string{"Authorization: Bearer ${env:T}"}}, []string{"Authorization: Bearer ${env:T}"}},
+		{"command literal token", AddSpec{Command: "gg_pat_" + dCanary}, nil},
+	}
+	for _, tt := range tests {
+		s := tt.spec
+		s.ID, s.Type = "srv", "stdio"
+		if s.Command == "" {
+			s.Command = "npx"
+		}
+		a, err := McpAdd(s)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		d := a.Display()
+		if strings.Contains(d, "CANARY") || strings.Contains(a.Title, "CANARY") {
+			t.Errorf("%s: leaked: %s", tt.name, d)
+		}
+		for _, k := range tt.keep {
+			if !strings.Contains(d, k) {
+				t.Errorf("%s: %q not visible in %s", tt.name, k, d)
+			}
+		}
+	}
+	a, err := McpAdd(AddSpec{ID: "r", Type: "http", URL: "https://user:" + dCanary + "@host/mcp?token=" + dCanary2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := a.Display(); strings.Contains(d, "CANARY") || !strings.Contains(d, "host/mcp") {
+		t.Errorf("url: %s", d)
+	}
+}
+
+// TestMcpAddDisplayDoesNotChangeArgv: masking is display-only.
+func TestMcpAddDisplayDoesNotChangeArgv(t *testing.T) {
+	a, err := McpAdd(AddSpec{ID: "s", Type: "stdio", Command: "npx", Env: map[string]string{"DB_PASS": dCanary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argAfter(t, a.Argv, "--env") != "DB_PASS="+dCanary {
+		t.Errorf("argv changed: %q", a.Argv)
+	}
+}

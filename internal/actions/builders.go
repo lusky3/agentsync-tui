@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
 var (
@@ -264,6 +266,9 @@ func McpAdd(s AddSpec) (Action, error) {
 		return Action{}, err
 	}
 	argv := []string{"mcp", "add", s.ID, "--type", s.Type}
+	// disp mirrors argv token for token, with every caller-supplied value
+	// masked by what it is (Display renders it; argv is never masked).
+	disp := append([]string(nil), argv...)
 	switch s.Type {
 	case "stdio":
 		if s.URL != "" {
@@ -273,6 +278,7 @@ func McpAdd(s AddSpec) (Action, error) {
 			return Action{}, err
 		}
 		argv = append(argv, "--command", s.Command)
+		disp = append(disp, "--command", mask.Text(s.Command))
 	case "http", "sse":
 		if s.Command != "" {
 			return Action{}, fmt.Errorf("%s server must not have a command", s.Type)
@@ -281,6 +287,7 @@ func McpAdd(s AddSpec) (Action, error) {
 			return Action{}, err
 		}
 		argv = append(argv, "--url", s.URL)
+		disp = append(disp, "--url", mask.Text(s.URL))
 	default:
 		return Action{}, fmt.Errorf("invalid server type %q", s.Type)
 	}
@@ -298,6 +305,11 @@ func McpAdd(s AddSpec) (Action, error) {
 			esc[i] = strings.ReplaceAll(a, ",", `\,`)
 		}
 		argv = append(argv, "--args", strings.Join(esc, ","))
+		masked := mask.Args(s.Args)
+		for i := range masked {
+			masked[i] = strings.ReplaceAll(masked[i], ",", `\,`)
+		}
+		disp = append(disp, "--args", strings.Join(masked, ","))
 	}
 	if len(s.Env) > 0 {
 		keys := make([]string, 0, len(s.Env))
@@ -306,6 +318,7 @@ func McpAdd(s AddSpec) (Action, error) {
 		}
 		sort.Strings(keys)
 		pairs := make([]string, len(keys))
+		shown := make([]string, len(keys))
 		for i, k := range keys {
 			v := s.Env[k]
 			if !envKeyRe.MatchString(k) {
@@ -319,8 +332,10 @@ func McpAdd(s AddSpec) (Action, error) {
 				return Action{}, err
 			}
 			pairs[i] = k + "=" + v
+			shown[i] = k + "=" + mask.Value(k, v)
 		}
 		argv = append(argv, "--env", strings.Join(pairs, ","))
+		disp = append(disp, "--env", strings.Join(shown, ","))
 	}
 	for _, h := range s.Headers {
 		if !strings.Contains(h, ":") || strings.HasPrefix(h, "-") || strings.HasPrefix(h, ":") {
@@ -330,12 +345,15 @@ func McpAdd(s AddSpec) (Action, error) {
 			return Action{}, err
 		}
 		argv = append(argv, "--header", h)
+		name, val, _ := strings.Cut(h, ":")
+		disp = append(disp, "--header", name+": "+mask.Value(name, strings.TrimSpace(val)))
 	}
 	if len(s.Agents) > 0 {
 		if err := checkAgents(s.Agents); err != nil {
 			return Action{}, err
 		}
 		argv = append(argv, "--agents", strings.Join(s.Agents, ","))
+		disp = append(disp, "--agents", strings.Join(s.Agents, ","))
 	}
-	return Action{Title: "Add MCP server " + s.ID, Argv: argv}, nil
+	return Action{Title: "Add MCP server " + s.ID, Argv: argv, display: disp}, nil
 }

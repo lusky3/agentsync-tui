@@ -243,6 +243,27 @@ func echo(v string) string {
 	return lead + strings.Repeat("•", utf8.RuneCountInString(trimmed))
 }
 
+// liveArgs renders the args input. Unparseable input (a quote still open,
+// a trailing backslash) is completed tentatively so mask.Args still sees
+// which words follow a secret flag; if nothing parses it is masked whole.
+func liveArgs(v string) string {
+	for _, tail := range []string{"", `"`, "'", " "} {
+		w, err := shellwords.Split(v + tail)
+		if err != nil {
+			continue
+		}
+		m := mask.Args(w)
+		if tail == "" && strings.Join(m, "\x00") == strings.Join(w, "\x00") {
+			return oneLine(mask.Text(v)) // nothing masked: echo as typed
+		}
+		return oneLine(mask.Text(strings.Join(m, " ")))
+	}
+	if v == "" {
+		return ""
+	}
+	return mask.Mask
+}
+
 // live renders the focused-or-not input text of field i, masked.
 func (f *form) live(i int) string {
 	v := f.vals[i]
@@ -252,13 +273,7 @@ func (f *form) live(i int) string {
 	case fTarget:
 		return oneLine(mask.Text(v))
 	case fArgs:
-		if w, err := shellwords.Split(v); err == nil {
-			m := mask.Args(w)
-			if strings.Join(m, "\x00") != strings.Join(w, "\x00") {
-				return oneLine(mask.Text(strings.Join(m, " ")))
-			}
-		}
-		return oneLine(mask.Text(v))
+		return liveArgs(v)
 	case fEnv, fHeader:
 		sep := "="
 		if i == fHeader {

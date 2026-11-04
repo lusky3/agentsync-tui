@@ -28,6 +28,11 @@ type Action struct {
 	// ReadOnly actions change nothing; the UI skips the confirm modal for
 	// them but still logs them.
 	ReadOnly bool
+
+	// display, when set by a builder that knows its argv's structure, is a
+	// pre-masked copy of Argv that Display renders instead of running the
+	// generic mask.Args heuristics over Argv.
+	display []string
 }
 
 var idRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -43,7 +48,14 @@ var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 // user. It is never used for execution.
 func (a Action) Display() string {
 	parts := []string{"agentsync"}
-	for _, s := range mask.Args(a.Argv) {
+	shown := mask.Args(a.Argv)
+	if a.display != nil {
+		shown = make([]string, len(a.display))
+		for i, s := range a.display {
+			shown[i] = mask.Text(s)
+		}
+	}
+	for _, s := range shown {
 		if shellSafe.MatchString(s) {
 			parts = append(parts, s)
 		} else {
