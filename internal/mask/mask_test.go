@@ -86,8 +86,13 @@ func TestValueKeepsRefs(t *testing.T) {
 	if got := Value("h", "Bearer ${GG_TOKEN}"); got != "Bearer ${GG_TOKEN}" {
 		t.Errorf("mixed ref changed: %q", got)
 	}
-	if got := Value("h", "prefix-${X}"); got != "prefix-${X}" {
-		t.Errorf("mixed ref changed: %q", got)
+	if got := Value("h", "Basic ${USER}:${PASS}"); got != "Basic ${USER}:${PASS}" {
+		t.Errorf("scheme+refs changed: %q", got)
+	}
+	for _, s := range []string{"Basic ${USER}:FAKElit5", "${X} FAKElit6", "prefix-${X}"} {
+		if got := Value("h", s); got != "••••" {
+			t.Errorf("Value(%q)=%q", s, got)
+		}
 	}
 	for _, s := range []string{"", "plain", "${a} ${b}", "x${a}", "${}", "${secret:}"} {
 		if IsRef(s) {
@@ -105,8 +110,8 @@ func TestHunkMasksResolvedSecrets(t *testing.T) {
 	}
 	got := Hunk(h)
 	noCanary(t, "Source", got.Source)
-	if got.Dest != h.Dest {
-		t.Errorf("Dest changed: %q", got.Dest)
+	if !strings.Contains(got.Dest, "Bearer ${secret:GG}") {
+		t.Errorf("Dest ref lost: %q", got.Dest)
 	}
 	if got.Path != h.Path || got.Pointer != h.Pointer {
 		t.Errorf("structural fields changed")
@@ -203,6 +208,61 @@ func TestNoCanarySurvivesAnyEntryPoint(t *testing.T) {
 			Source: `{"v":"` + c + `","u":"x ` + c + `"}`,
 			Dest:   `["` + c + `"]`,
 		})
+		noCanary(t, "Hunk.Source", h.Source)
+		noCanary(t, "Hunk.Dest", h.Dest)
+	}
+}
+
+const realisticHunk = `{
+  "command": "npx",
+  "args": ["-y", "pkg", "--token", "FAKEopaque1", "-e", "API_KEY=FAKEshort2", "--header", "X-Custom: FAKEhdr3", "--password=FAKEeq9"],
+  "env": {"MY_VAR": "FAKEenv4", "PGPASSWORD": "FAKEpw5short", "API_TOKEN": "FAKEabcdefghijklmnopqrstuvwx+yz/FAKEtail6", "REF": "${secret:R}"},
+  "headers": {"X-Custom": "FAKEhdr7", "Authorization": "Bearer ${GG_TOKEN}"}
+}`
+
+func TestHunkMasksOpaqueEnvHeadersArgs(t *testing.T) {
+	h := Hunk(model.Hunk{Path: "p", Pointer: "/mcpServers/gg", Source: realisticHunk, Dest: realisticHunk})
+	for _, side := range []string{h.Source, h.Dest} {
+		if strings.Contains(side, "FAKE") {
+			t.Errorf("leak: %s", side)
+		}
+		for _, keep := range []string{"npx", `"pkg"`, "${secret:R}", "Bearer ${GG_TOKEN}", "MY_VAR", "X-Custom"} {
+			if !strings.Contains(side, keep) {
+				t.Errorf("lost %q in %s", keep, side)
+			}
+		}
+	}
+	if h.Source != h.Dest {
+		t.Errorf("sides not comparable")
+	}
+}
+
+func TestArgsMasksShortSensitiveNameValue(t *testing.T) {
+	for _, a := range Args([]string{"-e", "API_KEY=FAKEshort", "DB_PASSWORD=FAKEshort2"}) {
+		if strings.Contains(a, "FAKE") {
+			t.Errorf("leak %q", a)
+		}
+	}
+	if got := Args([]string{"-e", "API_KEY=${secret:K}", "MODE=fast"}); got[1] != "API_KEY=${secret:K}" || got[2] != "MODE=fast" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestTextSanitisesFirst(t *testing.T) {
+	for _, in := range []string{"Bea\u200brer FAKEzw2", "gh\x1b[0mp_FAKEesc4", "Bearer\x07 FAKEbel"} {
+		if got := Sanitize(Text(in)); strings.Contains(got, "FAKE") {
+			t.Errorf("Text(%q) leaked: %q", in, got)
+		}
+	}
+	if got := Text("ok \x1b]0;title\x07 done"); got != "ok  done" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestNoOpaqueCanaryInHunk(t *testing.T) {
+	for _, c := range []string{"CANARYa1", "CANARY+/=z", "CANARY value with spaces"} {
+		src := `{"env":{"ANY":"` + c + `"},"headers":{"H":"` + c + `"},"args":["--token","` + c + `","-e","TOKEN=` + c + `"]}`
+		h := Hunk(model.Hunk{Pointer: "/mcpServers/x", Source: src, Dest: src})
 		noCanary(t, "Hunk.Source", h.Source)
 		noCanary(t, "Hunk.Dest", h.Dest)
 	}

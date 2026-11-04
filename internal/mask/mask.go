@@ -3,6 +3,8 @@
 package mask
 
 import (
+	"bytes"
+	"encoding/json"
 	"regexp"
 	"strings"
 
@@ -44,6 +46,7 @@ var (
 		regexp.MustCompile(`eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*`),
 	}
 
+	schemeOnlyRe = regexp.MustCompile(`^\s*(?i:bearer|basic|token)?\s*[:\s]*$`)
 	headerNameRe = regexp.MustCompile(`^([A-Za-z0-9_\-]+:[ \t]+)`)
 	sensitiveRe  = regexp.MustCompile(`(?i)token|secret|password|passwd|api[-_]?key|authorization|credential|bearer|cookie`)
 	secretFlagRe = regexp.MustCompile(`(?i)^-{1,2}(?:h|header|[a-z0-9_\-]*(?:token|key|secret|password|passwd|auth|authorization|bearer|credential)[a-z0-9_\-]*)$`)
@@ -83,15 +86,16 @@ func Value(key, val string) string {
 	if onlyRefs(val) {
 		return val
 	}
-	if refRe.MatchString(val) {
+	if refRe.MatchString(val) && schemeOnlyRe.MatchString(refRe.ReplaceAllString(val, "")) {
 		return Text(val)
 	}
 	return Mask
 }
 
-// Text scrubs known secret shapes from free text. It does not strip control
-// characters; use Sanitize for that.
+// Text scrubs known secret shapes from free text. It sanitises first so control
+// characters cannot split a token past the rules.
 func Text(s string) string {
+	s = Sanitize(s)
 	for _, re := range textRules {
 		s = re.ReplaceAllStringFunc(s, func(m string) string {
 			sub := re.FindStringSubmatch(m)
@@ -122,8 +126,8 @@ func Args(args []string) []string {
 		case valueNext:
 			valueNext = false
 		}
-		if name, val, ok := strings.Cut(a, "="); ok && secretFlagRe.MatchString(name) {
-			out[i] = name + "=" + flagValue(val)
+		if name, val, ok := strings.Cut(a, "="); ok && (secretFlagRe.MatchString(name) || sensitiveRe.MatchString(name)) {
+			out[i] = Text(name) + "=" + flagValue(val)
 			continue
 		}
 		if secretFlagRe.MatchString(a) {
@@ -167,20 +171,74 @@ func Hunk(h model.Hunk) model.Hunk {
 
 func hunkSide(s string, sensitiveKey bool) string {
 	s = Sanitize(s)
-	t := strings.TrimSpace(s)
-	if sensitiveKey && t != "" && t != "null" && !strings.HasPrefix(t, "{") && !strings.HasPrefix(t, "[") {
-		inner, quoted := t, false
-		if len(t) >= 2 && t[0] == '"' && t[len(t)-1] == '"' {
-			inner, quoted = t[1:len(t)-1], true
-		}
-		if !onlyRefs(inner) && !refRe.MatchString(inner) {
-			if quoted {
-				return `"` + Mask + `"`
-			}
-			return Mask
-		}
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil || dec.More() {
+		return Text(s)
 	}
-	return Text(s)
+	if _, err := dec.Token(); err == nil {
+		return Text(s)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if enc.Encode(walk(v, "", sensitiveKey)) != nil {
+		return Text(s)
+	}
+	return strings.TrimRight(buf.String(), "\n")
+}
+
+func secretKey(k string) bool {
+	switch strings.ToLower(k) {
+	case "env", "environment", "headers":
+		return true
+	}
+	return sensitiveRe.MatchString(k)
+}
+
+// walk masks a decoded JSON tree. Under a secret-bearing key every string is
+// run through Value; elsewhere args arrays go through Args and other strings
+// through Text.
+func walk(v any, key string, forced bool) any {
+	switch x := v.(type) {
+	case string:
+		if forced {
+			return Value(key, x)
+		}
+		return Text(x)
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, c := range x {
+			out[k] = walk(c, k, forced || secretKey(k))
+		}
+		return out
+	case []any:
+		if !forced && strings.EqualFold(key, "args") {
+			strs := make([]string, 0, len(x))
+			all := true
+			for _, c := range x {
+				cs, ok := c.(string)
+				all = all && ok
+				strs = append(strs, cs)
+			}
+			if all {
+				masked := Args(strs)
+				out := make([]any, len(masked))
+				for i, m := range masked {
+					out[i] = m
+				}
+				return out
+			}
+		}
+		out := make([]any, len(x))
+		for i, c := range x {
+			out[i] = walk(c, key, forced)
+		}
+		return out
+	}
+	return v
 }
 
 func lastSegment(p string) string {
