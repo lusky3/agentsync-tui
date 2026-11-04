@@ -76,7 +76,7 @@ func (s *Screen) Title() string { return "Reconcile" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware: swap the runner and forget the report.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.gen++
 	s.loaded, s.report, s.trunc, s.exit, s.note, s.handed, s.scroll = false, "", false, 0, "", "", 0

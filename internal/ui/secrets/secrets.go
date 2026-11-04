@@ -3,6 +3,12 @@
 // warns about referenced keys that are missing, and drives set, edit and
 // remove through the agentsync CLI via ui.DoMsg.
 //
+// Scope: the vault is per machine (the `secret` group refuses --scope and
+// --project), so the key list is the same in both scopes. The cross-check of
+// ${secret:KEY} references, however, scans the servers of the CURRENT
+// scope's canonical home (ui.HomeFor): in project scope "used by" and
+// "missing" describe <project>/.agentsync/mcp, not the user tree.
+//
 // The TUI never sees a secret value. There is no `secret get` action; set and
 // edit hand the terminal to agentsync's own prompt (Interactive actions), and
 // the only text field on this screen takes a key NAME and refuses every
@@ -57,7 +63,8 @@ type Screen struct {
 	d     ui.Deps
 	run   runner.Runner
 	scope runner.Scope
-	gen   int // refresh generation; older results are dropped
+	home  string // canonical tree whose servers the cross-check scans
+	gen   int    // refresh generation; older results are dropped
 
 	loaded bool
 	keys   []string // as the CLI returned them
@@ -112,7 +119,7 @@ type verifyMsg struct {
 
 // New returns the secrets screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{d: d, run: d.Runner, scope: d.Scope, width: 80, height: 20}
+	return &Screen{d: d, run: d.Runner, scope: d.Scope, home: ui.HomeFor(d, d.Scope), width: 80, height: 20}
 }
 
 // Title implements ui.Screen.
@@ -121,9 +128,12 @@ func (s *Screen) Title() string { return "Secrets" }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
-	s.run, s.scope = r, sc
+// SetScope implements ui.ScopeAware: swap the runner and the home the
+// cross-check scans, and drop the uses loaded from the old tree.
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
+	s.run, s.scope, s.home = r, sc, home
+	s.gen++
+	s.uses, s.srvNote = nil, ""
 	s.invalidate()
 }
 
@@ -143,7 +153,7 @@ func (s *Screen) CapturesKeys() bool { return s.typing }
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
 	s.invalidate()
-	gen, r, home := s.gen, s.run, s.d.AgentsyncHome
+	gen, r, home := s.gen, s.run, s.home
 	return func() tea.Msg {
 		m := readList(gen, r, listTimeout)
 		m.uses, m.srv = loadUses(home)

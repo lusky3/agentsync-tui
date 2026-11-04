@@ -75,7 +75,7 @@ func (s *Screen) Title() string { return "Agents" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.invalidate()
 }

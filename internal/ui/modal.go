@@ -11,6 +11,7 @@ import (
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/runner"
 )
 
 // maxConfirmInput caps the typed-confirmation buffer.
@@ -39,14 +40,16 @@ func Verb(act actions.Action) string {
 
 // modal is the confirm dialog for one pending action.
 type modal struct {
-	act   actions.Action
-	verb  string // non-empty: destructive, must be typed
-	input string
-	hint  string
+	act     actions.Action
+	verb    string // non-empty: destructive, must be typed
+	input   string
+	hint    string
+	scope   runner.Scope // the scope the command will run under
+	project string       // Deps.ProjectDir, shown in project scope
 }
 
-func newModal(act actions.Action) *modal {
-	m := &modal{act: act}
+func newModal(act actions.Action, scope runner.Scope, project string) *modal {
+	m := &modal{act: act, scope: scope, project: project}
 	if act.Destructive {
 		m.verb = Verb(act)
 		if m.verb == "" {
@@ -96,11 +99,26 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
+// scopeLine says which tree the command operates on: the project directory
+// for project scope, "user", or "n/a (user-level)" for a command that the
+// CLI refuses --scope/--project on (secret, marketplace, plugin except
+// upgrade, doctor, revert).
+func (m *modal) scopeLine() string {
+	switch {
+	case runner.ScopeUnaware(m.act.Argv):
+		return "scope: n/a (user-level)"
+	case m.scope == runner.ScopeProject:
+		return "scope: project — " + mask.Sanitize(m.project)
+	}
+	return "scope: user"
+}
+
 // view renders the modal box within width columns and height lines. Only
-// the masked Display() is ever shown. A box taller than height is first
-// re-rendered with the command line truncated instead of wrapped, then, if
-// still too tall, clipped from the middle (clipMiddle) so the warning,
-// badges and prompt at the bottom stay visible.
+// the masked Display() is ever shown. A box taller than height is
+// re-rendered with the command line truncated instead of wrapped, then
+// without the blank spacer lines, and if still too tall it is clipped from
+// the middle (clipMiddle) so the warning, badges and prompt at the bottom
+// stay visible.
 func (m *modal) view(width, height int) string {
 	w := width - 4
 	if w > 76 {
@@ -109,16 +127,24 @@ func (m *modal) view(width, height int) string {
 	if w < 10 {
 		w = 10
 	}
-	out := m.render(w, false)
-	if height <= 0 || strings.Count(out, "\n")+1 <= height {
-		return out
-	}
-	out = m.render(w, true)
-	if strings.Count(out, "\n")+1 <= height {
-		return out
+	var out string
+	for _, mode := range []renderMode{renderFull, renderTruncated, renderCompact} {
+		out = m.render(w, mode)
+		if height <= 0 || strings.Count(out, "\n")+1 <= height {
+			return out
+		}
 	}
 	return clipMiddle(out, height)
 }
+
+// renderMode is how much the modal gives up to fit its height.
+type renderMode int
+
+const (
+	renderFull      renderMode = iota // wrap the command line, blank spacers
+	renderTruncated                   // command line cut to one line
+	renderCompact                     // truncated and no blank spacer lines
+)
 
 // clipMiddle keeps the first two lines of a rendered box (top border and
 // title), a dim "…" line, and the last lines, so the bottom is never lost.
@@ -138,18 +164,22 @@ func clipMiddle(box string, height int) string {
 	return strings.Join(keep, "\n")
 }
 
-// render builds the box at inner width w. With truncate set, the command
-// line is cut to one line with an ellipsis instead of wrapping.
-func (m *modal) render(w int, truncate bool) string {
+// render builds the box at inner width w in the given mode.
+func (m *modal) render(w int, mode renderMode) string {
 	var b strings.Builder
-	b.WriteString(styleBold.Render(mask.Sanitize(m.act.Title)) + "\n\n")
+	gap := "\n"
+	if mode == renderCompact {
+		gap = ""
+	}
+	b.WriteString(styleBold.Render(mask.Sanitize(m.act.Title)) + "\n" + gap)
 	cmd := "  $ " + mask.Sanitize(m.act.Display())
-	if truncate {
+	if mode != renderFull {
 		cmd = ansi.Truncate(cmd, w-4, "…") // w includes the border and 1-column padding each side
 	}
 	b.WriteString(cmd + "\n")
+	b.WriteString("  " + styleDim.Render(m.scopeLine()) + "\n")
 	if m.act.Warning != "" {
-		b.WriteString("\n" + styleError.Render("! "+mask.Sanitize(m.act.Warning)) + "\n")
+		b.WriteString(gap + styleError.Render("! "+mask.Sanitize(m.act.Warning)) + "\n")
 	}
 	var badges []string
 	if m.act.Destructive {
@@ -162,9 +192,9 @@ func (m *modal) render(w int, truncate bool) string {
 		badges = append(badges, styleInfo.Render("[interactive]"))
 	}
 	if len(badges) > 0 {
-		b.WriteString("\n" + strings.Join(badges, " ") + "\n")
+		b.WriteString(gap + strings.Join(badges, " ") + "\n")
 	}
-	b.WriteString("\n")
+	b.WriteString(gap)
 	if m.verb == "" {
 		b.WriteString("Run it? y/enter = yes, n/esc = no")
 	} else {

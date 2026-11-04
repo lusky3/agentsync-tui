@@ -534,7 +534,7 @@ func TestVerifyDroppedOnRefreshAndScope(t *testing.T) {
 	}
 	_, cmd = s.Update(keyMsg("x"))
 	other := standardFake(t)
-	s.SetScope(other, runner.ScopeProject)
+	s.SetScope(other, runner.ScopeProject, "")
 	if got := drive(s, cmd); len(got) != 0 || s.verifying {
 		t.Errorf("verify after SetScope emitted %v (verifying=%v)", got, s.verifying)
 	}
@@ -571,7 +571,7 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	a, b := standardFake(t), standardFake(t)
 	s := loaded(t, a)
 	n := a.count()
-	s.SetScope(b, runner.ScopeProject)
+	s.SetScope(b, runner.ScopeProject, "")
 	drive(s, s.Refresh())
 	if a.count() != n || !b.saw("plugin list") {
 		t.Errorf("runner not swapped: a=%d b=%v", a.count()-n, b.calls)

@@ -616,7 +616,7 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	s, _ := loaded(t, Skill, r1, "one", "two")
 	var sa ui.ScopeAware = s
 	r2 := stdoutRunner("two\n")
-	sa.SetScope(r2, runner.ScopeProject)
+	sa.SetScope(r2, runner.ScopeProject, s.home)
 	drive(s, s.Refresh())
 	if len(r2.callList()) != 1 || len(r1.callList()) != 1 {
 		t.Errorf("r1 %q r2 %q", r1.callList(), r2.callList())

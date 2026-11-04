@@ -77,7 +77,8 @@ type Screen struct {
 	kind  Kind
 	run   runner.Runner
 	scope runner.Scope
-	gen   int // refresh generation; older results are dropped
+	home  string // canonical tree of the current scope (memory list, edit paths)
+	gen   int    // refresh generation; older results are dropped
 
 	loaded   bool
 	items    []model.Item
@@ -106,7 +107,7 @@ type listMsg struct {
 
 // New returns the library screen for kind.
 func New(d ui.Deps, kind Kind) *Screen {
-	return &Screen{id: nextID.Add(1), d: d, kind: kind, run: d.Runner, scope: d.Scope, width: 80, height: 24}
+	return &Screen{id: nextID.Add(1), d: d, kind: kind, run: d.Runner, scope: d.Scope, home: ui.HomeFor(d, d.Scope), width: 80, height: 24}
 }
 
 // Title implements ui.Screen.
@@ -115,11 +116,14 @@ func (s *Screen) Title() string { return infos[s.kind].title }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
-	s.run, s.scope = r, sc
+// SetScope implements ui.ScopeAware: swap the runner and the home (memory
+// is listed from it and every edit path is built under it) and drop the
+// items loaded from the old tree.
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
+	s.run, s.scope, s.home = r, sc, home
 	s.gen++ // results of reads started under the old scope are dropped
-	s.pending, s.awaiting = "", false
+	s.loaded, s.items, s.loadNote, s.note, s.cursor = false, nil, "", "", 0
+	s.pending, s.awaiting, s.check = "", false, nil
 }
 
 // CapturesKeys implements ui.KeyCapturer: no text input here.
@@ -128,7 +132,7 @@ func (s *Screen) CapturesKeys() bool { return false }
 // Refresh re-reads the list; nothing runs inside Update.
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
-	id, gen, kind, r, home := s.id, s.gen, s.kind, s.run, s.d.AgentsyncHome
+	id, gen, kind, r, home := s.id, s.gen, s.kind, s.run, s.home
 	if kind == Memory {
 		return func() tea.Msg { return readMemory(id, gen, home) }
 	}
@@ -256,7 +260,7 @@ func (s *Screen) edit() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	p, err := PathFor(s.d.AgentsyncHome, s.kind, it.Name)
+	p, err := PathFor(s.home, s.kind, it.Name)
 	if err != nil {
 		s.note = "error: " + oneLine(mask.Text(err.Error()))
 		return nil

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -28,10 +29,11 @@ type Screen interface {
 type KeyCapturer interface{ CapturesKeys() bool }
 
 // ScopeAware is implemented by screens that run their own reads: on a scope
-// switch the shell hands them the runner for the new scope before calling
-// Refresh.
+// switch the shell hands them the runner and the canonical home for the new
+// scope (HomeFor) before calling Refresh. A screen that reads files from the
+// home must read the new one from then on and drop what it loaded before.
 type ScopeAware interface {
-	SetScope(r runner.Runner, s runner.Scope)
+	SetScope(r runner.Runner, s runner.Scope, home string)
 }
 
 // Shutdowner is implemented by screens that run background reads: the shell
@@ -54,15 +56,38 @@ type Deps struct {
 	Runner runner.Runner
 	// Interactive builds the handover command for Interactive actions (in
 	// production (*runner.Exec).Interactive). Nil disables handovers.
-	Interactive   func(args ...string) *exec.Cmd
+	Interactive func(args ...string) *exec.Cmd
+	// AgentsyncHome is the user-scope canonical tree (~/.agentsync or
+	// $AGENTSYNC_HOME).
 	AgentsyncHome string
-	Scope         runner.Scope
-	ProjectDir    string
+	// ProjectHome is the project-scope canonical tree, <ProjectDir>/.agentsync
+	// (what `agentsync init --scope project` creates and every scope-aware
+	// command with --project operates on). main computes it; when empty,
+	// HomeFor derives it from ProjectDir.
+	ProjectHome string
+	Scope       runner.Scope
+	ProjectDir  string
 	// LogPath is the append-only activity log; empty disables the file.
 	LogPath string
 	// WithScope returns the runner and interactive builder for a scope.
 	// Nil disables scope switching.
 	WithScope func(runner.Scope) (runner.Runner, func(args ...string) *exec.Cmd)
+}
+
+// HomeFor returns the canonical tree the given scope reads: AgentsyncHome for
+// user scope; ProjectHome (or <ProjectDir>/.agentsync) for project scope, or
+// "" when there is no project directory.
+func HomeFor(d Deps, scope runner.Scope) string {
+	if scope != runner.ScopeProject {
+		return d.AgentsyncHome
+	}
+	if d.ProjectHome != "" {
+		return d.ProjectHome
+	}
+	if d.ProjectDir != "" {
+		return filepath.Join(d.ProjectDir, ".agentsync")
+	}
+	return ""
 }
 
 type statusKind int
@@ -83,6 +108,7 @@ type App struct {
 	run         runner.Runner
 	interactive func(args ...string) *exec.Cmd
 	scope       runner.Scope
+	home        string // canonical tree of the current scope (HomeFor)
 	noProject   bool
 
 	screens []Screen
@@ -125,6 +151,7 @@ func NewApp(d Deps, screens ...Screen) *App {
 		run:         d.Runner,
 		interactive: d.Interactive,
 		scope:       d.Scope,
+		home:        HomeFor(d, d.Scope),
 		noProject:   d.Scope == runner.ScopeProject && d.ProjectDir == "",
 		screens:     screens,
 		width:       80,

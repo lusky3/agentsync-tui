@@ -77,7 +77,8 @@ Long views scroll with `ctrl+d`/`ctrl+u` or `pgdown`/`pgup`; the plugin detail v
   then `$EDITOR`, falling back to `vi`, immediately and with no confirm dialog.
   Your editor writes the file, not the TUI. If the editor exits successfully,
   the TUI then runs `agentsync check`. The path must resolve inside the
-  agentsync home. (Secrets `E` runs `agentsync secret edit`, a confirmed
+  current scope's agentsync home (the user tree, or `<project>/.agentsync` in
+  project scope). (Secrets `E` runs `agentsync secret edit`, a confirmed
   command.)
 - Destructive actions (removing a server, agent, plugin, marketplace or
   secret; revert) need a typed verb (the subcommand, for example `remove`).
@@ -103,9 +104,17 @@ Long views scroll with `ctrl+d`/`ctrl+u` or `pgdown`/`pgup`; the plugin detail v
 
 ## Known limits
 
-- In project scope some screens still read the user's agentsync home
-  (`AGENTSYNC_HOME` or `~/.agentsync`), because agentsync keeps skills,
-  secrets and similar sources there.
+- Project scope (`--project <dir>` or the `s` key) uses `<dir>/.agentsync` as
+  the canonical tree, the one `agentsync init --scope project` creates and
+  every scope-aware command runs against with `--project <dir>`: MCP servers,
+  the memory list, `E` edits and the secrets cross-check all read from there,
+  and the confirm dialog shows which scope a command runs under. The secrets
+  vault, plugins and marketplaces stay user-level in both scopes because the
+  CLI refuses `--scope`/`--project` on those command groups (the dialog says
+  `scope: n/a (user-level)` for them). The secrets screen therefore lists the
+  same keys in both scopes, but its "used by" cross-check scans the servers of
+  the current scope's tree. A project directory without `.agentsync` shows
+  empty screens, not errors.
 - Reconcile resolution is handed to agentsync's own interactive `reconcile` on
   purpose. In-UI write-back is not offered while upstream issues #239, #255
   and #256 are open.

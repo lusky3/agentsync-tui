@@ -485,7 +485,7 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	var _ ui.ScopeAware = s
 	var _ ui.KeyCapturer = s
 	nr := statusRunner(`{"agents":[{"agent":"newagent","items":[]}]}`)
-	s.SetScope(nr, runner.ScopeProject)
+	s.SetScope(nr, runner.ScopeProject, "")
 	if strings.Contains(view(s), "antigravity") {
 		t.Error("loaded state should clear on scope switch")
 	}
@@ -548,7 +548,7 @@ func TestRefreshDuringLegendLoadKeepsLegend(t *testing.T) {
 func TestStaleStatusResultDropped(t *testing.T) {
 	s := newLoaded(t, statusRunner(multiStatus))
 	oldGen := s.gen
-	s.SetScope(statusRunner(`{"agents":[{"agent":"newagent","items":[]}]}`), runner.ScopeProject)
+	s.SetScope(statusRunner(`{"agents":[{"agent":"newagent","items":[]}]}`), runner.ScopeProject, "")
 	stale := readStatus(oldGen, statusRunner(multiStatus))
 	s.Update(stale)
 	if strings.Contains(view(s), "antigravity") || s.loaded {
@@ -567,7 +567,7 @@ func TestSetScopeClosesOverlaysAndDropsInFlight(t *testing.T) {
 	r := detailRunner(hunkJSON(`{"command":"x"}`, `{"command":"SCOPEMARK"}`), `{}`)
 	s := newLoaded(t, r)
 	_, cmd := s.Update(key("enter"))
-	s.SetScope(statusRunner(multiStatus), runner.ScopeProject)
+	s.SetScope(statusRunner(multiStatus), runner.ScopeProject, "")
 	drive(s, cmd)
 	if s.detail || strings.Contains(view(s), "SCOPEMARK") {
 		t.Error("detail from before scope switch applied")

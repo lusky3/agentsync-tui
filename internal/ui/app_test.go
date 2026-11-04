@@ -287,7 +287,7 @@ func TestPurgeActionIsDestructiveWithPurgeVerb(t *testing.T) {
 	if err != nil || !a.Destructive {
 		t.Fatalf("purge must be destructive: %+v %v", a, err)
 	}
-	if got := newModal(a).verb; got != "purge" {
+	if got := newModal(a, runner.ScopeUser, "").verb; got != "purge" {
 		t.Fatalf("confirm verb = %q, want purge", got)
 	}
 }
@@ -885,10 +885,10 @@ func TestModalPromptVisibleAtSmallHeights(t *testing.T) {
 				t.Errorf("height %d: modal missing %q:\n%s", h, want, out)
 			}
 		}
-		if h == 24 && !strings.Contains(flat, "This cannot be undone") {
+		if h >= 12 && !strings.Contains(flat, "This cannot be undone") {
 			t.Errorf("height %d: warning missing:\n%s", h, out)
 		}
-		if h < 24 && !strings.Contains(out, "│ …") {
+		if h == 10 && !strings.Contains(out, "│ …") {
 			t.Errorf("height %d: no clip marker inside the box:\n%s", h, out)
 		}
 		// Typing still works against the visible prompt.
@@ -935,5 +935,114 @@ func TestModalLongDisplayKeepsPrompt(t *testing.T) {
 	flat = strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(content(app)), "│", " ")), " ")
 	if !strings.Contains(flat, "value-number-39") || !strings.Contains(flat, "Run it? y/enter = yes") {
 		t.Errorf("tall view lost the command or prompt:\n%s", ansi.Strip(content(app)))
+	}
+}
+
+// ---- project scope home (whole-branch review C-1) ---------------------------
+
+func TestHomeFor(t *testing.T) {
+	cases := []struct {
+		name  string
+		d     Deps
+		scope runner.Scope
+		want  string
+	}{
+		{"user", Deps{AgentsyncHome: "/u/.agentsync", ProjectDir: "/p", ProjectHome: "/p/.agentsync"}, runner.ScopeUser, "/u/.agentsync"},
+		{"project explicit", Deps{AgentsyncHome: "/u/.agentsync", ProjectDir: "/p", ProjectHome: "/elsewhere"}, runner.ScopeProject, "/elsewhere"},
+		{"project derived", Deps{AgentsyncHome: "/u/.agentsync", ProjectDir: "/p"}, runner.ScopeProject, filepath.Join("/p", ".agentsync")},
+		{"project without dir", Deps{AgentsyncHome: "/u/.agentsync"}, runner.ScopeProject, ""},
+	}
+	for _, c := range cases {
+		if got := HomeFor(c.d, c.scope); got != c.want {
+			t.Errorf("%s: HomeFor = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Toggling scope moves App.home to the project tree, so an edit of a
+// user-home path is refused in project scope (and vice versa), even though
+// the screens never changed.
+func TestToggleScopeMovesHomeForEdits(t *testing.T) {
+	userHome, userFile := editHome(t, "usersrv.toml")
+	projectDir := t.TempDir()
+	projFile := filepath.Join(projectDir, ".agentsync", "mcp", "projsrv.toml")
+	if err := os.MkdirAll(filepath.Dir(projFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projFile, []byte("[server]\ntype = 'stdio'\ncommand = 'echo'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "true")
+	fr := newFakeRunner()
+	d := baseDeps(fr)
+	d.AgentsyncHome, d.ProjectDir = userHome, projectDir
+	d.WithScope = func(runner.Scope) (runner.Runner, func(...string) *exec.Cmd) { return fr, nil }
+	app := NewApp(d, newScreen("A", "a"))
+	if app.home != userHome {
+		t.Fatalf("initial home %q", app.home)
+	}
+	app.Update(key("s"))
+	if want := filepath.Join(projectDir, ".agentsync"); app.home != want {
+		t.Fatalf("home after toggle %q, want %q", app.home, want)
+	}
+	if _, cmd := app.Update(EditFileMsg{Path: userFile}); cmd != nil || !strings.Contains(app.status, "edit refused: usersrv.toml: outside the agentsync home") {
+		t.Errorf("project scope accepted a user-home path: cmd=%v status=%q", cmd != nil, app.status)
+	}
+	if _, cmd := app.Update(EditFileMsg{Path: projFile}); cmd == nil || !strings.Contains(app.status, "editing projsrv.toml") {
+		t.Errorf("project scope refused the project path: status=%q", app.status)
+	}
+	app.running = nil // the editor is not actually awaited here
+	app.Update(key("s"))
+	if app.home != userHome {
+		t.Fatalf("home after toggling back %q", app.home)
+	}
+	if _, cmd := app.Update(EditFileMsg{Path: projFile}); cmd != nil || !strings.Contains(app.status, "edit refused: projsrv.toml: outside the agentsync home") {
+		t.Errorf("user scope accepted a project path: cmd=%v status=%q", cmd != nil, app.status)
+	}
+}
+
+// The confirm modal names the tree the command will run against.
+func TestModalShowsScopeLine(t *testing.T) {
+	disable, err := actions.McpDisable("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretRemove := actions.Action{Title: "Remove secret K", Argv: []string{"secret", "remove", "K"}, Destructive: true}
+	cases := []struct {
+		name    string
+		scope   runner.Scope
+		project string
+		act     actions.Action
+		want    string
+		absent  string
+	}{
+		{"user", runner.ScopeUser, "/proj", disable, "scope: user", "/proj"},
+		{"project", runner.ScopeProject, "/proj", disable, "scope: project — /proj", "scope: user"},
+		{"project dir sanitised", runner.ScopeProject, "/pr\x1b[31moj", disable, "scope: project — /proj", "\x1b"},
+		{"scope-unaware in project scope", runner.ScopeProject, "/proj", secretRemove, "scope: n/a (user-level)", "/proj"},
+		{"scope-unaware in user scope", runner.ScopeUser, "", secretRemove, "scope: n/a (user-level)", "scope: user"},
+	}
+	for _, c := range cases {
+		m := newModal(c.act, c.scope, c.project)
+		out := ansi.Strip(m.view(100, 30))
+		flat := strings.Join(strings.Fields(strings.ReplaceAll(out, "│", " ")), " ")
+		if !strings.Contains(flat, c.want) {
+			t.Errorf("%s: modal missing %q:\n%s", c.name, c.want, out)
+		}
+		if strings.Contains(flat, c.absent) {
+			t.Errorf("%s: modal must not show %q:\n%s", c.name, c.absent, out)
+		}
+	}
+	// Through the shell: the modal is built with the App's current scope.
+	fr := newFakeRunner()
+	d := baseDeps(fr)
+	d.ProjectDir = "/proj"
+	d.WithScope = func(runner.Scope) (runner.Runner, func(...string) *exec.Cmd) { return fr, nil }
+	app := NewApp(d, newScreen("A", "a"))
+	app.Update(key("s"))
+	app.Update(DoMsg{Action: disable})
+	if out := ansi.Strip(content(app)); !strings.Contains(out, "scope: project — /proj") {
+		t.Errorf("shell modal missing the project scope line:\n%s", out)
 	}
 }

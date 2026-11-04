@@ -241,7 +241,7 @@ func TestSuccessfulApplyClearsPreview(t *testing.T) {
 func TestScopeSwitchInvalidatesPreview(t *testing.T) {
 	h := newShell(t, okRunner("plan"))
 	h.press("p")
-	h.s.SetScope(okRunner("x"), runner.ScopeProject)
+	h.s.SetScope(okRunner("x"), runner.ScopeProject, "")
 	h.press("a")
 	if len(h.asked) != 0 {
 		t.Fatal("scope switch kept the preview")
@@ -252,7 +252,7 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	h := newShell(t, okRunner("x"))
 	var _ ui.ScopeAware = h.s
 	nr := okRunner("y")
-	h.s.SetScope(nr, runner.ScopeProject)
+	h.s.SetScope(nr, runner.ScopeProject, "")
 	if h.s.run != runner.Runner(nr) || h.s.scope != runner.ScopeProject {
 		t.Fatal("runner/scope not swapped")
 	}
@@ -272,7 +272,7 @@ func TestStalePreviewResultDropped(t *testing.T) {
 	h = newShell(t, okRunner("plan"))
 	_, cmd = h.s.Update(k("p"))
 	do = cmd().(ui.DoMsg)
-	h.s.SetScope(okRunner("z"), runner.ScopeProject)
+	h.s.SetScope(okRunner("z"), runner.ScopeProject, "")
 	h.send(ui.RunMsg{Action: do.Action, Result: runner.Result{Stdout: "STALE"}})
 	h.press("a")
 	if len(h.asked) != 0 {

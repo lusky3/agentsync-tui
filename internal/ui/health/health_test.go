@@ -282,7 +282,7 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	s := newScreen(old)
 	refresh(s)
 	inflight := collect(s.Refresh()) // a result for the old scope
-	s.SetScope(fresh, runner.ScopeProject)
+	s.SetScope(fresh, runner.ScopeProject, "")
 	if strings.Contains(view(s), "OLD") {
 		t.Error("old scope's output survived the switch")
 	}

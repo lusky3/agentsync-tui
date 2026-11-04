@@ -572,7 +572,7 @@ func TestVerifyDroppedOnCursorMove(t *testing.T) {
 func TestVerifyDroppedOnScopeSwitch(t *testing.T) {
 	s, _ := loaded(t)
 	_, cmd := s.Update(keyMsg("x"))
-	s.SetScope(&fakeRunner{}, runner.ScopeProject)
+	s.SetScope(&fakeRunner{}, runner.ScopeProject, s.home)
 	if msgs := drive(s, cmd); len(msgs) != 0 || s.verifying {
 		t.Fatalf("emitted %v verifying %v", msgs, s.verifying)
 	}
@@ -639,7 +639,7 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	s, old := loaded(t)
 	nr := &fakeRunner{}
 	nr.set("ONLY_NEW\n", "", 0, nil)
-	s.SetScope(nr, runner.ScopeProject)
+	s.SetScope(nr, runner.ScopeProject, s.home)
 	n := len(old.calls)
 	drive(s, s.Refresh())
 	if len(old.calls) != n || len(nr.calls) == 0 {

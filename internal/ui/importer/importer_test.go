@@ -289,7 +289,7 @@ func TestImportGateInvalidations(t *testing.T) {
 		"edit name":       func(h *shell) { h.typeName("x"); h.typeName("") },
 		"cycle component": func(h *shell) { h.press("c", "C") },
 		"cycle agent":     func(h *shell) { h.press("a", "A") },
-		"set scope":       func(h *shell) { h.s.SetScope(h.r, runner.ScopeUser); h.pump(h.s.Refresh()) },
+		"set scope":       func(h *shell) { h.s.SetScope(h.r, runner.ScopeUser, ""); h.pump(h.s.Refresh()) },
 		"own run success": func(h *shell) { h.press("i"); h.confirm() },
 		"own run failure": func(h *shell) {
 			h.press("i")
@@ -370,7 +370,7 @@ func TestImportStalePreviewResultDropped(t *testing.T) {
 	h.setComponent("mcp")
 	_, cmd = h.s.Update(k("p"))
 	do = cmd().(ui.DoMsg)
-	h.s.SetScope(h.r, runner.ScopeProject)
+	h.s.SetScope(h.r, runner.ScopeProject, "")
 	h.send(ui.RunMsg{Action: do.Action, Result: runner.Result{Stdout: "STALE"}})
 	h.press("i")
 	if len(h.asked) != 0 || strings.Contains(h.view(), "STALE") {
@@ -472,7 +472,7 @@ func TestImportScopeAwareSwapsRunner(t *testing.T) {
 	var _ ui.ScopeAware = h.s
 	var _ ui.Screen = h.s
 	r2 := newRunner("codex enabled=true scope=project\n", "plan")
-	h.s.SetScope(r2, runner.ScopeProject)
+	h.s.SetScope(r2, runner.ScopeProject, "")
 	h.r = r2
 	h.pump(h.s.Refresh())
 	if got := r2.got(); len(got) != 1 || got[0] != "agent list" || h.s.scope != runner.ScopeProject {

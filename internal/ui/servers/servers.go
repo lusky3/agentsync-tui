@@ -1,5 +1,6 @@
 // Package servers is the MCP servers screen: it lists the canonical
-// definitions in <AGENTSYNC_HOME>/mcp/*.toml (read-only) with each agent's
+// definitions in <home>/mcp/*.toml (read-only; the user tree in user scope,
+// <project>/.agentsync in project scope, see ui.HomeFor) with each agent's
 // render state from `agentsync status --json`, and drives every mutation
 // through the agentsync CLI via ui.DoMsg / ui.EditFileMsg.
 package servers
@@ -33,7 +34,8 @@ type Screen struct {
 	d     ui.Deps
 	run   runner.Runner
 	scope runner.Scope
-	gen   int // refresh generation; older results are dropped
+	home  string // canonical tree of the current scope
+	gen   int    // refresh generation; older results are dropped
 
 	loaded   bool
 	servers  []source.Server
@@ -69,7 +71,7 @@ type statusMsg struct {
 
 // New returns the MCP servers screen.
 func New(d ui.Deps) *Screen {
-	return &Screen{d: d, run: d.Runner, scope: d.Scope, width: 80, height: 20}
+	return &Screen{d: d, run: d.Runner, scope: d.Scope, home: ui.HomeFor(d, d.Scope), width: 80, height: 20}
 }
 
 // Title implements ui.Screen.
@@ -78,8 +80,15 @@ func (s *Screen) Title() string { return "MCP servers" }
 // Init is exactly Refresh (the shell may skip Init and only Refresh later).
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) { s.run, s.scope = r, sc }
+// SetScope implements ui.ScopeAware: swap the runner and the home and forget
+// the loaded list so nothing from the old tree is shown or acted on.
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
+	s.run, s.scope, s.home = r, sc, home
+	s.gen++
+	s.loaded, s.servers, s.dirGone, s.loadWarn = false, nil, false, ""
+	s.states, s.statusOK, s.stNote = nil, false, ""
+	s.cursor, s.detail, s.form, s.note = 0, false, nil, ""
+}
 
 // CapturesKeys implements ui.KeyCapturer: true while the add form is open.
 func (s *Screen) CapturesKeys() bool { return s.form != nil }
@@ -87,7 +96,7 @@ func (s *Screen) CapturesKeys() bool { return s.form != nil }
 // Refresh re-reads the canonical servers and the status report concurrently.
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
-	gen, home, r := s.gen, s.d.AgentsyncHome, s.run
+	gen, home, r := s.gen, s.home, s.run
 	load := func() tea.Msg { return loadSource(gen, home) }
 	status := func() tea.Msg { return readStatus(gen, r) }
 	return tea.Batch(load, status)
@@ -263,7 +272,7 @@ func (s *Screen) mutate(k string) tea.Cmd {
 		s.note = "invalid server id"
 		return nil
 	}
-	fresh := loadSource(s.gen, s.d.AgentsyncHome)
+	fresh := loadSource(s.gen, s.home)
 	cur, found := find(fresh.servers, sel.ID)
 	if !found || (k == "e" && cur.Disabled != sel.Disabled) {
 		s.applyLoad(fresh)
@@ -292,7 +301,7 @@ func (s *Screen) edit() tea.Cmd {
 		s.note = "invalid server id"
 		return nil
 	}
-	p, err := source.ServerPath(s.d.AgentsyncHome, sel.ID)
+	p, err := source.ServerPath(s.home, sel.ID)
 	if err != nil {
 		s.note = "error: " + firstLine(mask.Text(err.Error()))
 		return nil

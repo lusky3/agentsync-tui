@@ -67,6 +67,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Runner:        ex,
 		Interactive:   ex.Interactive,
 		AgentsyncHome: agentsyncHome(),
+		ProjectHome:   projectHome(projectDir),
 		Scope:         scope,
 		ProjectDir:    projectDir,
 		LogPath:       logPath(),
@@ -108,6 +109,15 @@ func resolveScope(scopeFlag, project string) (runner.Scope, string, error) {
 		return runner.Scope(scopeFlag), dir, nil
 	}
 	return "", "", fmt.Errorf("--scope must be user or project, got %q", scopeFlag)
+}
+
+// projectHome is the project-scope canonical tree, <dir>/.agentsync, as
+// created by `agentsync init --scope project`; empty without a project.
+func projectHome(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, ".agentsync")
 }
 
 func agentsyncHome() string {

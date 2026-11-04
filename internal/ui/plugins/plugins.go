@@ -130,7 +130,7 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 func (s *Screen) CapturesKeys() bool { return s.typing >= 0 }
 
 // SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.outdated, s.outdatedRaw, s.oChecking = nil, "", false
 	s.oreq++

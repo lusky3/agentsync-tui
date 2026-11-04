@@ -11,6 +11,13 @@
 // tea.View (use tea.NewView(s)), keys arrive as tea.KeyPressMsg and are
 // matched with msg.String() ("tab", "shift+tab", "ctrl+c", "esc", "enter").
 //
+// Scope: the shell owns the current scope and its canonical home (HomeFor:
+// Deps.AgentsyncHome in user scope, Deps.ProjectHome, <project>/.agentsync,
+// in project scope). A scope switch hands every ScopeAware screen the new
+// runner and home, moves the edit boundary (EditFileMsg paths must resolve
+// inside the current home) and the confirm modal names the scope a command
+// runs under.
+//
 // Rendering safety: every string the shell renders from outside (screen
 // titles, command output, errors, action titles) goes through mask.Sanitize,
 // and command output and errors through mask.Text. Commands are only ever

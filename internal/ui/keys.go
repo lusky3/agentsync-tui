@@ -87,7 +87,8 @@ func (a *App) selectScreen(i int) {
 }
 
 // toggleScope switches user<->project, rebuilding the runner and
-// interactive builder through Deps.WithScope and refreshing every screen.
+// interactive builder through Deps.WithScope, moving the canonical home to
+// the new scope's tree (HomeFor) and refreshing every screen.
 func (a *App) toggleScope() tea.Cmd {
 	if a.d.WithScope == nil {
 		a.setStatus(statusWarn, "scope switching unavailable")
@@ -108,13 +109,14 @@ func (a *App) toggleScope() tea.Cmd {
 	}
 	a.noProject = false
 	a.run, a.interactive = a.d.WithScope(next)
+	a.home = HomeFor(a.d, next)
 	chip := a.chipCmd()
 	a.setStatus(statusInfo, "scope: "+string(next))
 	cmds := make([]tea.Cmd, 0, len(a.screens)+1)
 	cmds = append(cmds, chip)
 	for _, scr := range a.screens {
 		if sa, ok := scr.(ScopeAware); ok {
-			sa.SetScope(a.run, next)
+			sa.SetScope(a.run, next, a.home)
 		}
 		cmds = append(cmds, scr.Refresh())
 	}

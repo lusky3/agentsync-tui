@@ -22,8 +22,9 @@ import (
 // then $EDITOR, then vi) and, once the editor exits 0, to run each After
 // action through the normal path (confirm modal unless ReadOnly, logging,
 // refresh). Path must be absolute and resolve, symlinks included, to a
-// regular file inside Deps.AgentsyncHome; anything else is refused. The edit
-// itself is logged as "edit <basename>".
+// regular file inside the current scope's canonical home (HomeFor: the user
+// tree in user scope, <project>/.agentsync in project scope); anything else
+// is refused. The edit itself is logged as "edit <basename>".
 type EditFileMsg struct {
 	Path  string
 	After []actions.Action
@@ -122,7 +123,7 @@ func (a *App) editFile(m EditFileMsg) tea.Cmd {
 		a.setStatus(statusFail, noProjectText)
 		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: noProjectText})
 	}
-	path, err := resolveInside(a.d.AgentsyncHome, m.Path)
+	path, err := resolveInside(a.home, m.Path)
 	if err != nil {
 		a.setStatus(statusFail, "edit refused: "+base+": "+err.Error())
 		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: "edit refused: " + err.Error()})

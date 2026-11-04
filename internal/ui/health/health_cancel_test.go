@@ -128,7 +128,7 @@ func TestSetScopeCancelsInFlightRound(t *testing.T) {
 	s := newScreen(fr)
 	async(s.Refresh())
 	awaitN(t, fr.started, 2, "the round")
-	s.SetScope(newFake(), runner.ScopeProject)
+	s.SetScope(newFake(), runner.ScopeProject, "")
 	awaitN(t, fr.returned, 2, "SetScope to cancel the round")
 	for _, c := range fr.ctxList() {
 		if c.Err() == nil {

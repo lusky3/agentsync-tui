@@ -96,7 +96,7 @@ func (s *Screen) Title() string { return "Drift" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware: swap the runner and forget loaded state.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.gen++
 	s.seq++

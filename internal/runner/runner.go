@@ -48,14 +48,16 @@ func NewExec(bin string, scope Scope, projectDir string) *Exec {
 	return &Exec{bin: bin, scope: scope, projectDir: projectDir}
 }
 
-// scopeUnaware reports whether the command in args rejects --scope/--project.
+// ScopeUnaware reports whether the command in args rejects --scope/--project.
 // agentsync's root pre-run refuses those flags on commands marked scope-unaware.
 // This mirrors markScopeUnaware/markGroupScopeUnaware at v0.17.0-dev: version,
 // doctor, revert, the secret and marketplace groups, the plugin group except
 // `plugin upgrade`, and cobra's help and completion. It can drift on upgrade;
 // re-verify in agentsync's internal/cli/scope_flags.go and the
-// markScopeUnaware/markGroupScopeUnaware/markScopeAware call sites.
-func scopeUnaware(args []string) bool {
+// markScopeUnaware/markGroupScopeUnaware/markScopeAware call sites. Exec
+// omits the scope flags for these; the shell's confirm modal uses it to say
+// "scope: n/a (user-level)".
+func ScopeUnaware(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
@@ -69,7 +71,7 @@ func scopeUnaware(args []string) bool {
 }
 
 func (e *Exec) scopeArgs(args []string) []string {
-	if scopeUnaware(args) {
+	if ScopeUnaware(args) {
 		return nil
 	}
 	if e.scope == ScopeProject {

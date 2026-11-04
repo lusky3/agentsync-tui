@@ -163,7 +163,7 @@ func TestReconcileHandsOffInteractively(t *testing.T) {
 	}
 	// after the handover the shell refreshes: the report re-runs
 	r := okRunner(fixture(t, "auto-safe-clean.stdout"))
-	h.s.SetScope(r, runner.ScopeUser)
+	h.s.SetScope(r, runner.ScopeUser, "")
 	h.s.Update(ui.RunMsg{Action: a})
 	h.refresh()
 	if !strings.Contains(h.view(), "nothing to reconcile") {
@@ -325,7 +325,7 @@ func TestReconcileScopeAwareSwapsRunner(t *testing.T) {
 	var _ ui.ScopeAware = h.s
 	var _ ui.KeyCapturer = h.s
 	var _ ui.Screen = h.s
-	h.s.SetScope(r2, runner.ScopeProject)
+	h.s.SetScope(r2, runner.ScopeProject, "")
 	h.refresh()
 	if len(r1.got()) != 0 || len(r2.got()) != 1 || h.s.scope != runner.ScopeProject {
 		t.Fatalf("r1=%q r2=%q", r1.got(), r2.got())
@@ -361,7 +361,7 @@ func TestReconcileStaleResultDropped(t *testing.T) {
 	r = okRunner("skipped (needs manual review): /userscope#/a (drift)\n")
 	h = newHarness(t, r)
 	oldMsg = h.s.Refresh()()
-	h.s.SetScope(okRunner(""), runner.ScopeProject)
+	h.s.SetScope(okRunner(""), runner.ScopeProject, "")
 	h.s.Update(oldMsg)
 	if strings.Contains(h.view(), "/userscope") {
 		t.Fatalf("result from the previous scope applied:\n%s", h.view())

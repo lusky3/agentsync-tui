@@ -75,7 +75,7 @@ func (a *App) request(act actions.Action) tea.Cmd {
 	case act.ReadOnly:
 		return a.start(act)
 	}
-	a.modal = newModal(act)
+	a.modal = newModal(act, a.scope, a.d.ProjectDir)
 	return nil
 }
 

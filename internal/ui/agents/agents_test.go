@@ -322,7 +322,7 @@ func TestVerifyDroppedOnSetScope(t *testing.T) {
 	moveTo(t, s, "claude")
 	ch := begin(s, "D")
 	<-g.started
-	s.SetScope(&fakeRunner{}, runner.ScopeProject)
+	s.SetScope(&fakeRunner{}, runner.ScopeProject, "")
 	close(g.release)
 	if msgs := deliver(s, <-ch); len(msgs) != 0 {
 		t.Fatalf("emitted after scope change: %v", msgs)
@@ -479,7 +479,7 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	var _ ui.ScopeAware = s
 	fresh := &fakeRunner{}
 	fresh.set(fixture(t, "agent-list.txt"), 0, nil)
-	s.SetScope(fresh, runner.ScopeProject)
+	s.SetScope(fresh, runner.ScopeProject, "")
 	n := old.callCount()
 	drive(s, s.Refresh())
 	if fresh.callCount() != 1 || old.callCount() != n {

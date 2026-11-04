@@ -448,7 +448,7 @@ func TestScopeAwareSwapsRunner(t *testing.T) {
 	fr1, fr2 := okRunner(), okRunner()
 	s := newLoaded(t, fixtureHome(t), fr1)
 	n1 := len(fr1.callStrings())
-	s.SetScope(fr2, runner.ScopeProject)
+	s.SetScope(fr2, runner.ScopeProject, s.home)
 	drive(s, s.Refresh())
 	if len(fr1.callStrings()) != n1 || strings.Join(fr2.callStrings(), "|") != "status --json" {
 		t.Errorf("runner1 %q runner2 %q", fr1.callStrings(), fr2.callStrings())

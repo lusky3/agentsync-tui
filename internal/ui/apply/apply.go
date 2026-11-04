@@ -96,7 +96,7 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 func (s *Screen) Refresh() tea.Cmd { return nil }
 
 // SetScope implements ui.ScopeAware: swap the runner and forget previews.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.seq++
 	s.prev, s.req, s.live, s.out, s.scroll = [2]*preview{}, [2]*pending{}, [2]string{}, [2]*output{}, [2]int{}

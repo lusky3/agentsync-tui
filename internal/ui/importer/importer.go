@@ -138,7 +138,7 @@ func readAgents(gen int, r runner.Runner) agentsMsg {
 
 // SetScope implements ui.ScopeAware: swap the runner and forget the agent
 // list, the preview and any output.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.agen++
 	s.loaded, s.agents, s.note = false, nil, ""

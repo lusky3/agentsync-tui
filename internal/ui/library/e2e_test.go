@@ -488,7 +488,7 @@ func TestOutcomeStateMachine(t *testing.T) {
 	t.Run("SetScope disarms", func(t *testing.T) {
 		s, p := mk()
 		s.Update(ui.EditOutcomeMsg{Path: p, Started: true})
-		s.SetScope(stdoutRunner("alpha\n"), runner.ScopeProject)
+		s.SetScope(stdoutRunner("alpha\n"), runner.ScopeProject, s.home)
 		s.Update(chk)
 		if s.check != nil || s.awaiting || s.pending != "" {
 			t.Errorf("SetScope left state: %v %v %q", s.check, s.awaiting, s.pending)
