@@ -2,14 +2,17 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/lusky3/agentsync-tui/internal/app"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
@@ -18,27 +21,31 @@ import (
 var version = "dev"
 
 func main() {
-	os.Exit(run())
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 // run returns the exit code; every path returns through here so the
 // terminal is always restored by tea.Program.Run before the process exits.
-func run() int {
+func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agentsync-tui", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	scopeFlag := fs.String("scope", "", "agentsync scope: user or project (default user; --project implies project)")
 	project := fs.String("project", "", "project directory (implies --scope project)")
-	if err := fs.Parse(os.Args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *showVersion {
-		fmt.Println("agentsync-tui " + version)
+		_, _ = fmt.Fprintln(stdout, "agentsync-tui "+version)
 		return 0
 	}
 
 	scope, projectDir, err := resolveScope(*scopeFlag, *project)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "agentsync-tui:", err)
+		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
 		return 2
 	}
 
@@ -57,8 +64,8 @@ func run() int {
 	}
 	// Run restores the terminal (alt screen, raw mode) before returning,
 	// including after a recovered panic.
-	if _, err := tea.NewProgram(ui.NewApp(deps)).Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "agentsync-tui:", err)
+	if _, err := tea.NewProgram(ui.NewApp(deps, app.Screens(deps)...)).Run(); err != nil {
+		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
 		return 1
 	}
 	return 0

@@ -51,7 +51,7 @@ func TestTextSecretKeyValueUnchanged(t *testing.T) {
 		`"token": "${GITHUB_TOKEN}"`,
 		"API_KEY=${env:K}",
 		"X-Goog-Api-Key: ${GOOGLE_KEY}",
-		"→ write  /home/cody/a=b/mcp.json",
+		"→ write  /home/user/a=b/mcp.json",
 		"/home/it's/a=b/mcp.json",
 		"the password was rejected",
 		"enter your password",

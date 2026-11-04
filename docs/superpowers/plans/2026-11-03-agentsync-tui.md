@@ -21,7 +21,7 @@ Verified against agentsync v0.17.0:
 - `skill|hook|command|subagent|lsp` have **no `add`** by design: items are files created by hand or captured with `import`.
 - Global flags: `--no-input`, `--color`, `--scope user|project`, `--project <path>`.
 - Open upstream bugs the TUI must not trip over: #239 (`reconcile` override writes `${env:…}`/`${secret:…}` literally into live files), #255 (bulk `[W]` writes back ForeignCollision items), #256 (reconcile diff labels reversed), #254 (diff/reconcile cannot mask a rotated secret), #218 (control bytes can reach the terminal).
-- Motivating live example: 21 drift hunks on your AGY config, including `disabled` flags that exist only on the AGY side.
+- Motivating live example: 21 drift hunks on a maintainer's AGY config, including `disabled` flags that exist only on the AGY side.
 
 Not yet known (each is resolved by a named discovery step, with a fixture captured from a **hermetic** agentsync home): `status --json` item field names; `agent list --all` and the other text formats; where `mcp disable` records its state; whether `mcp add` on an existing ID errors or overwrites; `agentsync version` output format.
 
@@ -55,13 +55,13 @@ Not yet known (each is resolved by a named discovery step, with a fixture captur
 - Supported agentsync: tested with `v0.17.0`. A different minor version shows a warning banner, not a hard failure. A missing binary shows an install hint.
 - Tests are hermetic: `HOME`, `AGENTSYNC_HOME`, and `XDG_*` point at `t.TempDir()`. No test reads the real home directory (agentsync's own #270 shows what an ambient `AGENTSYNC_HOME` costs).
 - Never run `agentsync apply`, `revert`, `import`, or `reconcile` against the real `~/.agentsync` during development, only in a hermetic home.
-- Git: work on a branch, open a PR, no direct push to `main`, no force-push. Commit messages and PR bodies carry **no** `Co-Authored-By`, `Claude-Session`, or "Generated with" lines (your global `CLAUDE.md` overrides the session attribution reminder).
+- Git: work on a branch, open a PR, no direct push to `main`, no force-push. Commit messages and PR bodies carry **no** `Co-Authored-By`, `Claude-Session`, or "Generated with" lines.
 
 ## Review Focus
 
 Failure modes the feature scope implies that no single task's happy path covers, most likely first. Each is pinned by a named test in the owning task.
 
-1. **Secret leakage via unexpected places.** A token inline in `args` (as in the legacy AGY `gitguardian` entry, `--header "Authorization: Bearer gg_pat_…"`), resolved values inside `diff` hunks, and the activity log. Expected: masked everywhere; `${secret:X}`/`${env:X}` refs stay visible. → Tasks 4, 7, 8.
+1. **Secret leakage via unexpected places.** A token inline in `args` (as in a legacy MCP server entry, `--header "Authorization: Bearer gg_pat_…"`), resolved values inside `diff` hunks, and the activity log. Expected: masked everywhere; `${secret:X}`/`${env:X}` refs stay visible. → Tasks 4, 7, 8.
 2. **Hostile or odd text.** IDs containing `../` or newlines; ANSI/control bytes inside diff content or server names (agentsync #218). Expected: rejected before argv/path use, or stripped before rendering. → Tasks 4, 5, 14.
 3. **Exit codes and stderr noise.** Exit 2 from `status --exit-code`/`diff --exit-code`; `INFO` lines before JSON; agentsync missing, wrong version, or an unreadable `agentsync.toml`. Expected: results shown, banner with guidance, no crash. → Tasks 1, 2, 6.
 4. **State changing underneath the UI.** `apply` or a hand-edit between load and action; `mcp add` on an existing ID; two TUI instances. Expected: refresh before every mutation, and no silent overwrite. → Tasks 5, 7.
@@ -80,7 +80,7 @@ Plus empty states (no servers, no registered agents, `--scope project` outside a
 **Interfaces:**
 - Produces: `testenv.New(t *testing.T) *Env` with `Env{Home, AgentsyncHome string; Env []string}` and `(*Env) Agentsync(t, args ...string) (stdout, stderr string, exit int)` which runs the real `agentsync` with the hermetic environment, skipping the test if the binary is absent. `(*Env) Init(t)` runs `agentsync init` inside the hermetic home.
 
-- [ ] **Step 1: Create the repo** with `gh repo create lusky3/agentsync-tui --private --clone` (visibility is your call). Create branch `feat/scaffold`; never commit to `main`.
+- [ ] **Step 1: Create the repo** with `gh repo create lusky3/agentsync-tui --public --clone` (the repo is public, so keep personal paths, hosts and tokens out of it). Create branch `feat/scaffold`; never commit to `main`.
 - [ ] **Step 2: Write the failing test** `TestEnvNeverTouchesRealHome`: snapshot the names under the real `os.UserHomeDir()/.agentsync` (or note its absence), run `env.Agentsync(t, "init")`, then assert that snapshot is unchanged and that `env.AgentsyncHome` is under `t.TempDir()`.
 - [ ] **Step 3: Run** `go test ./internal/testenv -run TestEnvNeverTouchesRealHome -v`. Expected: FAIL (package missing).
 - [ ] **Step 4: Implement `testenv.New`** by setting `HOME`, `AGENTSYNC_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` to subdirectories of `t.TempDir()` and building `Env.Env` from `os.Environ()` with those overridden. Also write `go.mod` (`go 1.26`), a `main.go` that prints a version, and `mise.toml` with `go = "1.26"` and tasks `test`, `lint`, `build`.
