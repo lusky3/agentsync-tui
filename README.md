@@ -155,6 +155,20 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   to `.3` are the older files, the oldest is dropped.
 - Text from outside (command output, errors, file names) has terminal control
   bytes stripped before it is rendered.
+- A literal value typed into the add-server form's env or header fields is
+  passed to `agentsync mcp add` on its command line (the CLI has no other
+  input for them), where another local user can read it from
+  `/proc/<pid>/cmdline` for the milliseconds the command runs, and agentsync
+  then stores it in `mcp/<id>.toml`. The form says so: prefer
+  `${env:NAME}` or `${secret:NAME}` references, which are passed as written.
+- `E` resolves the file (symlinks included) and checks that it is a regular
+  file inside the current scope's home in the same step that hands it to
+  the editor, so the check-then-use window is the length of that step; a
+  same-user writer who could swap a path component inside it could edit
+  the file directly anyway. A home that is itself a symlink (a dotfiles
+  checkout) is resolved first, so "inside the home" means inside the link's
+  target. What the editor does with the file (vim modelines and the like)
+  is the editor's own policy.
 
 ## Known limits
 
@@ -192,8 +206,24 @@ CI runs them against agentsync v0.17.0, including an end-to-end smoke test in
 
 ## Releasing
 
-Pushing any `v*` tag publishes a release. Maintainers should restrict who can
-push `v*` tags with a repository tag ruleset.
+Pushing a `v*` tag runs the tests, lint and govulncheck, then publishes a
+release with GoReleaser: the archives, `checksums.txt`, one SPDX SBOM per
+archive (`<archive>.sbom.json`) and a SLSA build-provenance attestation
+signed through GitHub's Sigstore instance. A pre-release tag
+(`v1.0.0-rc1`) publishes a GitHub pre-release.
+
+Verify a downloaded archive against its provenance with:
+
+```sh
+gh attestation verify agentsync-tui_<version>_<os>_<arch>.tar.gz --repo lusky3/agentsync-tui
+```
+
+The release workflow runs on any `v*` tag on any commit, so maintainers
+should add a repository tag ruleset that limits who may create `v*` tags
+(and, if wanted, requires them to be signed and to point at commits on
+`main`). The attestation records the workflow, commit and tag a binary was
+built from; there is no separate signing key to manage. Dependabot keeps the
+Go modules and the pinned Actions current.
 
 ## License
 

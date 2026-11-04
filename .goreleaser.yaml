@@ -26,6 +26,15 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# One SPDX SBOM per archive (<archive>.sbom.json), built with syft.
+sboms:
+  - artifacts: archive
+
+release:
+  # A pre-release tag (v1.0.0-rc1, v0.2.0-beta.1) publishes a GitHub
+  # pre-release, never a full one.
+  prerelease: auto
+
 changelog:
   use: git
   sort: asc
