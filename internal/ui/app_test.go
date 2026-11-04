@@ -155,12 +155,34 @@ type harness struct {
 	run *fakeRunner
 }
 
+// The harness terminal size. The program delivers it to the App twice on its
+// own: teatest.NewTestModel Sends it before returning, and tea.Program.Run
+// sends its WithWindowSize size from a separate goroutine (`go p.Send(...)`),
+// so that second copy can be processed after messages the test sends.
+const (
+	initW, initH    = 100, 30
+	initialSizeMsgs = 2
+)
+
 func start(t *testing.T, d Deps, screens ...Screen) *harness {
 	t.Helper()
 	fr, _ := d.Runner.(*fakeRunner)
 	p := probe{App: NewApp(d, screens...), seen: make(chan observed, 4096)}
-	tm := teatest.NewTestModel(t, p, teatest.WithInitialTermSize(100, 30))
+	tm := teatest.NewTestModel(t, p, teatest.WithInitialTermSize(initW, initH))
 	return &harness{t: t, tm: tm, p: p, run: fr}
+}
+
+// waitInitialSize blocks until the App has processed every startup copy of
+// the initial window size, so a size the test sends afterwards is final.
+// It discards other messages seen meanwhile.
+func (h *harness) waitInitialSize() {
+	h.t.Helper()
+	for i := 0; i < initialSizeMsgs; i++ {
+		h.waitMsg("initial WindowSizeMsg", func(m tea.Msg) bool {
+			w, ok := m.(tea.WindowSizeMsg)
+			return ok && w.Width == initW && w.Height == initH
+		})
+	}
 }
 
 func baseDeps(fr *fakeRunner) Deps {
@@ -364,8 +386,13 @@ func TestResizeReflows(t *testing.T) {
 	long := strings.Repeat("wide ", 60)
 	s := newScreen("A", long+"\n"+strings.Repeat("line\n", 80))
 	h := start(t, baseDeps(newFakeRunner()), s)
+	// Without this, the program's own late initial size can land after the
+	// 40x15 below and leave the App at 100x30.
+	h.waitInitialSize()
 	h.tm.Send(tea.WindowSizeMsg{Width: 40, Height: 15})
-	h.waitMsg("resize", func(m tea.Msg) bool { w, ok := m.(tea.WindowSizeMsg); return ok && w.Width == 40 })
+	// probe reports a message only after App.Update (which resizes the
+	// screens synchronously) has handled it.
+	h.waitMsg("resize", func(m tea.Msg) bool { w, ok := m.(tea.WindowSizeMsg); return ok && w.Width == 40 && w.Height == 15 })
 	app := h.final()
 	lines := strings.Split(content(app), "\n")
 	if len(lines) > 15 {
