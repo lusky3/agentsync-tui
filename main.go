@@ -12,7 +12,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -110,28 +112,65 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Filter logs a run still in flight as abandoned when Bubble Tea ends the
 	// program on SIGTERM (QuitMsg) or an off-TTY SIGINT (InterruptMsg).
 	// SIGHUP (terminal closed) would otherwise end the process at once with
-	// no record, so it is turned into the same QuitMsg.
+	// no record, so it is turned into the same QuitMsg. The signal that ends
+	// the TUI is remembered and, once Run has returned, forwarded to every
+	// agentsync child still running (runner.Shutdown): a read was already
+	// cancelled with SIGINT and gets a short wait, a write abandoned to
+	// SIGTERM or SIGHUP gets the interrupt grace, then the group is killed,
+	// so nothing is orphaned.
 	p := tea.NewProgram(a, tea.WithFilter(a.Filter))
-	hup, done := make(chan os.Signal, 1), make(chan struct{})
-	signal.Notify(hup, syscall.SIGHUP)
+	sigs, done := make(chan os.Signal, 4), make(chan struct{})
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGHUP)
+	var exit struct {
+		sync.Mutex
+		sig os.Signal
+	}
+	note := func(s os.Signal) {
+		exit.Lock()
+		exit.sig = s
+		exit.Unlock()
+	}
 	go func() {
-		select {
-		case <-hup:
-			p.Send(tea.QuitMsg{})
-		case <-done:
+		for {
+			select {
+			case s := <-sigs:
+				note(s)
+				if s == syscall.SIGHUP {
+					p.Send(tea.QuitMsg{})
+				}
+			case <-done:
+				return
+			}
 		}
 	}()
 	// Run restores the terminal (alt screen, raw mode) before returning,
 	// including after a recovered panic.
 	_, err = p.Run()
-	signal.Stop(hup)
+	signal.Stop(sigs)
 	close(done)
+	select { // a signal delivered as Run was returning
+	case s := <-sigs:
+		note(s)
+	default:
+	}
+	exit.Lock()
+	sig := exit.sig
+	exit.Unlock()
+	if sig == nil {
+		runner.Shutdown(os.Interrupt, readShutdownWait) // the cancelled reads
+	} else {
+		runner.Shutdown(sig, runner.InterruptGrace) // a write abandoned to the signal
+	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
 		return 1
 	}
 	return 0
 }
+
+// readShutdownWait is how long a quit waits for the cancelled reads (already
+// sent SIGINT) before their groups are killed.
+const readShutdownWait = 2 * time.Second
 
 // resolveScope applies the flag rules: --project implies project scope unless
 // --scope says otherwise; the project path must be an existing directory.

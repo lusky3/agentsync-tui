@@ -5,5 +5,6 @@
 trap 'exit 130' INT
 sh -c 'trap "" INT; while :; do sleep 0.05; done' &
 echo "child $!" >> "$TRAP_LOG"
+echo "self $$" >> "$TRAP_LOG"
 echo ready >> "$TRAP_LOG"
 wait

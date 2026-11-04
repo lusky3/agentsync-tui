@@ -257,3 +257,32 @@ func TestOutputCappedPerStream(t *testing.T) {
 		t.Errorf("stderr %q: a stream under the cap must not be marked", res.Stderr)
 	}
 }
+
+// A background child must never stop on a /dev/tty prompt: git's terminal
+// prompt and ssh's askpass are disabled in the child environment, and an
+// inherited GIT_ASKPASS is dropped. Interactive handovers keep the user's
+// environment.
+func TestRunChildEnvDisablesGitPrompts(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "env.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"GTP=$GIT_TERMINAL_PROMPT SAR=$SSH_ASKPASS_REQUIRE GA=$GIT_ASKPASS\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_ASKPASS", "/usr/bin/askpass")
+	t.Setenv("GIT_TERMINAL_PROMPT", "1")
+	res, err := NewExec(script, ScopeUser, "").Run(context.Background(), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(res.Stdout) != "GTP=0 SAR=never GA=" {
+		t.Errorf("child env: %q", res.Stdout)
+	}
+	e := NewExec(script, ScopeUser, "")
+	e.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_ASKPASS=/x"}
+	if res, _ := e.Run(context.Background(), "x"); strings.TrimSpace(res.Stdout) != "GTP=0 SAR=never GA=" {
+		t.Errorf("explicit Env not scrubbed: %q", res.Stdout)
+	}
+	cmd := e.Interactive("x")
+	if strings.Join(cmd.Env, " ") != strings.Join(e.Env, " ") {
+		t.Errorf("Interactive env changed: %q", cmd.Env)
+	}
+}

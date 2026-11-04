@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -156,10 +157,15 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 		return nil
 	}
 	cmd.WaitDelay = grace
-	cmd.Env = e.Env
+	cmd.Env = childEnv(e.Env)
 	out, errb := &capWriter{n: MaxStream}, &capWriter{n: MaxStream}
 	cmd.Stdout, cmd.Stderr = out, errb
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		track(cmd) // Shutdown can reach the group until Wait returns
+		err = cmd.Wait()
+		untrack(cmd)
+	}
 	if t := killTimer.Load(); t != nil {
 		t.Stop()
 	}
@@ -179,6 +185,27 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 		return res, err
 	}
 	return res, nil
+}
+
+// childEnv is the environment of a background child: base (nil means the
+// process environment) with git's terminal prompt and ssh's askpass turned
+// off and an inherited GIT_ASKPASS dropped. agentsync runs in its own
+// process group behind the TUI, so a helper that stopped on a /dev/tty
+// prompt (a private marketplace clone asking for credentials) would hang
+// the run; it fails instead and the error is shown.
+func childEnv(base []string) []string {
+	if base == nil {
+		base = os.Environ()
+	}
+	out := make([]string, 0, len(base)+2)
+	for _, kv := range base {
+		switch k, _, _ := strings.Cut(kv, "="); k {
+		case "GIT_ASKPASS", "GIT_TERMINAL_PROMPT", "SSH_ASKPASS_REQUIRE":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "GIT_TERMINAL_PROMPT=0", "SSH_ASKPASS_REQUIRE=never")
 }
 
 // Interactive builds a command for tea.ExecProcess. It omits --no-input so

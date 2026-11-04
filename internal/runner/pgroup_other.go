@@ -23,3 +23,13 @@ func signalGroup(cmd *exec.Cmd, sig os.Signal) error {
 	}
 	return nil
 }
+
+// groupGone: without process groups only the child itself is known; it is
+// gone once Run has reaped it (untrack), which Shutdown observes through
+// the live set, so a tracked child counts as present.
+func groupGone(cmd *exec.Cmd) bool {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	_, present := live.cmds[cmd]
+	return !present
+}

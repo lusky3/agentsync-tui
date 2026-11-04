@@ -30,3 +30,11 @@ func signalGroup(cmd *exec.Cmd, sig os.Signal) error {
 	}
 	return err
 }
+
+// groupGone reports whether no process of the child's group is left.
+func groupGone(cmd *exec.Cmd) bool {
+	if cmd.Process == nil {
+		return true
+	}
+	return errors.Is(syscall.Kill(-cmd.Process.Pid, 0), syscall.ESRCH)
+}
