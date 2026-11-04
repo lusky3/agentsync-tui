@@ -54,12 +54,16 @@ type hooks struct {
 	newProgram func(*ui.App) program
 	shutdown   func(sig os.Signal, readWait, writeWait time.Duration) []runner.Ended
 	killAll    func()
+	notify     func(chan<- os.Signal, ...os.Signal) // os/signal.Notify
+	stop       func(chan<- os.Signal)               // os/signal.Stop
 }
 
 var defaultHooks = hooks{
 	newProgram: func(a *ui.App) program { return tea.NewProgram(a, tea.WithFilter(a.Filter)) },
 	shutdown:   runner.Shutdown,
 	killAll:    runner.KillAll,
+	notify:     signal.Notify,
+	stop:       signal.Stop,
 }
 
 // run returns the exit code; every path returns through here so the
@@ -142,9 +146,17 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	// cancelled with SIGINT and gets a short wait, a write abandoned to
 	// SIGTERM or SIGHUP gets the interrupt grace, then the group is killed,
 	// so nothing is orphaned.
-	p := h.newProgram(a)
+	// SIGINT, SIGTERM and SIGHUP are caught from before the program runs
+	// until the children are ended (h.stop below): a ctrl+c once the
+	// terminal is back in cooked mode is a real SIGINT and must escalate
+	// the shutdown, not end the process through Go's default handler. While
+	// the TUI runs in raw mode a ctrl+c is a key press that Bubble Tea
+	// handles; a real SIGINT (kill -INT) is also seen by Bubble Tea's own
+	// handler, which ends the program (InterruptMsg), so here it is only
+	// noted as the signal to forward.
 	sigs, done := make(chan os.Signal, 4), make(chan struct{})
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGHUP)
+	h.notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	p := h.newProgram(a)
 	var exit struct {
 		sync.Mutex
 		sig os.Signal
@@ -170,11 +182,8 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	// Run restores the terminal (alt screen, raw mode) before returning,
 	// including after a recovered panic.
 	_, err = p.Run()
-	// The terminal is in cooked mode again, so a ctrl+c now is a real
-	// SIGINT: keep catching it, and SIGTERM and SIGHUP, until the children
-	// are gone, or Go's default handler would end the process with them
-	// alive. The forwarding goroutine stops; endChildren drains the channel.
-	signal.Notify(sigs, os.Interrupt)
+	// The forwarding goroutine stops; endChildren drains the channel, which
+	// stays registered until the children are gone.
 	close(done)
 	select { // a signal delivered as Run was returning
 	case s := <-sigs:
@@ -185,7 +194,7 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	sig := exit.sig
 	exit.Unlock()
 	a.RecordShutdown(endChildren(sig, sigs, h))
-	signal.Stop(sigs)
+	h.stop(sigs)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
 		return 1

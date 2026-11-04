@@ -34,14 +34,39 @@ type child struct {
 // signals when the program is going away. Run keeps a child here from
 // Start until Wait returns, which with a helper holding the pipes open can
 // be WaitDelay after agentsync itself exited, so the TUI's exit must not
-// wait for Run (Shutdown kills the group instead).
+// wait for Run (Shutdown kills the group instead). killed records which
+// children were sent SIGKILL (by Shutdown's deadline or by KillAll), so an
+// outcome says what happened rather than what was intended.
 var live struct {
-	mu   sync.Mutex
-	cmds map[*exec.Cmd]*child
+	mu     sync.Mutex
+	cmds   map[*exec.Cmd]*child
+	killed map[*child]time.Time
 }
 
-// escalated is set by KillAll: a Shutdown in progress kills at once.
+// escalated is set by KillAll during a Shutdown, which then kills at once;
+// Shutdown clears it when it starts, so a KillAll with nothing live, or
+// before any Shutdown, does not shorten a later one.
 var escalated atomic.Bool
+
+// markKilled notes that c's group was sent SIGKILL.
+func markKilled(c *child) {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	if live.killed == nil {
+		live.killed = map[*child]time.Time{}
+	}
+	if _, ok := live.killed[c]; !ok {
+		live.killed[c] = time.Now()
+	}
+}
+
+// killedAt reports whether and when c's group was sent SIGKILL.
+func killedAt(c *child) (time.Time, bool) {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	t, ok := live.killed[c]
+	return t, ok
+}
 
 func track(cmd *exec.Cmd, args []string, write bool) {
 	live.mu.Lock()
@@ -55,7 +80,22 @@ func track(cmd *exec.Cmd, args []string, write bool) {
 func untrack(cmd *exec.Cmd) {
 	live.mu.Lock()
 	defer live.mu.Unlock()
-	delete(live.cmds, cmd)
+	delete(live.cmds, cmd) // its killed mark stays until the Shutdown that reads it is done
+}
+
+// forgetKilled drops the kill marks of children a Shutdown has reported
+// and of any child no longer live.
+func forgetKilled(done []*child) {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	for _, c := range done {
+		delete(live.killed, c)
+	}
+	for c := range live.killed {
+		if _, ok := live.cmds[c.cmd]; !ok {
+			delete(live.killed, c)
+		}
+	}
 }
 
 func snapshot() []*child {
@@ -92,9 +132,10 @@ const killGrace = 2 * time.Second
 // SIGINT cannot outlive the TUI. A KillAll meanwhile ends the waits at
 // once. Nothing happens when no child is live.
 func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
+	escalated.Store(false) // escalation is scoped to this call
+	forgetKilled(nil)      // marks of children already reaped are stale
 	children := snapshot()
 	if len(children) == 0 {
-		escalated.Store(false)
 		return nil
 	}
 	for _, c := range children {
@@ -109,7 +150,6 @@ func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
 		}
 		deadline[c] = start.Add(wait)
 	}
-	killed := map[*child]time.Time{}
 	gone := map[*child]bool{}
 	var out []Ended
 	for {
@@ -123,18 +163,19 @@ func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
 			if groupGone(c.cmd) {
 				gone[c] = true
 				oc := "exited"
-				if _, k := killed[c]; k || escalated.Load() { // KillAll kills directly
+				if _, k := killedAt(c); k {
 					oc = "killed"
 				}
 				out = append(out, Ended{Args: c.args, Write: c.write, Outcome: oc, Took: now.Sub(start)})
 				continue
 			}
 			left++
-			if _, k := killed[c]; !k && (escalated.Load() || !now.Before(deadline[c])) {
-				_ = signalGroup(c.cmd, os.Kill)
-				killed[c] = now
+			if _, k := killedAt(c); !k && (escalated.Load() || !now.Before(deadline[c])) {
+				if signalGroup(c.cmd, os.Kill) == nil {
+					markKilled(c)
+				}
 			}
-			k, ok := killed[c]
+			k, ok := killedAt(c)
 			allKilled = allKilled && ok
 			if k.After(lastKill) {
 				lastKill = k
@@ -154,6 +195,7 @@ func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
 		time.Sleep(20 * time.Millisecond)
 	}
 	escalated.Store(false)
+	forgetKilled(children)
 	return out
 }
 
@@ -163,6 +205,8 @@ func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
 func KillAll() {
 	escalated.Store(true)
 	for _, c := range snapshot() {
-		_ = signalGroup(c.cmd, os.Kill)
+		if signalGroup(c.cmd, os.Kill) == nil { // a group already gone exited on its own
+			markKilled(c)
+		}
 	}
 }

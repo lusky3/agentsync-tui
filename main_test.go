@@ -156,7 +156,10 @@ func TestRunShutsDownChildrenOnEveryExit(t *testing.T) {
 	for _, runErr := range []error{nil, errors.New("boom")} {
 		hermetic(t)
 		var got []shutdownCall
+		src := &fakeSignals{}
 		h := hooks{
+			notify:     src.notify,
+			stop:       src.stop,
 			newProgram: func(*ui.App) program { return &fakeProgram{err: runErr} },
 			shutdown: func(sig os.Signal, readWait, writeWait time.Duration) []runner.Ended {
 				got = append(got, shutdownCall{sig, readWait, writeWait})
@@ -227,4 +230,83 @@ func TestEndChildrenEscalatesOnSecondSignal(t *testing.T) {
 		return nil
 	}
 	endChildren(nil, sigs, h)
+}
+
+// fakeSignals stands in for os/signal: deliver hands a signal to the
+// registered channel, or counts it as uncaught (Go's default handler would
+// have ended the process) when it is not registered or already stopped.
+type fakeSignals struct {
+	ch         chan<- os.Signal
+	registered map[os.Signal]bool
+	stopped    bool
+	uncaught   []os.Signal
+}
+
+func (f *fakeSignals) notify(ch chan<- os.Signal, sigs ...os.Signal) {
+	f.ch = ch
+	if f.registered == nil {
+		f.registered = map[os.Signal]bool{}
+	}
+	for _, s := range sigs {
+		f.registered[s] = true
+	}
+}
+
+func (f *fakeSignals) stop(chan<- os.Signal) { f.stopped = true }
+
+func (f *fakeSignals) deliver(s os.Signal) {
+	if f.stopped || !f.registered[s] {
+		f.uncaught = append(f.uncaught, s)
+		return
+	}
+	f.ch <- s
+}
+
+// SIGINT, SIGTERM and SIGHUP are registered before the program runs and
+// stay registered until the children are ended: a ctrl+c delivered during
+// the shutdown wait (the terminal is in cooked mode again) is consumed and
+// escalates to KillAll instead of reaching Go's default handler.
+func TestSignalsCaughtUntilChildrenEnded(t *testing.T) {
+	hermetic(t)
+	src := &fakeSignals{}
+	released := make(chan struct{})
+	killed, stoppedBeforeShutdownEnded := 0, false
+	var atRun map[os.Signal]bool
+	h := hooks{
+		notify: src.notify,
+		stop:   src.stop,
+		newProgram: func(*ui.App) program {
+			atRun = map[os.Signal]bool{}
+			for s := range src.registered {
+				atRun[s] = true
+			}
+			return &fakeProgram{}
+		},
+		shutdown: func(os.Signal, time.Duration, time.Duration) []runner.Ended {
+			src.deliver(os.Interrupt) // ctrl+c during the wait
+			select {
+			case <-released:
+			case <-time.After(3 * time.Second):
+				t.Error("the SIGINT during the wait did not escalate")
+			}
+			stoppedBeforeShutdownEnded = src.stopped
+			return nil
+		},
+		killAll: func() { killed++; close(released) },
+	}
+	var out, errb bytes.Buffer
+	if code := runWith(nil, &out, &errb, h); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	for _, s := range []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP} {
+		if !atRun[s] {
+			t.Errorf("%v not registered before the program ran: %v", s, atRun)
+		}
+	}
+	if len(src.uncaught) != 0 {
+		t.Errorf("signals reached the default handler: %v", src.uncaught)
+	}
+	if killed != 1 || stoppedBeforeShutdownEnded || !src.stopped {
+		t.Errorf("killAll %d, stopped before the shutdown ended %v, stopped at exit %v", killed, stoppedBeforeShutdownEnded, src.stopped)
+	}
 }

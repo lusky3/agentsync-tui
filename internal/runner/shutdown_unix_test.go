@@ -128,3 +128,57 @@ func TestKillAllEscalatesShutdown(t *testing.T) {
 		t.Error("group survived KillAll")
 	}
 }
+
+// Escalation is scoped to one Shutdown: a KillAll with nothing live (or
+// before a Shutdown) does not make the next Shutdown kill at once, so a
+// child that exits on the signal is reported as exited.
+func TestKillAllDoesNotEscalateALaterShutdown(t *testing.T) {
+	KillAll()
+	wd, _ := os.Getwd()
+	logPath := filepath.Join(t.TempDir(), "trap.log")
+	e := NewExec(filepath.Join(wd, "testdata", "trap-int.sh"), ScopeUser, "")
+	e.Env = append(os.Environ(), "TRAP_LOG="+logPath, "TRAP_MODE=exit")
+	go func() { _, _ = e.Run(context.Background(), "status", "--json") }()
+	for {
+		if b, _ := os.ReadFile(logPath); strings.Contains(string(b), "ready") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	ended := Shutdown(os.Interrupt, 2*time.Second, 2*time.Second)
+	if len(ended) != 1 || ended[0].Outcome != "exited" {
+		t.Fatalf("outcomes %+v, want the child exited on SIGINT", ended)
+	}
+}
+
+// Under escalation a child that had already exited on the signal is still
+// "exited"; only what KillAll (or the deadline) actually killed is "killed".
+func TestEscalationLabelsByWhatHappened(t *testing.T) {
+	self, child, _ := spawnKind(t, true) // ignores everything but SIGKILL
+	wd, _ := os.Getwd()
+	logPath := filepath.Join(t.TempDir(), "trap.log")
+	e := NewExec(filepath.Join(wd, "testdata", "trap-int.sh"), ScopeUser, "")
+	e.Env = append(os.Environ(), "TRAP_LOG="+logPath, "TRAP_MODE=exit")
+	go func() { _, _ = e.Run(context.Background(), "check") }()
+	for {
+		if b, _ := os.ReadFile(logPath); strings.Contains(string(b), "ready") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	done := make(chan []Ended, 1)
+	go func() { done <- Shutdown(os.Interrupt, 10*time.Second, 10*time.Second) }()
+	time.Sleep(300 * time.Millisecond) // trap-int has exited on SIGINT by now
+	KillAll()
+	ended := <-done
+	got := map[string]string{}
+	for _, e := range ended {
+		got[e.Args[0]] = e.Outcome
+	}
+	if got["check"] != "exited" || got["plugin"] != "killed" {
+		t.Fatalf("outcomes %v, want check exited and plugin killed", got)
+	}
+	if !pgidGone(self) || alive(child) {
+		t.Error("group survived")
+	}
+}
