@@ -36,7 +36,26 @@ func (p probe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return p, cmd
 }
 
+// recScreen is an extra tab that records every EditOutcomeMsg the shell
+// broadcasts, so tests can wait on the end of an edit deterministically.
+type recScreen struct{ outs chan ui.EditOutcomeMsg }
+
+func (r recScreen) Init() tea.Cmd    { return nil }
+func (r recScreen) Refresh() tea.Cmd { return nil }
+func (r recScreen) Title() string    { return "rec" }
+func (r recScreen) View() tea.View   { return tea.NewView("") }
+func (r recScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if o, ok := msg.(ui.EditOutcomeMsg); ok {
+		select {
+		case r.outs <- o:
+		default:
+		}
+	}
+	return r, nil
+}
+
 type e2e struct {
+	rec     recScreen
 	t       *testing.T
 	tm      *teatest.TestModel
 	p       probe
@@ -48,13 +67,14 @@ type e2e struct {
 func startE2E(t *testing.T, home string, r runner.Runner, kinds ...Kind) *e2e {
 	t.Helper()
 	d := newDeps(home, r)
-	e := &e2e{t: t, screens: map[Kind]*Screen{}}
+	e := &e2e{t: t, screens: map[Kind]*Screen{}, rec: recScreen{outs: make(chan ui.EditOutcomeMsg, 64)}}
 	var scr []ui.Screen
 	for _, k := range kinds {
 		s := New(d, k)
 		e.screens[k] = s
 		scr = append(scr, s)
 	}
+	scr = append(scr, e.rec)
 	e.p = probe{App: ui.NewApp(d, scr...), seen: make(chan tea.Msg, 4096)}
 	e.tm = teatest.NewTestModel(t, e.p, teatest.WithInitialTermSize(120, 40))
 	return e
@@ -85,6 +105,29 @@ func (e *e2e) waitLists(n int) {
 	e.t.Helper()
 	for i := 0; i < n; i++ {
 		e.wait("listMsg", func(m tea.Msg) bool { _, ok := m.(listMsg); return ok })
+	}
+}
+
+// awaitEditEnd blocks until the shell reports the end of the pending edit: a
+// refusal (returns false) or the editor having exited (returns true). It must
+// be called before finish so that "the editor did not run" assertions are
+// made after an editor that was wrongly allowed to run has truly finished.
+func (e *e2e) awaitEditEnd() (ran bool) {
+	e.t.Helper()
+	deadline := time.After(e2eTimeout)
+	for {
+		select {
+		case o := <-e.rec.outs:
+			switch {
+			case o.Finished:
+				return true
+			case !o.Started:
+				return false
+			}
+		case <-deadline:
+			e.t.Fatal("timed out waiting for the edit outcome")
+			return false
+		}
 	}
 }
 
@@ -175,9 +218,10 @@ func TestSymlinkEscapeRefusedEndToEnd(t *testing.T) {
 	e.waitLists(1)
 	e.sendKey("E")
 	e.wait("EditFileMsg", func(m tea.Msg) bool { _, ok := m.(ui.EditFileMsg); return ok })
+	e.awaitEditEnd()
 	e.finish()
 	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("editor ran on a symlink escape")
+		t.Error("editor ran on a symlink escape")
 	}
 	fileIs(t, outsideFile, "outside\n")
 	v := ansi.Strip(e.p.View().Content)
@@ -204,7 +248,17 @@ func TestFileSymlinkRefusedByScreen(t *testing.T) {
 	e := startE2E(t, home, stdoutRunner("evil\n"), Skill)
 	e.waitLists(1)
 	e.sendKey("E")
-	e.waitLists(1) // the stale-item refresh
+	// Deterministic end: the stale-item refresh (listMsg) is what a correct
+	// screen does next; an EditFileMsg means the screen let it through, so
+	// wait for that edit to end before asserting.
+	switch e.wait("refresh or edit", func(m tea.Msg) bool {
+		_, isList := m.(listMsg)
+		_, isEdit := m.(ui.EditFileMsg)
+		return isList || isEdit
+	}).(type) {
+	case ui.EditFileMsg:
+		e.awaitEditEnd()
+	}
 	e.finish()
 	if e.sawEdit() {
 		t.Error("an EditFileMsg reached the shell for a symlinked file")
@@ -238,13 +292,62 @@ func TestShellRefusesFileSymlinkWhenScreenBypassed(t *testing.T) {
 	e.waitLists(1)
 	e.tm.Send(ui.EditFileMsg{Path: link, After: []actions.Action{actions.Check()}})
 	e.wait("EditFileMsg", func(m tea.Msg) bool { _, ok := m.(ui.EditFileMsg); return ok })
+	e.awaitEditEnd()
 	e.finish()
 	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("editor ran on a symlinked file")
+		t.Error("editor ran on a symlinked file")
 	}
 	fileIs(t, outside, "outside\n")
 	if v := ansi.Strip(e.p.View().Content); !strings.Contains(v, "refused") {
 		t.Errorf("view:\n%s", v)
+	}
+}
+
+// A directory is not a regular file: the shell must refuse it even when the
+// sender skipped the screen's lstat.
+func TestShellRefusesDirectoryWhenScreenBypassed(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "skills", "evil", "SKILL.md")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ed, marker := fakeEditor(t)
+	setEditor(t, ed)
+	e := startE2E(t, home, stdoutRunner("evil\n"), Skill)
+	e.waitLists(1)
+	e.tm.Send(ui.EditFileMsg{Path: dir, After: []actions.Action{actions.Check()}})
+	e.wait("EditFileMsg", func(m tea.Msg) bool { _, ok := m.(ui.EditFileMsg); return ok })
+	e.awaitEditEnd()
+	e.finish()
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("editor ran on a directory")
+	}
+	if v := ansi.Strip(e.p.View().Content); !strings.Contains(v, "refused") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+// Two library screens in one App: an outcome for the Skills path arms only
+// Skills, and the following check result is adopted only there.
+func TestOutcomeArmsOnlyTheOwningScreen(t *testing.T) {
+	home := t.TempDir()
+	writeItem(t, home, Skill, "alpha")
+	writeItem(t, home, Command, "alpha")
+	d := newDeps(home, stdoutRunner("alpha\n"))
+	sk, cm := New(d, Skill), New(d, Command)
+	for _, s := range []*Screen{sk, cm} {
+		drive(s, s.Init())
+	}
+	skEdit := onlyEdit(t, press(sk, "E"))
+	onlyEdit(t, press(cm, "E")) // both screens have a pending edit
+	app := ui.NewApp(d, sk, cm)
+	app.Update(ui.EditOutcomeMsg{Path: skEdit.Path, Started: true})
+	app.Update(ui.RunMsg{Action: actions.Check(), Result: runner.Result{Stdout: "schema valid"}})
+	if sk.check == nil || !strings.Contains(scrView(sk), "check passed") {
+		t.Errorf("owning screen missed its check: %v", sk.check)
+	}
+	if cm.check != nil || cm.awaiting {
+		t.Errorf("other screen adopted a foreign check: %v awaiting=%v", cm.check, cm.awaiting)
 	}
 }
 
