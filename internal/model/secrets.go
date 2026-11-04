@@ -18,12 +18,6 @@ func IsBackendNotConfigured(text string) bool {
 	return strings.Contains(text, `set backend = "age"`)
 }
 
-// headerWords are first tokens of header/notice lines, never keys.
-var headerWords = map[string]bool{
-	"key": true, "keys": true, "name": true, "secret": true, "secrets": true,
-	"warn": true, "error": true, "info": true,
-}
-
 // ParseSecretKeys parses `agentsync secret list` (plain text; one KEY per
 // line, in the CLI's order; never values).
 //
@@ -40,7 +34,7 @@ var headerWords = map[string]bool{
 // ':' so that a line shaped like KEY=VALUE or KEY: VALUE can never yield
 // anything but the key; trailing columns are ignored. Tokens that are not
 // valid key names (control characters, ANSI, bidi, a leading '-', '../'),
-// header words, parenthesised notes and blank lines are dropped. Non-blank
+// a bare "Heading:" line, parenthesised notes and blank lines are dropped. Non-blank
 // input that yields no key and holds no note is an error.
 func ParseSecretKeys(stdout string) ([]string, error) {
 	var keys []string
@@ -55,11 +49,15 @@ func ParseSecretKeys(stdout string) ([]string, error) {
 			recognised = true
 			continue
 		}
-		tok := strings.Fields(line)[0]
+		f := strings.Fields(line)
+		if len(f) == 1 && strings.HasSuffix(f[0], ":") {
+			continue // a "Keys:" style heading with nothing after it
+		}
+		tok := f[0]
 		if i := strings.IndexAny(tok, "=:"); i >= 0 {
 			tok = tok[:i]
 		}
-		if headerWords[strings.ToLower(tok)] || !secretKeyRe.MatchString(tok) {
+		if !secretKeyRe.MatchString(tok) {
 			continue
 		}
 		keys = append(keys, tok)

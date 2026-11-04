@@ -52,7 +52,7 @@ func (s *Screen) View() tea.View {
 		out = append(out, styleWarn.Render(s.note))
 	}
 	if s.typing {
-		out = append(out, styleBold.Render("key name: ")+s.input+"▏")
+		out = append(out, styleBold.Render("key name: ")+display(s.input)+"▏")
 		if s.fieldErr != "" {
 			out = append(out, styleWarn.Render(s.fieldErr))
 		}
@@ -84,7 +84,7 @@ func (s *Screen) rows() []string {
 		if ids := s.uses[k]; len(ids) > 0 {
 			users = strings.Join(ids, ", ")
 		}
-		line := pad(mask.Sanitize(k), 30) + "used by: " + users
+		line := pad(display(k), 30) + "used by: " + users
 		if i == s.cursor {
 			out = append(out, styleSel.Render("> "+line))
 		} else {
@@ -116,7 +116,7 @@ func (s *Screen) crossCheck() []string {
 	sort.Strings(missing)
 	var out []string
 	for _, k := range missing {
-		out = append(out, styleWarn.Render("missing: "+mask.Sanitize(k)+" (used by "+strings.Join(s.uses[k], ", ")+")"))
+		out = append(out, styleWarn.Render("missing: "+display(k)+" (used by "+strings.Join(s.uses[k], ", ")+")"))
 	}
 	return out
 }
@@ -127,3 +127,7 @@ func pad(s string, n int) string {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// display is how a key name is rendered: masked, then sanitised, so a token
+// that reached the vault elsewhere never shows raw.
+func display(k string) string { return mask.Sanitize(mask.Text(k)) }

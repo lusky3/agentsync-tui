@@ -37,6 +37,8 @@ const (
 const (
 	staleNote  = "secret list changed — refreshed"
 	rejectNote = "key name only — the value is entered in agentsync's own prompt"
+	pasteNote  = "paste is disabled here: type the key NAME (values are entered in agentsync's own prompt)"
+	valueNote  = "this looks like a secret value, not a key name"
 )
 
 type vaultState int
@@ -85,6 +87,9 @@ type Screen struct {
 	fieldErr string
 
 	width, height int
+
+	// reached counts key presses that reached a key handler (tests only).
+	reached int
 }
 
 // listMsg carries one `secret list` read plus the server cross-check data.
@@ -228,9 +233,10 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, s.verified(msg)
 	case tea.PasteMsg:
 		if s.typing {
-			s.insert(msg.Content)
+			s.rejectPaste()
 		}
 	case tea.KeyPressMsg:
+		s.reached++
 		if s.typing {
 			return s, s.typingKey(msg)
 		}
@@ -277,6 +283,7 @@ func (s *Screen) key(k string) tea.Cmd {
 		s.note = ""
 		return s.Refresh()
 	case "n":
+		s.invalidate() // a pending verification must not open a modal mid-typing
 		s.typing, s.input, s.locked, s.fieldErr = true, "", false, ""
 	case "u":
 		return s.emit(actions.SecretSet(s.selected()))

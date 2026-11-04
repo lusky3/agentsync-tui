@@ -361,44 +361,60 @@ func TestRemoveIsDestructiveWithWarning(t *testing.T) {
 }
 
 func TestNoRevealKey(t *testing.T) {
-	var keys []string
+	var keys []tea.KeyPressMsg
 	for r := rune(0x20); r < 0x7f; r++ {
-		keys = append(keys, string(r))
+		keys = append(keys, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	check := func(typing bool) {
-		s, fr := loadedWith(t, fixture(t, "secret-list.txt"), nil)
-		if typing {
-			press(s, "n")
-		}
-		all := func(msg tea.KeyPressMsg) {
-			_, cmd := s.Update(msg)
+	for r := 'a'; r <= 'z'; r++ {
+		keys = append(keys,
+			tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl},
+			tea.KeyPressMsg{Code: r, Mod: tea.ModAlt}, // String() is "alt+g", as a terminal sends it
+			tea.KeyPressMsg{Code: r, Mod: tea.ModAlt, Text: string(r)},
+			tea.KeyPressMsg{Code: r, Mod: tea.ModAlt | tea.ModShift},
+			tea.KeyPressMsg{Code: r, Mod: tea.ModAlt | tea.ModShift, Text: strings.ToUpper(string(r))},
+			tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl | tea.ModAlt})
+	}
+	named := []rune{tea.KeyEnter, tea.KeyEscape, tea.KeyTab, tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight,
+		tea.KeyBackspace, tea.KeyDelete, tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown, tea.KeySpace, tea.KeyInsert}
+	for f := tea.KeyF1; f <= tea.KeyF12; f++ {
+		named = append(named, f)
+	}
+	for _, c := range named {
+		keys = append(keys, tea.KeyPressMsg{Code: c}, tea.KeyPressMsg{Code: c, Mod: tea.ModShift},
+			tea.KeyPressMsg{Code: c, Mod: tea.ModCtrl}, tea.KeyPressMsg{Code: c, Mod: tea.ModAlt})
+	}
+	for _, typing := range []bool{false, true} {
+		reached := 0
+		for _, k := range keys {
+			// a fresh screen per key, so every key meets the handler for
+			// its mode instead of whatever an earlier key left open
+			s, fr := loadedWith(t, fixture(t, "secret-list.txt"), nil)
+			if typing {
+				press(s, "n")
+			}
+			if s.CapturesKeys() != typing {
+				t.Fatalf("typing=%v: wrong mode before %q", typing, k.String())
+			}
+			s.reached = 0
+			_, cmd := s.Update(k)
+			if s.reached != 1 {
+				t.Fatalf("typing=%v: key %q never reached the key handler", typing, k.String())
+			}
+			reached++
 			for _, m := range drive(s, cmd) {
 				a := m.(ui.DoMsg).Action
 				if len(a.Argv) > 1 && a.Argv[0] == "secret" && a.Argv[1] == "get" {
-					t.Fatalf("key %q emitted secret get", msg.String())
+					t.Fatalf("typing=%v: key %q emitted secret get", typing, k.String())
 				}
 			}
-			if typing && !s.CapturesKeys() { // esc/enter closed it: reopen
-				press(s, "n")
+			if fr.sawGet() {
+				t.Fatalf("typing=%v: key %q made the runner run secret get", typing, k.String())
 			}
 		}
-		for _, k := range keys {
-			all(tea.KeyPressMsg{Code: rune(k[0]), Text: k})
-		}
-		for r := 'a'; r <= 'z'; r++ {
-			all(tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl})
-			all(tea.KeyPressMsg{Code: r, Mod: tea.ModAlt, Text: string(r)})
-		}
-		for _, c := range []rune{tea.KeyEnter, tea.KeyEscape, tea.KeyTab, tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight,
-			tea.KeyBackspace, tea.KeyDelete, tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown, tea.KeySpace, tea.KeyF1} {
-			all(tea.KeyPressMsg{Code: c})
-		}
-		if fr.sawGet() {
-			t.Fatal("runner saw secret get")
+		if reached != len(keys) {
+			t.Fatalf("typing=%v: reached %d of %d keys", typing, reached, len(keys))
 		}
 	}
-	check(false)
-	check(true)
 }
 
 func TestNoValueInputField(t *testing.T) {
@@ -592,7 +608,7 @@ func TestOutputStoredMasked(t *testing.T) {
 	if strings.Contains(s.loadNote, "CANARYx1") || s.loadNote == "" {
 		t.Fatalf("stored note = %q", s.loadNote)
 	}
-	fr.set("", "\x1b[31m"+fixture(t, "secret-list-notconfigured.txt")+" token=CANARYx2", 1, nil)
+	fr.set("", "\x1b[31m"+strings.TrimSpace(fixture(t, "secret-list-notconfigured.txt"))+" token=CANARYx2", 1, nil)
 	drive(s, s.Refresh())
 	if strings.Contains(s.vaultMsg, "CANARYx2") || strings.Contains(s.vaultMsg, "\x1b") || s.vaultMsg == "" {
 		t.Fatalf("stored message = %q", s.vaultMsg)
@@ -654,5 +670,102 @@ func TestStaleListMessageDropped(t *testing.T) {
 	s.Update(listMsg{gen: old, keys: []string{"STALE"}, vault: vaultOK})
 	if reflect.DeepEqual(s.keys, []string{"STALE"}) {
 		t.Fatal("old generation applied")
+	}
+}
+
+const tokenCanary = "ghp_CANARYCANARYCANARYCANARY0123456789"
+
+func TestPasteRejectedInKeyField(t *testing.T) {
+	s, _ := loaded(t)
+	press(s, "n")
+	_, cmd := s.Update(tea.PasteMsg{Content: tokenCanary})
+	if msgs := drive(s, cmd); len(msgs) != 0 {
+		t.Fatalf("emitted %v", msgs)
+	}
+	v := view(s)
+	if s.input != "" || strings.Contains(v, "CANARY") || !strings.Contains(v, "paste is disabled here") {
+		t.Fatalf("input %q view:\n%s", s.input, v)
+	}
+	if msgs := press(s, "enter"); len(msgs) != 0 {
+		t.Fatalf("emitted %v", msgs)
+	}
+	// a multi-character key event is a paste in disguise
+	s.Update(tea.KeyPressMsg{Code: 'g', Text: tokenCanary})
+	if s.input != "" || strings.Contains(view(s), "CANARY") {
+		t.Fatalf("multi-char key stored %q", s.input)
+	}
+}
+
+func TestTokenShapedNameRefusedWhileTyping(t *testing.T) {
+	s, _ := loaded(t)
+	press(s, "n")
+	rejected := false
+	for _, r := range tokenCanary {
+		press(s, string(r))
+		if strings.Contains(view(s), "CANARYCANARY") {
+			t.Fatalf("token rendered raw after %d chars:\n%s", len(s.input), view(s))
+		}
+		if s.locked {
+			rejected = true
+			break
+		}
+	}
+	if !rejected || s.input != "" || !strings.Contains(view(s), "looks like a secret value") {
+		t.Fatalf("not rejected: locked %v input %q", s.locked, s.input)
+	}
+	if msgs := press(s, "enter"); len(msgs) != 0 {
+		t.Fatalf("emitted %v", msgs)
+	}
+}
+
+func TestOverlongNameRefused(t *testing.T) {
+	s, _ := loaded(t)
+	press(s, "n")
+	typeStr(s, strings.Repeat("a", maxNameLen))
+	if s.locked {
+		t.Fatal("name at the cap refused")
+	}
+	press(s, "a")
+	if !s.locked || s.input != "" || !strings.Contains(view(s), "looks like a secret value") {
+		t.Fatalf("over the cap kept: locked %v len %d", s.locked, len(s.input))
+	}
+}
+
+func TestSubmitRechecksName(t *testing.T) {
+	s, _ := loaded(t)
+	press(s, "n")
+	s.input = tokenCanary // bypass typing: the pre-build check must still refuse
+	if msgs := press(s, "enter"); len(msgs) != 0 {
+		t.Fatalf("emitted %v", msgs)
+	}
+	if strings.Contains(view(s), "CANARYCANARY") || s.input != "" {
+		t.Fatalf("token kept/rendered: %q", s.input)
+	}
+}
+
+func TestTokenShapedVaultKeyRenderedMasked(t *testing.T) {
+	s, _ := loadedWith(t, "API_KEY\n"+tokenCanary+"\n", nil)
+	if v := view(s); strings.Contains(v, "CANARYCANARY") || !strings.Contains(v, "API_KEY") {
+		t.Fatalf("view:\n%s", v)
+	}
+	moveTo(t, s, tokenCanary)
+	act := onlyAction(t, press(s, "x"))
+	if !reflect.DeepEqual(act.Argv, []string{"secret", "remove", tokenCanary}) {
+		t.Fatalf("argv = %q", act.Argv)
+	}
+	if strings.Contains(act.Display(), "CANARYCANARY") || strings.Contains(act.Warning, "CANARYCANARY") {
+		t.Fatalf("display %q warning %q", act.Display(), act.Warning)
+	}
+}
+
+func TestKeyFieldOpeningCancelsVerify(t *testing.T) {
+	s, _ := loaded(t)
+	_, cmd := s.Update(keyMsg("x"))
+	press(s, "n")
+	if s.verifying {
+		t.Fatal("verification survived opening the field")
+	}
+	if msgs := drive(s, cmd); len(msgs) != 0 {
+		t.Fatalf("late verify emitted %v while typing", msgs)
 	}
 }

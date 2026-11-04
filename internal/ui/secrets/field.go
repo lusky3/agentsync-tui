@@ -1,9 +1,12 @@
 package secrets
 
 import (
+	"unicode/utf8"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
+	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
@@ -20,6 +23,10 @@ func (s *Screen) typingKey(k tea.KeyPressMsg) tea.Cmd {
 			s.fieldErr = "enter a key name"
 			return nil
 		}
+		if !plausibleName(s.input) {
+			s.input, s.locked, s.fieldErr = "", true, valueNote
+			return nil
+		}
 		act, err := actions.SecretSet(s.input)
 		if err != nil {
 			s.fieldErr = "invalid key name"
@@ -32,7 +39,11 @@ func (s *Screen) typingKey(k tea.KeyPressMsg) tea.Cmd {
 			s.input = s.input[:len(s.input)-1]
 		}
 	default:
-		if k.Mod&(tea.ModCtrl|tea.ModAlt) == 0 {
+		switch {
+		case k.Mod&(tea.ModCtrl|tea.ModAlt) != 0:
+		case utf8.RuneCountInString(k.Text) > 1:
+			s.rejectPaste() // a multi-character "key" is a paste in disguise
+		default:
 			s.insert(k.Text)
 		}
 	}
@@ -51,11 +62,29 @@ func (s *Screen) insert(text string) {
 			s.input, s.locked, s.fieldErr = "", true, rejectNote
 			return
 		}
-		if len(s.input) < 128 {
-			s.input += string(r)
-			s.fieldErr = ""
+		s.input += string(r)
+		s.fieldErr = ""
+		if !plausibleName(s.input) {
+			s.input, s.locked, s.fieldErr = "", true, valueNote
+			return
 		}
 	}
+}
+
+// rejectPaste refuses pasted text: key names are short and typed, and a
+// paste is how a secret value ends up in a name field.
+func (s *Screen) rejectPaste() { s.fieldErr = pasteNote }
+
+// maxNameLen is the longest key name the field accepts. Real key names are
+// short identifiers; anything longer is far more likely a pasted token, and
+// the cap is well under the 128 the CLI would take.
+const maxNameLen = 64
+
+// plausibleName reports whether s can be a key name rather than a secret
+// value: within the length cap and unchanged by mask.Text (token shapes such
+// as ghp_…, sk-…, AKIA… are rewritten by it).
+func plausibleName(s string) bool {
+	return len(s) <= maxNameLen && mask.Text(s) == s
 }
 
 func keyRune(r rune) bool {

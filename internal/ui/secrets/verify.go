@@ -74,5 +74,5 @@ func (s *Screen) removeWarning(key string) string {
 	if s.srvNote != "" {
 		users += " (server files partly unreadable)"
 	}
-	return "Removes this secret from the vault. Servers that reference ${secret:" + key + "} will fail to resolve: " + users + "."
+	return "Removes this secret from the vault. Servers that reference ${secret:" + display(key) + "} will fail to resolve: " + users + "."
 }

@@ -48,7 +48,7 @@ func TestFreshHomeFailureRecognised(t *testing.T) {
 }
 
 func TestParseSecretKeysTolerantOfJunk(t *testing.T) {
-	in := "\n  Secrets:\nKEYS\n\nA_ONE   (updated 2026-01-01)\n\tB.two\t extra\t cols\n(1 more)\n"
+	in := "\n  Secrets:\n\nA_ONE   (updated 2026-01-01)\n\tB.two\t extra\t cols\n(1 more)\n"
 	got, err := ParseSecretKeys(in)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +58,21 @@ func TestParseSecretKeysTolerantOfJunk(t *testing.T) {
 	}
 	if _, err := ParseSecretKeys("!!! ??? ###\n"); err == nil {
 		t.Fatal("unrecognisable input must be an error")
+	}
+}
+
+func TestParseSecretKeysKeepsHeaderLikeNames(t *testing.T) {
+	in := "KEY\nNAME\nSECRET\nERROR\nINFO\nWARN\nKEYS\nSECRETS\nname\n"
+	got, err := ParseSecretKeys(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Fields(in); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	got, err = ParseSecretKeys("SECRET\n")
+	if err != nil || !reflect.DeepEqual(got, []string{"SECRET"}) {
+		t.Fatalf("lone SECRET: %q, %v", got, err)
 	}
 }
 
