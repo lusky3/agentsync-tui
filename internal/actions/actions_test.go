@@ -421,3 +421,27 @@ func TestMarketplaceAddHidesCredentials(t *testing.T) {
 		t.Errorf("Display leaks: %q", a.Display())
 	}
 }
+
+func TestAgentDisablePurgeBuilder(t *testing.T) {
+	a, err := AgentDisablePurge("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(a.Argv, []string{"agent", "disable", "claude", "--purge"}) {
+		t.Fatalf("argv = %q", a.Argv)
+	}
+	if !a.Destructive || a.Network || a.Interactive || a.ReadOnly {
+		t.Fatalf("flags = %+v", a)
+	}
+	if !strings.Contains(a.Title, "delete") || !strings.Contains(a.Title, "agentsync owns") {
+		t.Fatalf("title must say it deletes owned destination files: %q", a.Title)
+	}
+	for _, bad := range []string{"", "../x", "a b", "x\n", "-rf", "--purge", "a\x1b[31m"} {
+		if _, err := AgentDisablePurge(bad); err == nil {
+			t.Errorf("AgentDisablePurge(%q) should error", bad)
+		}
+	}
+	if !strings.Contains(a.Display(), "agent disable claude --purge") {
+		t.Fatalf("display = %q", a.Display())
+	}
+}

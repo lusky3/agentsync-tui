@@ -261,6 +261,8 @@ func TestVerb(t *testing.T) {
 		{[]string{"marketplace", "remove", "m"}, "remove"},
 		{[]string{"secret", "remove", "K"}, "remove"},
 		{[]string{"revert", "--all"}, "revert"},
+		{[]string{"agent", "disable", "claude", "--purge"}, "purge"},
+		{[]string{"agent", "disable", "claude"}, "disable"},
 		{[]string{"apply"}, "apply"},
 		{[]string{"mcp"}, "mcp"},
 		{nil, ""},
@@ -269,6 +271,16 @@ func TestVerb(t *testing.T) {
 		if got := Verb(actions.Action{Argv: c.argv}); got != c.want {
 			t.Errorf("Verb(%q) = %q, want %q", c.argv, got, c.want)
 		}
+	}
+}
+
+func TestPurgeActionIsDestructiveWithPurgeVerb(t *testing.T) {
+	a, err := actions.AgentDisablePurge("claude")
+	if err != nil || !a.Destructive {
+		t.Fatalf("purge must be destructive: %+v %v", a, err)
+	}
+	if got := newModal(a).verb; got != "purge" {
+		t.Fatalf("confirm verb = %q, want purge", got)
 	}
 }
 

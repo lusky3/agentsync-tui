@@ -21,6 +21,11 @@ func Verb(act actions.Action) string {
 	if len(act.Argv) == 0 {
 		return ""
 	}
+	for _, a := range act.Argv {
+		if a == "--purge" {
+			return "purge" // a purge must not share the word of a plain disable
+		}
+	}
 	switch act.Argv[0] {
 	case "mcp", "agent", "plugin", "marketplace", "secret":
 		if len(act.Argv) > 1 {

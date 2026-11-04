@@ -81,6 +81,17 @@ func AgentDisable(name string) (Action, error) {
 	return sub("Disable agent", "agent name", name, false, "agent", "disable")
 }
 
+// AgentDisablePurge disables an agent and deletes the destination files
+// agentsync owns for it (`agent disable <name> --purge`).
+func AgentDisablePurge(name string) (Action, error) {
+	a, err := sub("Disable agent and delete destination files agentsync owns for", "agent name", name, true, "agent", "disable")
+	if err != nil {
+		return Action{}, err
+	}
+	a.Argv = append(a.Argv, "--purge")
+	return a, nil
+}
+
 // AgentRemove: `agentsync agent remove` has no --purge flag, so none is exposed.
 func AgentRemove(name string) (Action, error) {
 	return sub("Remove agent", "agent name", name, true, "agent", "remove")
