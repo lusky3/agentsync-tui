@@ -30,6 +30,7 @@ func (a *App) handleKey(k tea.KeyPressMsg) tea.Cmd {
 			a.cancelRunning()
 			return nil
 		}
+		a.shutdown()
 		return tea.Quit
 	}
 	if a.modal != nil {
@@ -45,6 +46,7 @@ func (a *App) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		if a.running != nil && a.running.cancel != nil {
 			return a.quitWhenCancelled()
 		}
+		a.shutdown()
 		return tea.Quit
 	case "tab":
 		a.selectScreen(a.active + 1)

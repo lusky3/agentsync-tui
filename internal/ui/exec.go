@@ -203,6 +203,7 @@ func (a *App) recordDisplay(display, outcome string, dur time.Duration) {
 // finish), or after quitGrace, logging it as cancelled, if it never reports.
 func (a *App) quitWhenCancelled() tea.Cmd {
 	a.quitting = true
+	a.shutdown()
 	a.cancelRunning()
 	a.setStatus(statusWarn, "cancelling before quit…")
 	return tea.Tick(quitGrace, func(time.Time) tea.Msg { return quitDeadlineMsg{} })

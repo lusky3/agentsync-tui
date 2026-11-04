@@ -151,7 +151,14 @@ func TestStartupChecksDoNotBlockFirstRender(t *testing.T) {
 	fr := newChipFake()
 	fr.block = true
 	a := chipApp(fr)
-	cmd := a.Init()
+	initDone := make(chan tea.Cmd, 1)
+	go func() { initDone <- a.Init() }() // an inline run would hang here
+	var cmd tea.Cmd
+	select {
+	case cmd = <-initDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Init blocked on the chip checks")
+	}
 	done := make(chan struct{})
 	go func() { defer close(done); settle(a, cmd) }()
 	select {

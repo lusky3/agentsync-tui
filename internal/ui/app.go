@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -31,6 +32,21 @@ type KeyCapturer interface{ CapturesKeys() bool }
 // Refresh.
 type ScopeAware interface {
 	SetScope(r runner.Runner, s runner.Scope)
+}
+
+// Shutdowner is implemented by screens that run background reads: the shell
+// calls Shutdown once when the program is quitting, so in-flight children are
+// cancelled rather than orphaned.
+type Shutdowner interface{ Shutdown() }
+
+// shutdown cancels every background read the shell and its screens own.
+func (a *App) shutdown() {
+	a.rootCancel()
+	for _, s := range a.screens {
+		if sd, ok := s.(Shutdowner); ok {
+			sd.Shutdown()
+		}
+	}
 }
 
 // Deps is everything the shell needs from the outside world.
@@ -88,6 +104,12 @@ type App struct {
 
 	chip    chipState // header health chip
 	chipGen int       // chip generation; older results are dropped
+
+	// root is cancelled on quit; every background read (the chip's checks)
+	// derives from it so quitting never orphans a child process.
+	root       context.Context
+	rootCancel context.CancelFunc
+	chipCancel context.CancelFunc // the current chip round; superseded rounds are cancelled
 }
 
 // NewApp builds the shell around screens.
@@ -95,7 +117,10 @@ func NewApp(d Deps, screens ...Screen) *App {
 	if d.Scope == "" {
 		d.Scope = runner.ScopeUser
 	}
+	root, rootCancel := context.WithCancel(context.Background())
 	return &App{
+		root:        root,
+		rootCancel:  rootCancel,
 		d:           d,
 		run:         d.Runner,
 		interactive: d.Interactive,
@@ -147,7 +172,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case chipMsg:
-		if msg.gen == a.chipGen {
+		if msg.gen == a.chipGen && msg.state != chipSuperseded {
 			a.chip = msg.state
 		}
 		return a, nil
@@ -244,16 +269,11 @@ func (a *App) View() tea.View {
 }
 
 func (a *App) header() string {
-	var tabs []string
+	labels := make([]string, len(a.screens))
 	for i, s := range a.screens {
-		t := strconv.Itoa(i+1) + " " + mask.Sanitize(s.Title())
-		if i == a.active {
-			tabs = append(tabs, styleTabActive.Render(" "+t+" "))
-		} else {
-			tabs = append(tabs, styleTab.Render(" "+t+" "))
-		}
+		labels[i] = " " + strconv.Itoa(i+1) + " " + mask.Sanitize(s.Title()) + " "
 	}
-	return a.headerLine(strings.Join(tabs, ""))
+	return a.headerLine(labels, a.active)
 }
 
 func sanitizeScope(s runner.Scope) string { return mask.Sanitize(string(s)) }

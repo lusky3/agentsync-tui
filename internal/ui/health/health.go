@@ -8,6 +8,7 @@ package health
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ type Screen struct {
 	gen   int // refresh generation; older results are dropped
 
 	doctor, check section
+	cancel        context.CancelFunc // the current round; superseded rounds are cancelled
 	scroll        int
 
 	width, height int
@@ -51,13 +53,14 @@ type Screen struct {
 
 // resultMsg carries one finished command. text is masked already.
 type resultMsg struct {
-	gen   int
-	kind  string // "doctor" | "check"
-	ok    bool
-	text  string
-	trunc bool
-	exit  int
-	note  string
+	gen        int
+	kind       string // "doctor" | "check"
+	ok         bool
+	text       string
+	trunc      bool
+	exit       int
+	note       string
+	superseded bool
 }
 
 // New returns the health screen.
@@ -75,6 +78,7 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
 	s.run, s.scope = r, sc
 	s.gen++
+	s.Shutdown()
 	s.doctor, s.check, s.scroll = section{}, section{}, 0
 }
 
@@ -84,22 +88,29 @@ func (s *Screen) CapturesKeys() bool { return false }
 // Refresh re-runs doctor and check concurrently through the Runner.
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
+	s.Shutdown() // the superseded round's children die now, not after readTimeout
 	gen, r := s.gen, s.run
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
 	return tea.Batch(
-		func() tea.Msg { return readOne(gen, r, "doctor", actions.Doctor().Argv) },
-		func() tea.Msg { return readOne(gen, r, "check", actions.Check().Argv) },
+		func() tea.Msg { return readOne(ctx, gen, r, "doctor", actions.Doctor().Argv) },
+		func() tea.Msg { return readOne(ctx, gen, r, "check", actions.Check().Argv) },
 	)
 }
 
-func readOne(gen int, r runner.Runner, kind string, argv []string) resultMsg {
+func readOne(parent context.Context, gen int, r runner.Runner, kind string, argv []string) resultMsg {
 	m := resultMsg{gen: gen, kind: kind}
 	if r == nil {
 		m.note = kind + " unavailable: no runner"
 		return m
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	ctx, cancel := context.WithTimeout(parent, readTimeout)
 	defer cancel()
 	res, err := r.Run(ctx, argv...)
+	if errors.Is(err, context.Canceled) {
+		m.superseded = true // cancelled by a newer round, a scope switch or quit: not a failure
+		return m
+	}
 	if err != nil {
 		m.note = kind + " unavailable: " + firstLine(clean(err.Error()))
 		return m
@@ -126,7 +137,7 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.width, s.height = msg.Width, msg.Height
 		s.scroll = min(s.scroll, s.maxScroll())
 	case resultMsg:
-		if msg.gen != s.gen {
+		if msg.gen != s.gen || msg.superseded {
 			return s, nil
 		}
 		sec := &s.doctor
@@ -193,4 +204,13 @@ func (sec section) summary(name, bad string) string {
 		return name + ": OK"
 	}
 	return name + ": " + bad + " (exit " + strconv.Itoa(sec.exit) + ")"
+}
+
+// Shutdown implements ui.Shutdowner: it cancels the in-flight round (also
+// used by Refresh and SetScope to supersede it).
+func (s *Screen) Shutdown() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 }
