@@ -445,3 +445,19 @@ func TestAgentDisablePurgeBuilder(t *testing.T) {
 		t.Fatalf("display = %q", a.Display())
 	}
 }
+
+func TestPluginUpgradeAll(t *testing.T) {
+	a, err := PluginUpgradeAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(a.Argv, []string{"plugin", "upgrade", "--all"}) {
+		t.Errorf("argv = %q", a.Argv)
+	}
+	if !a.Network || a.Destructive || a.Interactive || a.ReadOnly {
+		t.Errorf("flags = %+v", a)
+	}
+	if !strings.Contains(a.Title, "every plugin") || !strings.Contains(a.Title, "re-apply") {
+		t.Errorf("title = %q", a.Title)
+	}
+}

@@ -43,6 +43,8 @@ type fakeRunner struct {
 	mu      sync.Mutex
 	calls   [][]string
 	ctxErrs []error
+	// deadlines records, per non-version call, whether its context had one.
+	deadlines []bool
 
 	started chan []string
 	respond chan fakeResp
@@ -62,6 +64,8 @@ func (f *fakeRunner) Run(ctx context.Context, args ...string) (runner.Result, er
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, args)
+	_, hasDL := ctx.Deadline()
+	f.deadlines = append(f.deadlines, hasDL)
 	f.mu.Unlock()
 	f.started <- args
 	select {

@@ -1,0 +1,6 @@
+✅ fetched marketplace localmkt (sha=)
+
+pending bumps (1):
+  hello                1.0.0 → 1.1.0  [track]
+
+Run `agentsync plugin upgrade --all` to upgrade and apply.

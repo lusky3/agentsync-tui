@@ -133,6 +133,16 @@ func PluginUpgrade(name string) (Action, error) {
 	return a, nil
 }
 
+// PluginUpgradeAll upgrades every plugin with a pending version bump and
+// re-applies once (`plugin upgrade --all`).
+func PluginUpgradeAll() (Action, error) {
+	return Action{
+		Title:   "Upgrade every plugin with a pending bump, then re-apply",
+		Argv:    []string{"plugin", "upgrade", "--all"},
+		Network: true,
+	}, nil
+}
+
 // MarketplaceAdd takes a URL or local path.
 func MarketplaceAdd(src string) (Action, error) {
 	if err := checkText("marketplace source", src, 2048); err != nil {

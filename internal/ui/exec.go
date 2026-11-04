@@ -27,6 +27,26 @@ type RunMsg struct {
 // ReadOnly). Screens that do not hold the *App can return it from a Cmd.
 type DoMsg struct{ Action actions.Action }
 
+// NetworkTimeout bounds every Action with Network set: past it the runner's
+// process is killed and the run is reported (and logged) as a timeout.
+const NetworkTimeout = 120 * time.Second
+
+// networkTimeout is the live value; tests shorten it.
+var networkTimeout = NetworkTimeout
+
+// timeoutError is the RunMsg.Err of a network action that hit its bound.
+type timeoutError struct{ d time.Duration }
+
+func (e timeoutError) Error() string {
+	if e.d < time.Second {
+		return "timed out after " + e.d.String()
+	}
+	return "timed out after " + strconv.Itoa(int(e.d/time.Second)) + "s"
+}
+
+// Unwrap lets outcome() log it as "timeout".
+func (timeoutError) Unwrap() error { return context.DeadlineExceeded }
+
 var errNoInteractive = errors.New("interactive handover unavailable")
 
 // running is the action currently in flight.
@@ -77,10 +97,18 @@ func (a *App) start(act actions.Action) tea.Cmd {
 		})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	limit := time.Duration(0)
+	if act.Network {
+		limit = networkTimeout
+		ctx, cancel = context.WithTimeout(context.Background(), limit)
+	}
 	a.running.cancel = cancel
 	r := a.run
 	return func() tea.Msg {
 		res, err := r.Run(ctx, act.Argv...)
+		if err != nil && limit > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			err = timeoutError{limit}
+		}
 		return RunMsg{Action: act, Result: res, Err: err}
 	}
 }
@@ -113,6 +141,8 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 	switch {
 	case errors.Is(m.Err, context.Canceled):
 		a.setStatus(statusWarn, "cancelled: "+title)
+	case errors.As(m.Err, new(timeoutError)):
+		a.setStatus(statusFail, "failed: "+title+": "+m.Err.Error())
 	case m.Err != nil:
 		a.setStatus(statusFail, "error: "+title+": "+firstLine(mask.Text(m.Err.Error())))
 	case m.Result.ExitCode != 0:
