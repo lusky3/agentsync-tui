@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -297,5 +298,25 @@ func TestEditOutcomeBroadcastStartedFinishedFailed(t *testing.T) {
 				t.Errorf("calls %d want %d", fr.nCalls(), tc.wantCalls)
 			}
 		})
+	}
+}
+
+// A finished edit may have changed what every other screen shows: they are
+// marked stale (and refresh when next shown) while the active one refreshes
+// now.
+func TestEditDoneMarksOtherScreensStale(t *testing.T) {
+	a, b := newScreen("A", "a"), newScreen("B", "b")
+	app := NewApp(baseDeps(newFakeRunner()), a, b)
+	app.stale[0], app.stale[1] = false, false
+	app.running = &running{act: actions.Action{Title: "Edit x"}, start: time.Now()}
+	app.Update(editDoneMsg{base: "x", path: "/p/x", start: time.Now()})
+	if app.stale[0] || !app.stale[1] {
+		t.Fatalf("stale after an edit = %v, want [false true]", app.stale)
+	}
+	waitRefresh(t, a) // the active screen refreshed at once
+	app.Update(key("tab"))
+	waitRefresh(t, b) // the stale one when shown
+	if app.stale[1] {
+		t.Error("B still stale after being shown")
 	}
 }
