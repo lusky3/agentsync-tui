@@ -62,6 +62,9 @@ func (f *fakeRunner) Run(ctx context.Context, args ...string) (runner.Result, er
 	if len(args) == 1 && args[0] == "version" {
 		return runner.Result{Stdout: f.version}, f.versionErr
 	}
+	if ctx.Value(chipCtxKey{}) != nil { // the header chip's background checks
+		return runner.Result{}, nil
+	}
 	f.mu.Lock()
 	f.calls = append(f.calls, args)
 	_, hasDL := ctx.Deadline()

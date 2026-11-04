@@ -85,6 +85,9 @@ type App struct {
 	running    *running
 	queue      []actions.Action // follow-ups (EditFileMsg.After) run in order
 	quitting   bool             // q pressed while running: exit once the run is logged
+
+	chip    chipState // header health chip
+	chipGen int       // chip generation; older results are dropped
 }
 
 // NewApp builds the shell around screens.
@@ -111,6 +114,7 @@ func (a *App) Init() tea.Cmd {
 	if a.run != nil {
 		cmds = append(cmds, checkVersionCmd(a.run))
 	}
+	cmds = append(cmds, a.chipCmd()) // unavailable, not pending, without a runner or project
 	// Nothing screen-side runs in project scope without a directory; leaving
 	// that state refreshes every screen (toggleScope).
 	if !a.noProject {
@@ -140,6 +144,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case quitDeadlineMsg:
 		if a.quitting {
 			return a, a.quitDeadline()
+		}
+		return a, nil
+	case chipMsg:
+		if msg.gen == a.chipGen {
+			a.chip = msg.state
 		}
 		return a, nil
 	case versionMsg:
@@ -177,9 +186,12 @@ func (a *App) updateActive(msg tea.Msg) tea.Cmd {
 
 // broadcast forwards msg to every screen (screens ignore what is not theirs).
 func (a *App) broadcast(msg tea.Msg) []tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(a.screens))
+	cmds := make([]tea.Cmd, 0, len(a.screens)+1)
 	for i := range a.screens {
 		cmds = append(cmds, a.updateScreen(i, msg))
+	}
+	if m, ok := msg.(EditOutcomeMsg); ok && m.Finished {
+		cmds = append(cmds, a.chipCmd()) // the edit may have changed config
 	}
 	return cmds
 }
@@ -241,9 +253,10 @@ func (a *App) header() string {
 			tabs = append(tabs, styleTab.Render(" "+t+" "))
 		}
 	}
-	scope := styleDim.Render("scope: " + mask.Sanitize(string(a.scope)))
-	return strings.Join(tabs, "") + "  " + scope
+	return a.headerLine(strings.Join(tabs, ""))
 }
+
+func sanitizeScope(s runner.Scope) string { return mask.Sanitize(string(s)) }
 
 func (a *App) body() string {
 	switch {

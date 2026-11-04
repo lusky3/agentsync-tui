@@ -157,6 +157,9 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 		a.setStatus(statusOK, "done: "+title)
 	}
 	cmds := a.broadcast(m)
+	if !m.Action.ReadOnly {
+		cmds = append(cmds, a.chipCmd()) // apply/revert/import may change health
+	}
 	cmds = append(cmds, a.next())
 	if s := a.current(); s != nil && !a.noProject {
 		cmds = append(cmds, s.Refresh())

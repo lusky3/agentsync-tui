@@ -102,12 +102,14 @@ func (a *App) toggleScope() tea.Cmd {
 	a.scope = next
 	if next == runner.ScopeProject && a.d.ProjectDir == "" {
 		a.noProject = true
-		return nil
+		return a.chipCmd() // drops in-flight results; the chip shows unavailable
 	}
 	a.noProject = false
 	a.run, a.interactive = a.d.WithScope(next)
+	chip := a.chipCmd()
 	a.setStatus(statusInfo, "scope: "+string(next))
-	cmds := make([]tea.Cmd, 0, len(a.screens))
+	cmds := make([]tea.Cmd, 0, len(a.screens)+1)
+	cmds = append(cmds, chip)
 	for _, scr := range a.screens {
 		if sa, ok := scr.(ScopeAware); ok {
 			sa.SetScope(a.run, next)

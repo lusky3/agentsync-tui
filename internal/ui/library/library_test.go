@@ -30,7 +30,10 @@ type fakeRunner struct {
 	fn    func(args ...string) (runner.Result, error)
 }
 
-func (f *fakeRunner) Run(_ context.Context, args ...string) (runner.Result, error) {
+func (f *fakeRunner) Run(ctx context.Context, args ...string) (runner.Result, error) {
+	if ui.IsChipCheck(ctx) { // the shell header chip's background checks are not the screen's calls
+		return runner.Result{}, nil
+	}
 	f.mu.Lock()
 	f.calls = append(f.calls, strings.Join(args, " "))
 	fn := f.fn
