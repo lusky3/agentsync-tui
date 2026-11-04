@@ -67,30 +67,39 @@ Long views scroll with `ctrl+d`/`ctrl+u` or `pgdown`/`pgup`; the plugin detail v
 
 ## Safety model
 
-- Every change the TUI itself makes goes through an `agentsync` command that
-  is shown to you (exact argv, secrets masked) and confirmed before it runs.
-  The TUI writes no agentsync files directly.
+- Every change the TUI itself makes goes through an `agentsync` command. The
+  command line is shown (masked, best-effort) and you confirm it before it
+  runs. Read-only commands (dry-run previews, `check`) run without a prompt,
+  and screens read state directly with `list`, `status`, `diff`, `explain` and
+  `doctor`. The TUI writes no agentsync files directly.
 - The one exception is `E` (edit) on MCP servers and on Skills, Subagents,
-  Commands, Hooks, LSP and Memory: it opens the canonical file in
-  `$VISUAL` / `$EDITOR` immediately, with no confirm dialog. Your editor writes
-  the file, not the TUI, and afterwards the TUI runs `agentsync check`. The
-  path must resolve inside the agentsync home. (Secrets `E` runs
-  `agentsync secret edit`, a confirmed command.)
+  Commands, Hooks, LSP and Memory: it opens the canonical file in `$VISUAL`,
+  then `$EDITOR`, falling back to `vi`, immediately and with no confirm dialog.
+  Your editor writes the file, not the TUI. If the editor exits successfully,
+  the TUI then runs `agentsync check`. The path must resolve inside the
+  agentsync home. (Secrets `E` runs `agentsync secret edit`, a confirmed
+  command.)
 - Destructive actions (removing a server, agent, plugin, marketplace or
   secret; revert) need a typed verb (the subcommand, for example `remove`).
   `agent disable --purge` needs the word `purge`, so it cannot be confirmed as
   a plain disable.
-- Apply, revert and import require a preview of the same command first.
-- The TUI never reads secret values: the secrets screen handles key names
-  only, there is no `secret get`, and values are entered in agentsync's own
-  prompt.
-- Masking of other output (command lines, diffs, logs) is best-effort
-  heuristics. It covers known secret-looking flags, env values, headers and
-  token shapes, but a literal secret in a free-form argument or command line
-  cannot always be recognized. Prefer `${env:NAME}` or `${secret:NAME}`
-  references over literals.
-- Terminal control bytes in externally sourced text are stripped before
-  rendering.
+- Apply, revert and import require a successful dry-run preview of the same
+  command before the real run is offered.
+- The secrets screen handles key names only: it uses `secret list`, there is
+  no `secret get`, and values are entered in agentsync's own prompt or in your
+  editor via `secret edit`.
+- Other output that can carry resolved values (diffs, `explain`, command
+  output, logs) is masked on a best-effort basis. The masking is heuristic: it
+  covers known secret-looking flags, env values, headers and token shapes, but
+  a literal secret in a free-form argument or command line cannot always be
+  recognized, and a rotated secret inside a diff cannot be masked (upstream
+  #254). Prefer `${env:NAME}` or `${secret:NAME}` references over literals.
+- The activity log (in memory, and a file at
+  `$XDG_STATE_HOME/agentsync-tui/activity.log`, default `~/.local/state`)
+  records only the masked command line, outcome and duration of each action
+  the TUI runs, not command output or error text.
+- Text from outside (command output, errors, file names) has terminal control
+  bytes stripped before it is rendered.
 
 ## Known limits
 
