@@ -323,3 +323,22 @@ func TestHunkUnparseableSides(t *testing.T) {
 		t.Errorf("plain changed: %q", h.Source)
 	}
 }
+
+func TestArgsFlagValueRefDoesNotShieldLiteral(t *testing.T) {
+	// `mcp add --env` joins pairs with commas: a ref in a later pair must not
+	// keep an earlier literal visible.
+	// A plain (not token-shaped) literal, so only the ref rule is exercised.
+	const lit = "plainCANARYliteral"
+	for _, in := range [][]string{
+		{"--env", "API_KEY=" + lit + ",TOKEN=${env:TOK}"},
+		{"--token", "prefix-" + lit + "-${X}"},
+		{"--header", "X-Custom: " + lit + " ${X}"},
+	} {
+		for _, a := range Args(in) {
+			noCanary(t, "Args", a)
+		}
+	}
+	if got := Args([]string{"--header", "X-Api-Key: ${secret:K}"}); got[1] != "X-Api-Key: ${secret:K}" {
+		t.Errorf("header ref masked: %q", got)
+	}
+}

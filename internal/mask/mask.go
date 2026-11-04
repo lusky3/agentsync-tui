@@ -151,7 +151,10 @@ func flagValue(v string) string {
 	if t := Text(v); t != v {
 		return t
 	}
-	if refRe.MatchString(v) {
+	// A reference keeps the value visible only when nothing but an optional
+	// header name and auth scheme surrounds it: "K=${secret:A},L=lit" or
+	// "prefix-${X}" would otherwise leak the literal part.
+	if refRe.MatchString(v) && schemeOnlyRe.MatchString(refRe.ReplaceAllString(headerNameRe.ReplaceAllString(v, ""), "")) {
 		return v
 	}
 	if m := headerNameRe.FindString(v); m != "" {
