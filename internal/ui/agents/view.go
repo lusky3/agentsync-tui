@@ -19,19 +19,13 @@ var (
 )
 
 const (
-	listKeys    = "a add • e enable/disable • x remove • D disable+purge • j/k move • r refresh"
-	purgeWarn   = "purge deletes the destination files agentsync owns for this agent (e.g. files under its config dir); this cannot be undone"
+	listKeys    = "a add • e enable/disable • x remove • D disable+purge (deletes owned files) • j/k move • r refresh"
 	emptyNotice = "no agents registered — press a on an available agent to add it"
 )
 
 // View implements tea.Model. Every outside string is sanitised or masked.
 func (s *Screen) View() tea.View {
 	var out []string
-	if s.pending != "" {
-		out = append(out,
-			styleBad.Render("pending: "+oneLine(s.pending)),
-			styleWarn.Render(ansi.Wrap(purgeWarn, max(s.width, 20), "")), "")
-	}
 	switch {
 	case !s.loaded:
 		out = append(out, styleDim.Render("loading…"))

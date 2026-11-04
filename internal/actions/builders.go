@@ -89,6 +89,7 @@ func AgentDisablePurge(name string) (Action, error) {
 		return Action{}, err
 	}
 	a.Argv = append(a.Argv, "--purge")
+	a.Warning = "Deletes the destination files agentsync owns for this agent. This cannot be undone."
 	return a, nil
 }
 

@@ -18,8 +18,12 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
-// listTimeout bounds one `agent list --all` read.
-const listTimeout = 30 * time.Second
+// listTimeout bounds one `agent list --all` refresh; verifyTimeout bounds the
+// pre-mutation re-read, which the user is waiting on.
+const (
+	listTimeout   = 30 * time.Second
+	verifyTimeout = 5 * time.Second
+)
 
 const staleNote = "agent list changed — refreshed"
 
@@ -37,8 +41,9 @@ type Screen struct {
 	// last good list is kept.
 	loadNote string
 	note     string // last screen message, display-safe
-	// pending is the masked Display of a purge awaiting confirmation.
-	pending string
+	// verifying is set while a pre-mutation re-read is in flight; vreq
+	verifying bool
+	vreq      int
 
 	width, height int
 }
@@ -48,6 +53,14 @@ type listMsg struct {
 	gen    int
 	agents []model.Agent
 	note   string // non-empty: the read failed
+}
+
+// verifyMsg carries the fresh list read for one pending mutation.
+type verifyMsg struct {
+	req   int
+	key   string
+	sel   model.Agent
+	fresh listMsg
 }
 
 // New returns the agents screen.
@@ -62,7 +75,18 @@ func (s *Screen) Title() string { return "Agents" }
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
 // SetScope implements ui.ScopeAware.
-func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) { s.run, s.scope = r, sc }
+func (s *Screen) SetScope(r runner.Runner, sc runner.Scope) {
+	s.run, s.scope = r, sc
+	s.invalidate()
+}
+
+// invalidate drops any in-flight verification: its result will be ignored.
+func (s *Screen) invalidate() {
+	if s.verifying {
+		s.verifying, s.note = false, ""
+	}
+	s.vreq++
+}
 
 // CapturesKeys implements ui.KeyCapturer: this screen has no text input.
 func (s *Screen) CapturesKeys() bool { return false }
@@ -70,15 +94,16 @@ func (s *Screen) CapturesKeys() bool { return false }
 // Refresh re-reads the agent list through the Runner.
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
+	s.invalidate()
 	gen, r := s.gen, s.run
-	return func() tea.Msg { return readList(gen, r) }
+	return func() tea.Msg { return readList(gen, r, listTimeout) }
 }
 
-func readList(gen int, r runner.Runner) listMsg {
+func readList(gen int, r runner.Runner, timeout time.Duration) listMsg {
 	if r == nil {
 		return listMsg{gen: gen, note: "no runner"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	res, err := r.Run(ctx, "agent", "list", "--all")
 	if err != nil {
@@ -107,8 +132,8 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen == s.gen {
 			s.apply(msg)
 		}
-	case ui.RunMsg:
-		s.pending = ""
+	case verifyMsg:
+		return s, s.verified(msg)
 	case tea.KeyPressMsg:
 		return s, s.key(msg.String())
 	}
@@ -133,12 +158,13 @@ func (s *Screen) selected() (model.Agent, bool) {
 }
 
 func (s *Screen) key(k string) tea.Cmd {
-	s.pending = "" // any key means the previous modal is over
 	switch k {
 	case "up", "k":
 		s.cursor = max(s.cursor-1, 0)
+		s.invalidate()
 	case "down", "j":
 		s.cursor = max(min(s.cursor+1, len(s.agents)-1), 0)
+		s.invalidate()
 	case "r":
 		s.note = ""
 		return s.Refresh()
@@ -148,9 +174,14 @@ func (s *Screen) key(k string) tea.Cmd {
 	return nil
 }
 
-// mutate validates the selection against a fresh read of the list, then
-// hands the action to the shell. A changed or unreadable list emits nothing.
+// mutate gates a/e/x/D on the selection, then starts an asynchronous fresh
+// read of the list; the action is only built and emitted in verified, once
+// the result arrives and still applies.
 func (s *Screen) mutate(k string) tea.Cmd {
+	if s.verifying {
+		s.note = "still verifying the agent list — wait"
+		return nil
+	}
 	sel, ok := s.selected()
 	if !ok {
 		return nil
@@ -167,13 +198,29 @@ func (s *Screen) mutate(k string) tea.Cmd {
 		s.note = "not registered — press a to add it first"
 		return nil
 	}
-	fresh := readList(s.gen, s.run)
+	s.vreq++
+	s.verifying, s.note = true, "verifying…"
+	req, r := s.vreq, s.run
+	return func() tea.Msg {
+		return verifyMsg{req: req, key: k, sel: sel, fresh: readList(0, r, verifyTimeout)}
+	}
+}
+
+// verified handles a re-read result: stale requests are dropped; a failed
+// read or a changed agent emits nothing.
+func (s *Screen) verified(m verifyMsg) tea.Cmd {
+	cur, ok := s.selected()
+	if !s.verifying || m.req != s.vreq || !ok || cur.Name != m.sel.Name {
+		return nil
+	}
+	s.verifying = false
+	sel, k, fresh := m.sel, m.key, m.fresh
 	if fresh.note != "" {
 		s.note = "cannot verify the agent list: " + fresh.note
 		return nil
 	}
-	cur, found := find(fresh.agents, sel.Name)
-	if !found || cur.Registered != sel.Registered || cur.Enabled != sel.Enabled {
+	now, found := find(fresh.agents, sel.Name)
+	if !found || now.Registered != sel.Registered || now.Enabled != sel.Enabled || now.Scope != sel.Scope {
 		s.apply(fresh)
 		s.note = staleNote
 		return s.Refresh()
@@ -197,9 +244,6 @@ func (s *Screen) mutate(k string) tea.Cmd {
 		return nil
 	}
 	s.note = ""
-	if k == "D" {
-		s.pending = act.Display()
-	}
 	return func() tea.Msg { return ui.DoMsg{Action: act} }
 }
 

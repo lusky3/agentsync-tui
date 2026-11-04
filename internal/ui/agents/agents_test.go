@@ -185,30 +185,200 @@ func TestRemoveIsDestructive(t *testing.T) {
 	}
 }
 
-func TestPurgeHeaderShowsDisplayAndWarning(t *testing.T) {
+func TestPurgeActionCarriesWarningAndScreenHasNoStaleHeader(t *testing.T) {
 	s, _ := loaded(t, fixture(t, "agent-list-all.txt"))
 	moveTo(t, s, "claude")
 	act := onlyAction(t, press(s, "D"))
 	want, _ := actions.AgentDisablePurge("claude")
-	if !reflect.DeepEqual(act, want) || ui.Verb(act) != "purge" {
+	if !reflect.DeepEqual(act, want) || ui.Verb(act) != "purge" || act.Warning == "" {
 		t.Fatalf("act = %+v", act)
 	}
-	v := view(s)
-	if !strings.Contains(v, want.Display()) {
-		t.Errorf("header lacks Display %q:\n%s", want.Display(), v)
+	// The warning lives in the confirm modal; a screen-side header would be
+	// hidden while the modal is open and false after esc.
+	if v := view(s); strings.Contains(v, "pending:") || strings.Contains(v, "cannot be undone") {
+		t.Errorf("screen must not render a pending-purge header:\n%s", v)
 	}
-	flat := strings.Join(strings.Fields(v), " ") // the warning wraps
-	if !strings.Contains(flat, "purge deletes the destination files agentsync owns for this agent") ||
-		!strings.Contains(flat, "cannot be undone") {
-		t.Errorf("warning missing:\n%s", v)
+}
+
+// gateRunner blocks every Run until release is closed.
+type gateRunner struct {
+	fakeRunner
+	started chan struct{}
+	release chan struct{}
+}
+
+func newGate(stdout string) *gateRunner {
+	g := &gateRunner{started: make(chan struct{}, 8), release: make(chan struct{})}
+	g.set(stdout, 0, nil)
+	return g
+}
+
+func (g *gateRunner) Run(ctx context.Context, args ...string) (runner.Result, error) {
+	g.started <- struct{}{}
+	<-g.release
+	return g.fakeRunner.Run(ctx, args...)
+}
+
+// loadedGate loads a screen through a plain runner, then swaps in a gate.
+func loadedGate(t *testing.T, stdout string) (*Screen, *gateRunner) {
+	t.Helper()
+	s, _ := loaded(t, stdout)
+	g := newGate(stdout)
+	s.run = g
+	return s, g
+}
+
+// begin presses k and runs the returned Cmd in the background; Update itself
+// must return without waiting for the runner.
+func begin(s *Screen, k string) chan tea.Msg {
+	_, cmd := s.Update(tea.KeyPressMsg{Code: rune(k[0]), Text: k})
+	ch := make(chan tea.Msg, 1)
+	if cmd == nil {
+		close(ch)
+		return ch
 	}
-	if strings.Contains(v, "revert") {
-		t.Error("revert clause is unverified and must not be promised")
+	go func() { ch <- cmd() }()
+	return ch
+}
+
+func deliver(s *Screen, m tea.Msg) []tea.Msg {
+	_, cmd := s.Update(m)
+	return drive(s, cmd)
+}
+
+func TestVerifyDoesNotBlockUpdateAndIgnoresSecondKey(t *testing.T) {
+	for _, key := range []string{"e", "x", "D"} {
+		s, g := loadedGate(t, fixture(t, "agent-list-all.txt"))
+		moveTo(t, s, "claude")
+		ch := begin(s, key) // returns before g is released: Update never ran the runner
+		<-g.started
+		if !strings.Contains(view(s), "verifying…") {
+			t.Errorf("%s: no verifying status", key)
+		}
+		for _, k2 := range []string{"e", "x", "D", "a"} {
+			if c := begin(s, k2); len(c) != 0 {
+				t.Fatalf("second key %s started another verify", k2)
+			}
+		}
+		if got := len(g.started); got != 0 {
+			t.Fatalf("second key started a read (%d)", got)
+		}
+		close(g.release)
+		msgs := deliver(s, <-ch)
+		if len(msgs) != 1 {
+			t.Fatalf("%s: want one DoMsg, got %v", key, msgs)
+		}
 	}
-	// Any later key clears the pending notice (the modal was dismissed).
+}
+
+func TestNoActionBeforeVerifyResult(t *testing.T) {
+	s, g := loadedGate(t, fixture(t, "agent-list-all.txt"))
+	moveTo(t, s, "claude")
+	_, cmd := s.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	// Nothing but the verify Cmd exists; the action only appears after the
+	// result is delivered.
+	if cmd == nil {
+		t.Fatal("no verify cmd")
+	}
+	if len(g.started) != 0 {
+		t.Fatal("runner ran inside Update")
+	}
+	close(g.release)
+	if _, ok := cmd().(verifyMsg); !ok {
+		t.Fatal("cmd must yield a verifyMsg, not a DoMsg")
+	}
+}
+
+func TestVerifySupersededRequestDropped(t *testing.T) {
+	s, g := loadedGate(t, fixture(t, "agent-list-all.txt"))
+	moveTo(t, s, "claude")
+	ch := begin(s, "x")
+	<-g.started
+	close(g.release)
+	old := <-ch
+	s.vreq++ // a newer request superseded it
+	if msgs := deliver(s, old); len(msgs) != 0 {
+		t.Fatalf("superseded result emitted %v", msgs)
+	}
+}
+
+func TestVerifyDroppedWhenCursorMoves(t *testing.T) {
+	s, g := loadedGate(t, fixture(t, "agent-list-all.txt"))
+	moveTo(t, s, "claude")
+	ch := begin(s, "x")
+	<-g.started
 	press(s, "j")
-	if strings.Contains(view(s), "purge deletes") {
-		t.Error("stale purge warning still shown")
+	close(g.release)
+	if msgs := deliver(s, <-ch); len(msgs) != 0 {
+		t.Fatalf("emitted after cursor moved: %v", msgs)
+	}
+	if strings.Contains(view(s), "verifying…") {
+		t.Error("verifying note stuck")
+	}
+}
+
+func TestVerifyDroppedOnSetScope(t *testing.T) {
+	s, g := loadedGate(t, fixture(t, "agent-list-all.txt"))
+	moveTo(t, s, "claude")
+	ch := begin(s, "D")
+	<-g.started
+	s.SetScope(&fakeRunner{}, runner.ScopeProject)
+	close(g.release)
+	if msgs := deliver(s, <-ch); len(msgs) != 0 {
+		t.Fatalf("emitted after scope change: %v", msgs)
+	}
+}
+
+func TestVerifyDroppedOnNewerRefresh(t *testing.T) {
+	s, g := loadedGate(t, fixture(t, "agent-list-all.txt"))
+	moveTo(t, s, "claude")
+	ch := begin(s, "x")
+	<-g.started
+	s.Refresh() // cmd intentionally not run
+	close(g.release)
+	if msgs := deliver(s, <-ch); len(msgs) != 0 {
+		t.Fatalf("emitted after refresh: %v", msgs)
+	}
+}
+
+func TestVerifyFailureEmitsNothingAndShowsNote(t *testing.T) {
+	s, g := loadedGate(t, fixture(t, "agent-list-all.txt"))
+	moveTo(t, s, "claude")
+	g.set("", 0, errors.New("boom"))
+	ch := begin(s, "D")
+	<-g.started
+	close(g.release)
+	if msgs := deliver(s, <-ch); len(msgs) != 0 {
+		t.Fatalf("emitted on failed re-read: %v", msgs)
+	}
+	if !strings.Contains(view(s), "cannot verify the agent list") {
+		t.Errorf("no note:\n%s", view(s))
+	}
+}
+
+func TestStateChangesBetweenViewAndKeyEmitNothing(t *testing.T) {
+	base := fixture(t, "agent-list-all.txt")
+	// antigravity: registered+disabled -> available (registered flag flips).
+	s, fr := loaded(t, base)
+	moveTo(t, s, "antigravity")
+	fr.set(strings.Replace(base, "antigravity  registered enabled=false scope=user", "antigravity  available", 1), 0, nil)
+	if msgs := press(s, "e"); len(msgs) != 0 {
+		t.Fatalf("emitted though agent became available: %v", msgs)
+	}
+	// scope changed.
+	s, fr = loaded(t, base)
+	moveTo(t, s, "claude")
+	fr.set(strings.Replace(base, "claude       registered enabled=true scope=user", "claude       registered enabled=true scope=project", 1), 0, nil)
+	if msgs := press(s, "x"); len(msgs) != 0 {
+		t.Fatalf("emitted though scope changed: %v", msgs)
+	}
+	// D/e on an unregistered agent never emit.
+	s, _ = loaded(t, base)
+	moveTo(t, s, "amp")
+	for _, k := range []string{"D", "e"} {
+		if msgs := press(s, k); len(msgs) != 0 {
+			t.Fatalf("%s on available agent emitted %v", k, msgs)
+		}
 	}
 }
 

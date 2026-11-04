@@ -99,6 +99,9 @@ func (m *modal) view(width int) string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render(mask.Sanitize(m.act.Title)) + "\n\n")
 	b.WriteString("  $ " + mask.Sanitize(m.act.Display()) + "\n")
+	if m.act.Warning != "" {
+		b.WriteString("\n" + styleError.Render("! "+mask.Sanitize(m.act.Warning)) + "\n")
+	}
 	var badges []string
 	if m.act.Destructive {
 		badges = append(badges, styleError.Render("[destructive]"))

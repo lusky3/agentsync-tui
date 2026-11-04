@@ -28,6 +28,10 @@ type Action struct {
 	// ReadOnly actions change nothing; the UI skips the confirm modal for
 	// them but still logs them.
 	ReadOnly bool
+	// Warning is an optional consequence notice the confirm modal shows
+	// prominently under the command. It is sanitised at render time; the
+	// zero value means none.
+	Warning string
 
 	// display, when set by a builder that knows its argv's structure, is a
 	// pre-masked copy of Argv that Display renders instead of running the

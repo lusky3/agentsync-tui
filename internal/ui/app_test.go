@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -281,6 +282,40 @@ func TestPurgeActionIsDestructiveWithPurgeVerb(t *testing.T) {
 	}
 	if got := newModal(a).verb; got != "purge" {
 		t.Fatalf("confirm verb = %q, want purge", got)
+	}
+}
+
+func TestPurgeModalShowsWarningVerbAndBadge(t *testing.T) {
+	act, err := actions.AgentDisablePurge("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "body-a"))
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(DoMsg{Action: act})
+	out := ansi.Strip(content(app))
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(out, "│", " ")), " ") // the warning wraps inside the box
+	for _, want := range []string{"This cannot be undone", "Deletes the destination files agentsync owns", "[destructive]", "Type purge to confirm", "agent disable claude --purge"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("modal missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestModalWarningIsSanitised(t *testing.T) {
+	act := actions.Action{Title: "t", Argv: []string{"apply"}, Destructive: true,
+		Warning: "bad \x1b[31mred\x1b]0;pwn\x07 \u202eevil"}
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "body-a"))
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(DoMsg{Action: act})
+	out := ansi.Strip(content(app))
+	for _, bad := range []string{"\x1b", "\x07", "\u202e"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("modal leaks %q:\n%q", bad, out)
+		}
+	}
+	if !strings.Contains(out, "bad") {
+		t.Error("warning not rendered")
 	}
 }
 
