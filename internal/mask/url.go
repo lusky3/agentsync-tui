@@ -104,6 +104,8 @@ func maskPairs(q string) string {
 		pair := q[i:j]
 		if k, v, ok := strings.Cut(pair, "="); ok && v != "" && !onlyRefs(v) {
 			pair = k + "=" + Mask
+		} else if !ok && TokenShaped(pair) {
+			pair = Mask // a bare token (?<secret>), as in a bare fragment
 		}
 		out.WriteString(pair)
 		if j < len(q) {
@@ -117,19 +119,23 @@ func maskPairs(q string) string {
 // TokenShaped reports whether s reads like a secret value rather than a
 // name or an ordinary path segment. It is a documented heuristic, shared by
 // the secrets screen's key field (a value typed there would become a key
-// name) and the URL path rule, and it errs toward the value side:
+// name) and the URL path and query rules, and it errs toward the value side:
 //
-//   - a run with no separators ('_', '-', '.') of 16+ characters mixing
-//     letters and two or more digits, or of 12+ characters with four or
-//     more digits (hex keys, opaque ids, base64 tokens);
+//   - a run with no separators ('_', '-', '.') of 12+ characters, with
+//     letters and two or more digits, whose letters and digits alternate
+//     five or more times (x1f3a9c2d7e8b1, T0A1B2C3D4E5F6, base64 with
+//     digits sprinkled through) or that is a third digits or more
+//     (CANARYbare1234567890abcd); a name keeps a few digits together
+//     (MyServiceApiKey2024Prod, S3Bucket2024Backup);
 //   - 16+ hexadecimal characters once '-' is removed (UUIDs, hex keys);
-//   - a string of 20+ characters holding a digit, upper- and lower-case
-//     letters and a lower-to-upper transition inside a word (camelCase
-//     "words" of a base64-style token), which no SNAKE_CASE, kebab-case or
-//     dotted name has.
+//   - a string of 20+ characters holding a digit whose letters change from
+//     lower to upper case at least three times and at a quarter of the
+//     letters or more (the two-letter "words" of a base64 token, AbCdEf);
+//     CamelCase names have longer humps (MyServiceApiKey2024Prod).
 //
-// Names such as GITHUB_TOKEN, s3_bucket_2024, Slack-Bot-Token-2024, v0.1.0
-// or agentsync-tui_0.1.0_linux_amd64.tar.gz are not token-shaped.
+// Names such as GITHUB_TOKEN, s3_bucket_2024, Slack-Bot-Token-2024,
+// MyServiceApiKey2024Prod, v0.1.0 or agentsync-tui_0.1.0_linux_amd64.tar.gz
+// are not token-shaped.
 func TokenShaped(s string) bool {
 	if len(s) < 12 {
 		return false
@@ -137,33 +143,35 @@ func TokenShaped(s string) bool {
 	if hexRun(strings.ReplaceAll(s, "-", "")) {
 		return true
 	}
-	var digits, upper, lower int
-	camel := false
+	var digits, letters, humps int
 	for _, w := range strings.FieldsFunc(s, func(r rune) bool { return r == '_' || r == '-' || r == '.' }) {
-		var wd, wl int
-		prevLower := false
-		for _, r := range w {
+		var wd, wl, alternations int
+		prevLower, prevDigit := false, false
+		for i, r := range w {
+			isDigit := unicode.IsDigit(r)
 			switch {
-			case unicode.IsDigit(r):
+			case isDigit:
 				wd++
 			case unicode.IsUpper(r):
 				wl++
-				upper++
 				if prevLower {
-					camel = true
+					humps++
 				}
 			case unicode.IsLetter(r):
 				wl++
-				lower++
 			}
-			prevLower = unicode.IsLower(r)
+			if i > 0 && (unicode.IsLetter(r) || isDigit) && isDigit != prevDigit {
+				alternations++
+			}
+			prevLower, prevDigit = unicode.IsLower(r), isDigit
 		}
 		digits += wd
-		if wl > 0 && (len(w) >= 16 && wd >= 2 || len(w) >= 12 && wd >= 4) {
+		letters += wl
+		if len(w) >= 12 && wl > 0 && wd >= 2 && (alternations >= 5 || 3*wd >= len(w)) {
 			return true
 		}
 	}
-	return len(s) >= 20 && digits > 0 && upper > 0 && lower > 0 && camel
+	return len(s) >= 20 && digits > 0 && humps >= 3 && humps*4 >= letters
 }
 
 // hexRun reports whether s is 16+ hexadecimal characters with at least one

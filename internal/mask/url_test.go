@@ -14,7 +14,7 @@ func TestURLMasksCredentialBearingParts(t *testing.T) {
 		{"https://mcp.example.com/sse?session=CANARYq1", "https://mcp.example.com/sse?session=••••"},
 		{"https://h/x?a=1&b=two#frag=CANARYf1", "https://h/x?a=••••&b=••••#frag=••••"},
 		{"https://h/x?flag", "https://h/x?flag"},
-		{"https://mcp.zapier.com/api/mcp/s/CANARYx1abcdefCANARYx1abcdef/mcp", "https://mcp.zapier.com/api/mcp/s/••••/mcp"},
+		{"https://mcp.zapier.com/api/mcp/s/CANARYx1f3a9c2d7e8b1x1f3a9/mcp", "https://mcp.zapier.com/api/mcp/s/••••/mcp"},
 		{"https://hooks.example/services/T0A1B2C3D4E5F6/B0A1B2C3D4E5F6G7/CANARYw1abcdefghij0123456789", "https://hooks.example/services/••••/••••/••••"},
 		{"https://github.com/lusky3/agentsync-tui/releases/download/v0.1.0/agentsync-tui_0.1.0_linux_amd64.tar.gz",
 			"https://github.com/lusky3/agentsync-tui/releases/download/v0.1.0/agentsync-tui_0.1.0_linux_amd64.tar.gz"},
@@ -22,8 +22,12 @@ func TestURLMasksCredentialBearingParts(t *testing.T) {
 		{"http://localhost:8080/mcp", "http://localhost:8080/mcp"},
 		{"https://${U}:${P}@host/x?token=${secret:T}", "https://${U}:${P}@host/x?token=${secret:T}"},
 		{"https://h/x?k=${env:A}&other=lit", "https://h/x?k=${env:A}&other=••••"},
-		{"see https://h/p?s=CANARYs1, then https://h/q#CANARYg1abcdefghijklmnop0123.", "see https://h/p?s=••••, then https://h/q#••••."},
+		{"see https://h/p?s=CANARYs1, then https://h/q#CANARYg1h2i3j4k5l6m7n8o9p0.", "see https://h/p?s=••••, then https://h/q#••••."},
 		{"ssh://git@github.com/x/y.git", "ssh://••••@github.com/x/y.git"},
+		// a bare token-shaped query (no key) is masked like a bare fragment
+		{"https://h/x?CANARYbare1234567890abcd", "https://h/x?••••"},
+		{"https://h/x?CANARYbare1234567890abcd&k=v", "https://h/x?••••&k=••••"},
+		{"https://h/x?flag&other", "https://h/x?flag&other"},
 	} {
 		if got := Text(c.in); got != c.want {
 			t.Errorf("Text(%q)\n got %q\nwant %q", c.in, got, c.want)
@@ -42,6 +46,9 @@ func TestTokenShaped(t *testing.T) {
 		"ya29.a0AfH6SMBx2CANARY9q8d7ag",        // oauth-style with a dot
 		"Zm9vYmFyYmF6cXV4MTIzNA",               // base64 without digits in words? (mixed case, long)
 		"xoxb-not-a-shape-but-9Q8d7Ag6F5e4D3c2B1a0",
+		"T0A1B2C3D4E5F6", // 14 chars alternating letter/digit
+		"CANARYbare1234567890abcd",
+		"x1f3a9c2d7e8b1",
 	} {
 		if !TokenShaped(s) {
 			t.Errorf("TokenShaped(%q) = false, want true", s)
@@ -53,6 +60,8 @@ func TestTokenShaped(t *testing.T) {
 		"my.key.v2", "api", "mcp", "v1", "users", "sse", "index.html", "2024-01-01",
 		"agentsync-tui_0.1.0_linux_amd64.tar.gz", "releases", "download", "v0.1.0",
 		"Slack-Bot-Token-2024", "ANTHROPIC_API_KEY_PROD", "", "a",
+		// CamelCase names with a year or version are names, not tokens
+		"MyServiceApiKey2024Prod", "S3Bucket2024Backup", "myApiKey2024ProdBackup", "OpenAIKey2", "GitHubPat2025",
 	} {
 		if TokenShaped(s) {
 			t.Errorf("TokenShaped(%q) = true, want false", s)
