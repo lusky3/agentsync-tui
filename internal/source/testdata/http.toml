@@ -1,0 +1,6 @@
+[server]
+type = 'http'
+url = 'https://developerknowledge.googleapis.com/mcp'
+
+[server.headers]
+X-Goog-Api-Key = '${GOOGLE_DEVELOPER_KNOWLEDGE_API_KEY}'

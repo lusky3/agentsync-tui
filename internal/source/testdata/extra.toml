@@ -1,0 +1,6 @@
+[server]
+type = 'stdio'
+command = 'echo'
+agents = ['*']
+timeout = 30
+future_setting = 'x'
