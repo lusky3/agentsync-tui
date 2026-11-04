@@ -499,3 +499,20 @@ func TestHunkMultiValueSides(t *testing.T) {
 		t.Errorf("remainder not masked whole: %q", h.Source)
 	}
 }
+
+// Debug masks JSON structurally (env, headers, args forced) and a value
+// after a secret word with only whitespace between; references stay.
+func TestDebugMasksStructurallyAndAfterSecretWords(t *testing.T) {
+	got := Debug(`{"env":{"X":"CANe1"},"headers":{"H":"CANe2"},"args":["--token","CANe3"],"other":"ok"} password CANe4 rejected token ${secret:T} ok`)
+	if strings.Contains(got, "CANe") {
+		t.Fatalf("leak: %q", got)
+	}
+	for _, want := range []string{`"other": "ok"`, "password •••• rejected", "token ${secret:T} ok", `"args": [`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	if Text("token expired") != "token expired" {
+		t.Error("Text must not use the whitespace rule")
+	}
+}

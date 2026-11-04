@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -104,5 +105,17 @@ func TestAgentsyncHomeMatchesCLI(t *testing.T) {
 		if got := agentsyncHome(getenv); got != c.want {
 			t.Errorf("env %v: got %q, want %q", c.env, got, c.want)
 		}
+	}
+}
+
+// An unusable --debug-log path fails at startup with a message, never
+// silently records nothing.
+func TestRunBadDebugLogExitsTwo(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"--debug-log", filepath.Join(t.TempDir(), "missing", "x.log"), "--version"}, &out, &errb); code != 2 {
+		t.Fatalf("exit %d, want 2; stderr %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "debug-log") {
+		t.Errorf("stderr %q", errb.String())
 	}
 }

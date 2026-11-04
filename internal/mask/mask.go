@@ -410,3 +410,26 @@ func cutRune(s string) string {
 	}
 	return s[:i]
 }
+
+// wsKVRe is a secret-named word, whitespace, then a value ("password
+// hunter2", as a prompt echo or a log line prints it). It is too eager for
+// the screens ("token expired" would lose "expired"), so only Debug uses it.
+var wsKVRe = regexp.MustCompile(`(?i)\b(token|secret|password|passwd|pwd|api[-_]?key|credential|auth|pat)\b[ \t]+(\S+)`)
+
+// Debug masks text that is written to a file for later reading (the
+// --debug-log samples), more aggressively than Text: JSON documents in it
+// are walked as a hunk side is (every scalar under env, headers or a
+// secret-named key is masked whole, args arrays go through Args, other
+// strings through Text), the rest is scrubbed with Text, and then a value
+// that follows a secret-named word with only whitespace between is masked
+// too. References stay visible as everywhere.
+func Debug(s string) string {
+	s = hunkSide(s, "", false, false)
+	return wsKVRe.ReplaceAllStringFunc(s, func(m string) string {
+		sub := wsKVRe.FindStringSubmatch(m)
+		if onlyRefs(sub[2]) {
+			return m
+		}
+		return m[:len(m)-len(sub[2])] + Mask
+	})
+}

@@ -64,18 +64,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "agentsync-tui: --read-timeout and --write-timeout must not be negative")
 		return 2
 	}
+	if *debugLog != "" {
+		abs, err := filepath.Abs(*debugLog)
+		if err == nil {
+			err = ui.SetDebugLog(abs)
+		}
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "agentsync-tui: --debug-log:", err)
+			return 2
+		}
+	}
+
 	if *showVersion {
 		_, _ = fmt.Fprintln(stdout, "agentsync-tui "+resolveVersion(version, debug.ReadBuildInfo))
 		return 0
-	}
-
-	if *debugLog != "" {
-		abs, err := filepath.Abs(*debugLog)
-		if err != nil {
-			_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
-			return 2
-		}
-		ui.SetDebugLog(abs)
 	}
 
 	scope, projectDir, err := resolveScope(*scopeFlag, *project)

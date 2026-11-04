@@ -114,12 +114,10 @@ func (l *activityLog) entries() []entry {
 	return append(append([]entry(nil), l.ring[l.next:]...), l.ring[:l.next]...)
 }
 
-// appendLine appends one line to the log file at path, creating the file and
-// its directory as needed. It never follows a symlink at either (the file is
-// opened with O_NOFOLLOW where the platform has it, and both are checked
-// with Lstat first), it tightens a pre-existing directory to 0700 and file
-// to 0600 before writing, and it rotates the file once it has reached
-// logRotateBytes (path.1 … path.logKeep, newest first).
+// appendLine appends one line to the activity-log file at path, creating
+// the file and its dedicated directory as needed. The directory is the
+// TUI's own ($XDG_STATE_HOME/agentsync-tui): it is never a symlink and is
+// tightened to 0700 (ownedDir). The file handling is appendFile's.
 func appendLine(path, line string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -128,6 +126,17 @@ func appendLine(path, line string) error {
 	if err := ownedDir(dir); err != nil {
 		return err
 	}
+	return appendFile(path, line)
+}
+
+// appendFile appends one line to the log file at path, creating it 0600 if
+// needed. It never follows a symlink at the path (Lstat first, and
+// O_NOFOLLOW where the platform has it), tightens a pre-existing file to
+// 0600 before writing, and rotates the file once it has reached
+// logRotateBytes (path.1 … path.logKeep, newest first). The directory is
+// left exactly as it is: a --debug-log file may sit in the user's project
+// directory or in /tmp.
+func appendFile(path, line string) error {
 	f, err := openLog(path)
 	if err != nil {
 		return err
