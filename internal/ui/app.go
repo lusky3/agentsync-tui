@@ -82,6 +82,7 @@ type App struct {
 	status     string
 	statusKind statusKind
 	running    *running
+	quitting   bool // q pressed while running: exit once the run is logged
 }
 
 // NewApp builds the shell around screens.
@@ -108,8 +109,12 @@ func (a *App) Init() tea.Cmd {
 	if a.run != nil {
 		cmds = append(cmds, checkVersionCmd(a.run))
 	}
-	for _, s := range a.screens {
-		cmds = append(cmds, s.Init())
+	// Nothing screen-side runs in project scope without a directory; leaving
+	// that state refreshes every screen (toggleScope).
+	if !a.noProject {
+		for _, s := range a.screens {
+			cmds = append(cmds, s.Init())
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -126,6 +131,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.request(msg.Action)
 	case RunMsg:
 		return a, a.finish(msg)
+	case quitDeadlineMsg:
+		if a.quitting {
+			return a, a.quitDeadline()
+		}
+		return a, nil
 	case versionMsg:
 		a.banner = bannerFor(msg)
 		return a, a.resize()

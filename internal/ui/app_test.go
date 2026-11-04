@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,13 +120,21 @@ func (s *fakeScreen) Refresh() tea.Cmd {
 // for a message to have been handled instead of sleeping.
 type probe struct {
 	*App
-	seen chan tea.Msg
+	seen chan observed
+}
+
+// observed is a processed message plus a snapshot of shell state taken on
+// the Update goroutine right after it was handled (race-free to read).
+type observed struct {
+	msg       tea.Msg
+	modalOpen bool
+	running   bool
 }
 
 func (p probe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	_, cmd := p.App.Update(msg)
 	select {
-	case p.seen <- msg:
+	case p.seen <- observed{msg: msg, modalOpen: p.App.modal != nil, running: p.App.running != nil}:
 	default:
 	}
 	return p, cmd
@@ -141,7 +150,7 @@ type harness struct {
 func start(t *testing.T, d Deps, screens ...Screen) *harness {
 	t.Helper()
 	fr, _ := d.Runner.(*fakeRunner)
-	p := probe{App: NewApp(d, screens...), seen: make(chan tea.Msg, 4096)}
+	p := probe{App: NewApp(d, screens...), seen: make(chan observed, 4096)}
 	tm := teatest.NewTestModel(t, p, teatest.WithInitialTermSize(100, 30))
 	return &harness{t: t, tm: tm, p: p, run: fr}
 }
@@ -151,19 +160,30 @@ func baseDeps(fr *fakeRunner) Deps {
 }
 
 // waitMsg blocks until a processed message satisfies match.
-func (h *harness) waitMsg(what string, match func(tea.Msg) bool) {
+func (h *harness) waitMsg(what string, match func(tea.Msg) bool) observed {
 	h.t.Helper()
 	deadline := time.After(timeout)
 	for {
 		select {
-		case m := <-h.p.seen:
-			if match(m) {
-				return
+		case o := <-h.p.seen:
+			if match(o.msg) {
+				return o
 			}
 		case <-deadline:
 			h.t.Fatalf("timed out waiting for %s", what)
+			return observed{}
 		}
 	}
+}
+
+// pressAndWait sends k and returns the state right after it was handled.
+func (h *harness) pressAndWait(k tea.KeyPressMsg) observed {
+	h.t.Helper()
+	h.tm.Send(k)
+	return h.waitMsg("key "+k.String(), func(m tea.Msg) bool {
+		got, ok := m.(tea.KeyPressMsg)
+		return ok && got.String() == k.String()
+	})
 }
 
 func (h *harness) waitRun() {
@@ -366,16 +386,46 @@ func TestDestructiveNeedsTypedConfirm(t *testing.T) {
 		t.Fatal("McpRemove should be destructive")
 	}
 	h.tm.Send(DoMsg{Action: act})
-	h.tm.Send(key("y"))
-	h.tm.Send(key("enter"))
-	h.tm.Send(key("backspace"))
-	h.tm.Type("remove")
-	h.tm.Send(key("enter"))
+	// mustNotRun asserts that the enter just processed left the modal open
+	// and started nothing.
+	mustNotRun := func(label string, o observed) {
+		t.Helper()
+		if !o.modalOpen || o.running {
+			t.Fatalf("%s: modalOpen=%v running=%v, want modal open and nothing running", label, o.modalOpen, o.running)
+		}
+		if n := fr.nCalls(); n != 0 {
+			t.Fatalf("%s: runner called %d times", label, n)
+		}
+	}
+	clear := func(n int) {
+		for i := 0; i < n; i++ {
+			h.pressAndWait(key("backspace"))
+		}
+	}
+	mustNotRun("y", h.pressAndWait(key("y")))
+	clear(1)
+	mustNotRun("enter on empty buffer", h.pressAndWait(key("enter")))
+	h.pressAndWait(key("y"))
+	mustNotRun("y then enter", h.pressAndWait(key("enter")))
+	clear(1)
+	for _, wrong := range []string{"REMOVE", " remove", "removex", "remov"} {
+		for _, r := range wrong {
+			h.pressAndWait(key(string(r)))
+		}
+		mustNotRun(fmt.Sprintf("wrong verb %q", wrong), h.pressAndWait(key("enter")))
+		clear(len(wrong))
+	}
+	for _, r := range "remove" {
+		h.pressAndWait(key(string(r)))
+	}
+	if o := h.pressAndWait(key("enter")); o.modalOpen || !o.running {
+		t.Fatalf("typed verb did not start the run: modalOpen=%v running=%v", o.modalOpen, o.running)
+	}
 	if got := h.waitStarted(); strings.Join(got, " ") != "mcp remove x" {
 		t.Errorf("ran %q", got)
 	}
 	if n := fr.nCalls(); n != 1 {
-		t.Errorf("runner called %d times, want 1 (y/enter must not confirm)", n)
+		t.Errorf("runner called %d times, want exactly 1", n)
 	}
 	fr.respond <- fakeResp{}
 	h.waitRun()
@@ -667,5 +717,89 @@ func TestHelpToggle(t *testing.T) {
 	app.Update(key("?"))
 	if !strings.Contains(content(app), "toggle scope") {
 		t.Errorf("help missing: %q", content(app))
+	}
+}
+
+// initScreen records Init calls.
+type initScreen struct {
+	*fakeScreen
+	mu    *sync.Mutex
+	inits *int
+}
+
+func (s initScreen) Init() tea.Cmd {
+	s.mu.Lock()
+	*s.inits++
+	s.mu.Unlock()
+	return nil
+}
+
+func TestStartupInProjectScopeWithoutDirRunsNothing(t *testing.T) {
+	fr := newFakeRunner()
+	d := Deps{Runner: fr, Scope: runner.ScopeProject}
+	d.WithScope = func(runner.Scope) (runner.Runner, func(...string) *exec.Cmd) { return fr, nil }
+	var mu sync.Mutex
+	var inits int
+	s := initScreen{fakeScreen: newScreen("A", "body-a"), mu: &mu, inits: &inits}
+	h := start(t, d, s)
+	h.waitVersion()     // Init has run
+	h.tm.Send(key("s")) // project (no dir) -> user: a real switch
+	waitRefresh(t, s.fakeScreen)
+	app := h.final()
+	mu.Lock()
+	defer mu.Unlock()
+	if inits != 0 {
+		t.Errorf("screen Init ran %d times in project scope without a directory", inits)
+	}
+	if app.scope != runner.ScopeUser || app.noProject || !strings.Contains(content(app), "body-a") {
+		t.Errorf("scope=%v noProject=%v view=%q", app.scope, app.noProject, content(app))
+	}
+	if fr.nCalls() != 0 {
+		t.Errorf("runner called %d times", fr.nCalls())
+	}
+}
+
+func TestQuitWhileRunningCancelsAndLogsFirst(t *testing.T) {
+	fr := newFakeRunner()
+	d := baseDeps(fr)
+	d.LogPath = filepath.Join(t.TempDir(), "activity.log")
+	h := start(t, d, newScreen("A", "a"))
+	h.tm.Send(DoMsg{Action: actions.Check()})
+	h.waitStarted()
+	h.tm.Send(key("q"))
+	h.tm.WaitFinished(t, teatest.WithFinalTimeout(timeout))
+	app := h.tm.FinalModel(t).(probe).App
+	es := app.log.entries()
+	if len(es) != 1 || es[0].Outcome != "cancelled" {
+		t.Fatalf("log entries %+v, want one cancelled entry", es)
+	}
+	fr.mu.Lock()
+	if len(fr.ctxErrs) != 1 || !errors.Is(fr.ctxErrs[0], context.Canceled) {
+		t.Errorf("run context not cancelled: %v", fr.ctxErrs)
+	}
+	fr.mu.Unlock()
+	b, err := os.ReadFile(d.LogPath)
+	if err != nil || !bytes.Contains(b, []byte("cancelled")) {
+		t.Errorf("log file %q err %v", b, err)
+	}
+}
+
+func TestQuitWhileRunningFallsBackWhenRunHangs(t *testing.T) {
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
+	app.Update(DoMsg{Action: actions.Check()}) // starts; the cmd is never executed
+	_, cmd := app.Update(key("q"))
+	if cmd == nil || app.running == nil {
+		t.Fatal("q while running should wait for the cancelled run")
+	}
+	_, cmd = app.Update(quitDeadlineMsg{})
+	es := app.log.entries()
+	if len(es) != 1 || es[0].Outcome != "cancelled" {
+		t.Fatalf("log entries %+v", es)
+	}
+	if cmd == nil {
+		t.Fatal("fallback did not quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("fallback cmd is not tea.Quit")
 	}
 }

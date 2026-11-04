@@ -103,8 +103,11 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 		}
 		a.running = nil
 	}
-	if err := a.log.add(entry{Time: time.Now(), Display: m.Action.Display(), Outcome: outcome(m.Result, m.Err), Duration: dur}); err != nil {
-		a.logNote = "activity log file unavailable"
+	a.record(m.Action, outcome(m.Result, m.Err), dur)
+	if a.quitting {
+		// q was pressed while this run was in flight: it is now cancelled
+		// and logged, so exit.
+		return tea.Quit
 	}
 	title := mask.Sanitize(m.Action.Title)
 	switch {
@@ -138,4 +141,39 @@ func firstLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// quitGrace bounds how long q waits for a cancelled run to report back.
+// runner.Exec kills the child on cancel (WaitDelay 1s), so this is a
+// fallback for a runner that ignores its context.
+const quitGrace = 3 * time.Second
+
+// quitDeadlineMsg fires when a cancelled run has not reported back within
+// quitGrace after a quit request.
+type quitDeadlineMsg struct{}
+
+// record appends one activity-log entry.
+func (a *App) record(act actions.Action, outcome string, dur time.Duration) {
+	if err := a.log.add(entry{Time: time.Now(), Display: act.Display(), Outcome: outcome, Duration: dur}); err != nil {
+		a.logNote = "activity log file unavailable"
+	}
+}
+
+// quitWhenCancelled handles q while an action is running: the action is
+// cancelled and the program exits once its RunMsg has been logged (see
+// finish), or after quitGrace, logging it as cancelled, if it never reports.
+func (a *App) quitWhenCancelled() tea.Cmd {
+	a.quitting = true
+	a.cancelRunning()
+	a.setStatus(statusWarn, "cancelling before quit…")
+	return tea.Tick(quitGrace, func(time.Time) tea.Msg { return quitDeadlineMsg{} })
+}
+
+// quitDeadline is the quitGrace fallback.
+func (a *App) quitDeadline() tea.Cmd {
+	if a.running != nil {
+		a.record(a.running.act, "cancelled", time.Since(a.running.start))
+		a.running = nil
+	}
+	return tea.Quit
 }
