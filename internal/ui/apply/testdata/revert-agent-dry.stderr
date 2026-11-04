@@ -1,0 +1,1 @@
+✗ ERROR  /tmp/hermetic/home/.gemini/config is not an agentsync-managed git backup (state: untracked); enable [destination_directory_git_backup] and run `agentsync apply` first
