@@ -12,8 +12,10 @@ const helpText = `Keys
   s                 toggle scope (user / project)
   l                 toggle activity log
   ?                 toggle this help
-  q                 quit
-  ctrl+c            cancel the running action, or quit when idle
+  q                 quit (waits for a running write to finish)
+  ctrl+c            cancel a running read; a running write needs ctrl+c
+                    twice (it gets SIGINT, then is killed after 10s);
+                    quit when idle
 
 Confirm dialog
   y                 run          n / esc   cancel (enter does not confirm)
@@ -27,8 +29,7 @@ func (a *App) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	s := k.String()
 	if s == "ctrl+c" {
 		if a.running != nil {
-			a.cancelRunning()
-			return nil
+			return a.interrupt()
 		}
 		a.shutdown()
 		return tea.Quit
@@ -44,6 +45,9 @@ func (a *App) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	switch s {
 	case "q":
 		if a.running != nil && a.running.cancel != nil {
+			if !a.running.act.ReadOnly {
+				return a.quitAfterWrite()
+			}
 			return a.quitWhenCancelled()
 		}
 		a.shutdown()

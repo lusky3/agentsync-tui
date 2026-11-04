@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -214,6 +215,29 @@ func TestOutdatedOnDemandMarksPlugins(t *testing.T) {
 	dl, ok := fr.ctxs["plugin outdated"].Deadline()
 	if !ok || dl.IsZero() {
 		t.Error("outdated read has no network timeout")
+	}
+}
+
+// The outdated check is a network read: --read-timeout bounds it, and 0
+// lifts the bound.
+func TestOutdatedUsesReadTimeout(t *testing.T) {
+	for _, c := range []struct {
+		read time.Duration
+		want bool
+	}{{0, false}, {5 * time.Second, true}} {
+		fr := standardFake(t)
+		fr.set("plugin outdated", "")
+		s := New(ui.Deps{Runner: fr, Scope: runner.ScopeUser, Timeouts: &ui.Timeouts{Read: c.read}})
+		s.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+		drive(s, s.Refresh())
+		press(s, "o")
+		dl, ok := fr.ctxs["plugin outdated"].Deadline()
+		if ok != c.want {
+			t.Errorf("read timeout %v: deadline %v (%v), want %v", c.read, ok, dl, c.want)
+		}
+		if ok && time.Until(dl) > c.read {
+			t.Errorf("deadline %v is beyond the %v read timeout", time.Until(dl), c.read)
+		}
 	}
 }
 

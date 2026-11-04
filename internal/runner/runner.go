@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -41,11 +42,17 @@ type Exec struct {
 	// Env, when non-nil, is the child process environment (default: the
 	// current process environment). Tests use it for a hermetic home.
 	Env []string
+
+	grace time.Duration // SIGINT-to-SIGKILL delay on cancel (InterruptGrace)
 }
+
+// InterruptGrace is how long a cancelled run may take to exit after SIGINT
+// before it is killed.
+const InterruptGrace = 10 * time.Second
 
 // NewExec returns an Exec for bin. projectDir is used only with ScopeProject.
 func NewExec(bin string, scope Scope, projectDir string) *Exec {
-	return &Exec{bin: bin, scope: scope, projectDir: projectDir}
+	return &Exec{bin: bin, scope: scope, projectDir: projectDir, grace: InterruptGrace}
 }
 
 // ScopeUnaware reports whether the command in args rejects --scope/--project.
@@ -85,7 +92,23 @@ func (e *Exec) scopeArgs(args []string) []string {
 func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 	full := append(append(append([]string{}, args...), e.scopeArgs(args)...), "--no-input", "--color", "never")
 	cmd := exec.CommandContext(ctx, e.bin, full...)
-	cmd.WaitDelay = time.Second
+	// On cancel, interrupt rather than kill: a write such as `plugin upgrade
+	// --all` then gets the chance to finish or roll back. Only if it is
+	// still running grace later is it killed (WaitDelay). agentsync v0.17.0
+	// installs no SIGINT handler outside `secret edit`, so today it exits at
+	// once on SIGINT, much as on SIGKILL: its single-file writes are atomic
+	// and its flock dies with it, but a multi-file run can still stop
+	// halfway. Where SIGINT cannot be delivered, kill at once.
+	cmd.Cancel = func() error {
+		if err := cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = e.grace
+	if cmd.WaitDelay <= 0 {
+		cmd.WaitDelay = InterruptGrace // a zero Exec must still kill eventually
+	}
 	cmd.Env = e.Env
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

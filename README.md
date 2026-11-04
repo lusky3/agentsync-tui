@@ -30,7 +30,24 @@ notices instead of data.
 agentsync-tui                    # user scope
 agentsync-tui --project ./repo   # project scope
 agentsync-tui --version
+agentsync-tui --write-timeout 10m     # bound writes too (default: no bound)
+agentsync-tui --read-timeout 0       # no bound on network reads (default 2m)
 ```
+
+`--read-timeout` bounds network reads: import previews of plugins or a whole
+agent, and the plugins screen's `plugin outdated`. `--write-timeout` bounds
+every write (apply, revert, import, `plugin upgrade`, ...). Both take a Go
+duration such as `90s` or `10m`; `0` means no bound. Writes are unbounded by
+default because a write cut off partway (for example `plugin upgrade --all`)
+can leave agentsync's state and the destination files out of step.
+
+Stopping a command sends it SIGINT and, if it is still running 10 seconds
+later, SIGKILL. `ctrl+c` cancels a running read at once. A running write needs
+`ctrl+c` twice within 3 seconds; `q` during a write quits once the write has
+finished (or, after a `ctrl+c`, once it has stopped). agentsync v0.17.0 does
+not handle SIGINT itself, so an interrupted write still stops where it is:
+its single files are written atomically, but a multi-file run can be left
+half done, and `check` or a new preview shows what changed.
 
 ### Navigation
 
@@ -41,7 +58,7 @@ agentsync-tui --version
 | `s` | toggle user / project scope |
 | `l` | toggle the activity log |
 | `?` | help |
-| `q` | quit (`ctrl+c` cancels a running action) |
+| `q` | quit (waits for a running write; `ctrl+c` cancels a running read, twice for a write) |
 
 In lists, `up`/`down` or `k`/`j` move and `r` refreshes. Confirm dialogs take
 `y` to run and `n`/`esc` to cancel. `enter` does not confirm, so a double
@@ -74,7 +91,7 @@ Long views scroll with `ctrl+d`/`ctrl+u` or `pgdown`/`pgup`; the plugin detail v
   and screens read state directly with `list`, `status`, `diff`, `explain`,
   `doctor`, `check`, `version`, `status --legend`, `plugin outdated`,
   `reconcile --auto-safe` and similar read-only calls. Quitting cancels any of
-  these still in flight (the child process is killed). The TUI writes no
+  these still in flight (the child gets SIGINT, then SIGKILL). The TUI writes no
   agentsync files directly.
 - The one exception is `E` (edit) on MCP servers and on Skills, Subagents,
   Commands, Hooks, LSP and Memory: it opens the canonical file in `$VISUAL`,

@@ -45,6 +45,7 @@ type fakeRunner struct {
 	ctxErrs []error
 	// deadlines records, per non-version call, whether its context had one.
 	deadlines []bool
+	ctxs      []context.Context // per non-version call
 
 	started chan []string
 	respond chan fakeResp
@@ -69,6 +70,7 @@ func (f *fakeRunner) Run(ctx context.Context, args ...string) (runner.Result, er
 	f.calls = append(f.calls, args)
 	_, hasDL := ctx.Deadline()
 	f.deadlines = append(f.deadlines, hasDL)
+	f.ctxs = append(f.ctxs, ctx)
 	f.mu.Unlock()
 	f.started <- args
 	select {
@@ -1114,5 +1116,151 @@ func TestNonDestructiveModalSaysPressY(t *testing.T) {
 	}
 	if v := ansi.Strip(content(app)); !strings.Contains(v, "press y to run it") {
 		t.Errorf("no hint after enter:\n%s", v)
+	}
+}
+
+// ---- interrupting a running write (production audit H1) -------------------
+
+func (f *fakeRunner) ctxErr(i int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ctxs[i].Err()
+}
+
+// startWrite confirms and starts `plugin upgrade --all`, a network write.
+func startWrite(t *testing.T, h *harness) {
+	t.Helper()
+	act := mustAct(actions.PluginUpgradeAll())
+	if act.ReadOnly {
+		t.Fatal("precondition: a write")
+	}
+	h.tm.Send(DoMsg{Action: act})
+	h.pressAndWait(key("y"))
+	h.waitStarted()
+}
+
+// A single ctrl+c must not stop a running write; a second one interrupts it.
+func TestCtrlCOnWriteNeedsConfirmation(t *testing.T) {
+	fr := newFakeRunner()
+	h := start(t, baseDeps(fr), newScreen("A", "a"))
+	startWrite(t, h)
+	if o := h.pressAndWait(key("ctrl+c")); !o.running {
+		t.Fatal("first ctrl+c ended the write")
+	}
+	if err := fr.ctxErr(0); err != nil {
+		t.Fatalf("first ctrl+c cancelled the write: %v", err)
+	}
+	h.pressAndWait(key("ctrl+c"))
+	if err := fr.ctxErr(0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("second ctrl+c did not interrupt the write: %v", err)
+	}
+	h.waitRun() // still alive: interrupting a write does not quit
+	app := h.final()
+	if v := content(app); !strings.Contains(v, "interrupted: ") {
+		t.Errorf("view: %q", v)
+	}
+	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "cancelled" {
+		t.Errorf("log %+v", es)
+	}
+}
+
+// The confirmation expires: a ctrl+c long after the first one re-arms
+// instead of interrupting. Reads are still cancelled by a single ctrl+c
+// (TestCtrlCCancelsRunningAction).
+func TestCtrlCOnWriteConfirmationExpires(t *testing.T) {
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
+	app.Update(DoMsg{Action: mustAct(actions.PluginUpgradeAll())})
+	app.Update(key("y")) // starts; the run cmd is never executed
+	if app.running == nil {
+		t.Fatal("precondition: write running")
+	}
+	app.Update(key("ctrl+c"))
+	if app.running.interrupted || !strings.Contains(content(app), msgWriteRunning) {
+		t.Fatalf("first ctrl+c: interrupted=%v view %q", app.running.interrupted, content(app))
+	}
+	app.running.armed = time.Now().Add(-interruptConfirm - time.Second)
+	app.Update(key("ctrl+c"))
+	if app.running.interrupted {
+		t.Fatal("an expired confirmation interrupted the write")
+	}
+	app.Update(key("ctrl+c"))
+	if !app.running.interrupted || !strings.Contains(content(app), "interrupting: ") {
+		t.Fatalf("a fresh second ctrl+c did not interrupt: view %q", content(app))
+	}
+}
+
+// q during a write waits for it to finish, then logs it and exits.
+func TestQuitDuringWriteWaitsForIt(t *testing.T) {
+	fr := newFakeRunner()
+	d := baseDeps(fr)
+	d.LogPath = filepath.Join(t.TempDir(), "activity.log")
+	h := start(t, d, newScreen("A", "a"))
+	startWrite(t, h)
+	if o := h.pressAndWait(key("q")); !o.running {
+		t.Fatal("q ended the write")
+	}
+	if err := fr.ctxErr(0); err != nil {
+		t.Fatalf("q cancelled the write: %v", err)
+	}
+	fr.respond <- fakeResp{}
+	h.tm.WaitFinished(t, teatest.WithFinalTimeout(timeout))
+	app := h.tm.FinalModel(t).(probe).App
+	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "exit 0" {
+		t.Fatalf("log %+v, want the finished write", es)
+	}
+	if b, err := os.ReadFile(d.LogPath); err != nil || !bytes.Contains(b, []byte("exit 0")) {
+		t.Errorf("log file %q err %v", b, err)
+	}
+}
+
+// After q, one ctrl+c interrupts the write; the exit waits for it to report
+// and logs it.
+func TestQuitDuringWriteThenCtrlCInterrupts(t *testing.T) {
+	fr := newFakeRunner()
+	d := baseDeps(fr)
+	d.LogPath = filepath.Join(t.TempDir(), "activity.log")
+	h := start(t, d, newScreen("A", "a"))
+	startWrite(t, h)
+	h.pressAndWait(key("q"))
+	h.tm.Send(key("ctrl+c"))
+	h.tm.WaitFinished(t, teatest.WithFinalTimeout(timeout))
+	app := h.tm.FinalModel(t).(probe).App
+	if err := fr.ctxErr(0); !errors.Is(err, context.Canceled) {
+		t.Errorf("write not interrupted: %v", err)
+	}
+	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "cancelled" {
+		t.Fatalf("log %+v", es)
+	}
+	if b, err := os.ReadFile(d.LogPath); err != nil || !bytes.Contains(b, []byte("cancelled")) {
+		t.Errorf("log file %q err %v", b, err)
+	}
+}
+
+// q during a write schedules no deadline (the write is waited for); after an
+// interrupt the exit is bounded by quitGrace, which outlasts the runner's
+// SIGINT-to-SIGKILL grace.
+func TestQuitDuringWriteFallsBackAfterInterrupt(t *testing.T) {
+	if quitGrace <= runner.InterruptGrace {
+		t.Fatalf("quitGrace %v must exceed runner.InterruptGrace %v", quitGrace, runner.InterruptGrace)
+	}
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
+	app.Update(DoMsg{Action: mustAct(actions.PluginUpgradeAll())})
+	app.Update(key("y"))
+	if _, cmd := app.Update(key("q")); cmd != nil || app.running == nil {
+		t.Fatal("q during a write must neither stop it nor schedule a quit deadline")
+	}
+	_, cmd := app.Update(key("ctrl+c"))
+	if cmd == nil || !app.running.interrupted {
+		t.Fatal("ctrl+c after q must interrupt and schedule the quit deadline")
+	}
+	_, cmd = app.Update(quitDeadlineMsg{})
+	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "cancelled" {
+		t.Fatalf("log entries %+v", es)
+	}
+	if cmd == nil {
+		t.Fatal("fallback did not quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("fallback cmd is not tea.Quit")
 	}
 }

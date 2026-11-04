@@ -77,11 +77,15 @@ type Deps struct {
 	WithScope func(runner.Scope) (runner.Runner, func(args ...string) *exec.Cmd)
 	// Ctx is the root of every background read a screen starts (BaseCtx);
 	// Cancel cancels it. main creates both before the screens are built;
-	// App.shutdown calls Cancel so quitting kills in-flight children (the
-	// Exec runner kills the process when its context is cancelled). Nil Ctx
+	// App.shutdown calls Cancel so quitting stops in-flight children (the
+	// Exec runner interrupts, then kills, the process when its context is
+	// cancelled). Nil Ctx
 	// means context.Background (reads then outlive a quit).
 	Ctx    context.Context
 	Cancel context.CancelFunc
+	// Timeouts bounds the actions the shell runs (and the plugins screen's
+	// network read); nil means DefaultTimeouts. See Limits.
+	Timeouts *Timeouts
 }
 
 // BaseCtx is the context a screen derives its reads from: Deps.Ctx, or

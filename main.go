@@ -46,10 +46,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	scopeFlag := fs.String("scope", "", "agentsync scope: user or project (default user; --project implies project)")
 	project := fs.String("project", "", "project directory (implies --scope project)")
+	readTimeout := fs.Duration("read-timeout", ui.DefaultReadTimeout,
+		"bound on network reads (import previews of plugins or a whole agent, plugin outdated); 0 = none")
+	writeTimeout := fs.Duration("write-timeout", 0,
+		"bound on every write (apply, import, plugin upgrade, ...); 0 = none. A write cut off partway can leave agentsync's state and the destination files out of step")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return 2
+	}
+	if *readTimeout < 0 || *writeTimeout < 0 {
+		_, _ = fmt.Fprintln(stderr, "agentsync-tui: --read-timeout and --write-timeout must not be negative")
 		return 2
 	}
 	if *showVersion {
@@ -78,6 +86,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Scope:         scope,
 		ProjectDir:    projectDir,
 		LogPath:       logPath(),
+		Timeouts:      &ui.Timeouts{Read: *readTimeout, Write: *writeTimeout},
 		WithScope: func(s runner.Scope) (runner.Runner, func(args ...string) *exec.Cmd) {
 			e := runner.NewExec("agentsync", s, projectDir)
 			return e, e.Interactive

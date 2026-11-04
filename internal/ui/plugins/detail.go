@@ -82,7 +82,7 @@ func (s *Screen) liveField() string {
 }
 
 // checkOutdated runs `plugin outdated` (network) on demand through the
-// Runner, bounded by ui.NetworkTimeout.
+// Runner, bounded by the network read timeout (ui.Deps.Limits().Read).
 func (s *Screen) checkOutdated() tea.Cmd {
 	if s.oChecking {
 		s.note = "already checking for updates"
@@ -90,9 +90,9 @@ func (s *Screen) checkOutdated() tea.Cmd {
 	}
 	s.oreq++
 	s.oChecking, s.note = true, "checking for updates (network)…"
-	req, r, base := s.oreq, s.run, ui.BaseCtx(s.d)
+	req, r, base, limit := s.oreq, s.run, ui.BaseCtx(s.d), s.d.Limits().Read
 	return func() tea.Msg {
-		out, note := runRead(base, r, ui.NetworkTimeout, "plugin", "outdated")
+		out, note := runRead(base, r, limit, "plugin", "outdated")
 		if note != "" {
 			return outdatedMsg{req: req, note: note}
 		}

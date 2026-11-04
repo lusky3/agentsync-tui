@@ -26,6 +26,11 @@ func TestRunHelpExitsZero(t *testing.T) {
 		if !strings.Contains(errb.String(), "-version") {
 			t.Fatalf("%s: usage not printed: %q", a, errb.String())
 		}
+		for _, want := range []string{"-read-timeout", "(default 2m0s)", "-write-timeout", "0 = none"} {
+			if !strings.Contains(errb.String(), want) {
+				t.Errorf("%s: usage lacks %q: %q", a, want, errb.String())
+			}
+		}
 	}
 }
 
@@ -33,6 +38,18 @@ func TestRunBadFlagExitsTwo(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"--nope"}, &out, &errb); code != 2 {
 		t.Fatalf("exit %d, want 2", code)
+	}
+}
+
+func TestRunNegativeTimeoutExitsTwo(t *testing.T) {
+	for _, args := range [][]string{{"--read-timeout", "-1s"}, {"--write-timeout", "-5m"}} {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 2 {
+			t.Errorf("%q: exit %d, want 2", args, code)
+		}
+		if !strings.Contains(errb.String(), "must not be negative") {
+			t.Errorf("%q: stderr %q", args, errb.String())
+		}
 	}
 }
 
