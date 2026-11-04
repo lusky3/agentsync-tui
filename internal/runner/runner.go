@@ -37,6 +37,10 @@ type Exec struct {
 	bin        string
 	scope      Scope
 	projectDir string
+
+	// Env, when non-nil, is the child process environment (default: the
+	// current process environment). Tests use it for a hermetic home.
+	Env []string
 }
 
 // NewExec returns an Exec for bin. projectDir is used only with ScopeProject.
@@ -44,11 +48,28 @@ func NewExec(bin string, scope Scope, projectDir string) *Exec {
 	return &Exec{bin: bin, scope: scope, projectDir: projectDir}
 }
 
-// machineScoped commands report on the binary or machine and reject scope flags.
-var machineScoped = map[string]bool{"version": true, "doctor": true}
+// scopeUnaware reports whether the command in args rejects --scope/--project.
+// agentsync's root pre-run refuses those flags on commands marked scope-unaware.
+// This mirrors markScopeUnaware/markGroupScopeUnaware at v0.17.0-dev: version,
+// doctor, revert, the secret and marketplace groups, the plugin group except
+// `plugin upgrade`, and cobra's help and completion. It can drift on upgrade;
+// re-verify in agentsync's internal/cli/scope_flags.go and the
+// markScopeUnaware/markGroupScopeUnaware/markScopeAware call sites.
+func scopeUnaware(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "version", "doctor", "revert", "secret", "marketplace", "help", "completion":
+		return true
+	case "plugin":
+		return len(args) < 2 || args[1] != "upgrade"
+	}
+	return false
+}
 
 func (e *Exec) scopeArgs(args []string) []string {
-	if len(args) > 0 && machineScoped[args[0]] {
+	if scopeUnaware(args) {
 		return nil
 	}
 	if e.scope == ScopeProject {
@@ -63,6 +84,7 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 	full := append(append(append([]string{}, args...), e.scopeArgs(args)...), "--no-input", "--color", "never")
 	cmd := exec.CommandContext(ctx, e.bin, full...)
 	cmd.WaitDelay = time.Second
+	cmd.Env = e.Env
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -87,5 +109,7 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 // the CLI may prompt, and omits --color (the user's terminal decides); only
 // the scope flags are appended.
 func (e *Exec) Interactive(args ...string) *exec.Cmd {
-	return exec.Command(e.bin, append(append([]string{}, args...), e.scopeArgs(args)...)...)
+	cmd := exec.Command(e.bin, append(append([]string{}, args...), e.scopeArgs(args)...)...)
+	cmd.Env = e.Env
+	return cmd
 }

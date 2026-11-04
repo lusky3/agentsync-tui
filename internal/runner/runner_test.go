@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lusky3/agentsync-tui/internal/testenv"
 )
 
 func fakeBin(t *testing.T) string {
@@ -128,53 +130,91 @@ func hasScopeFlag(argv string) bool {
 	return strings.Contains(argv, "--scope") || strings.Contains(argv, "--project")
 }
 
+var scopeCases = []struct {
+	args      []string
+	wantScope bool
+}{
+	{[]string{"version"}, false},
+	{[]string{"doctor"}, false},
+	{[]string{"revert"}, false},
+	{[]string{"secret", "list"}, false},
+	{[]string{"secret", "set"}, false},
+	{[]string{"marketplace", "list"}, false},
+	{[]string{"marketplace", "add"}, false},
+	{[]string{"plugin", "list"}, false},
+	{[]string{"plugin", "add"}, false},
+	{[]string{"plugin", "enable"}, false},
+	{[]string{"plugin"}, false},
+	{[]string{"help"}, false},
+	{[]string{"completion", "bash"}, false},
+	{[]string{"plugin", "upgrade"}, true},
+	{[]string{"plugin", "upgrade", "--all"}, true},
+	{[]string{"status"}, true},
+	{[]string{"mcp", "list"}, true},
+	{[]string{"mcp", "add", "doctor"}, true},
+	{[]string{"agent", "list"}, true},
+	{[]string{"agent", "add", "version"}, true},
+	{[]string{"apply"}, true},
+	{[]string{"check"}, true},
+	{[]string{"diff"}, true},
+	{[]string{"import"}, true},
+	{[]string{"reconcile"}, true},
+	{[]string{"skill", "list"}, true},
+}
+
 func TestRunOmitsScopeForMachineCommands(t *testing.T) {
-	for _, c := range []struct {
-		cmd       string
-		scope     Scope
-		wantScope bool
-	}{
-		{"version", ScopeUser, false},
-		{"version", ScopeProject, false},
-		{"doctor", ScopeUser, false},
-		{"doctor", ScopeProject, false},
-		{"status", ScopeUser, true},
-		{"mcp", ScopeProject, true},
-	} {
-		res, err := NewExec(fakeBin(t), c.scope, "/tmp/proj").Run(context.Background(), c.cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := strings.TrimSpace(res.Stdout)
-		if hasScopeFlag(got) != c.wantScope || !strings.HasSuffix(got, "--no-input --color never") {
-			t.Errorf("%s/%s: argv = %q", c.cmd, c.scope, got)
+	for _, c := range scopeCases {
+		for _, s := range []Scope{ScopeUser, ScopeProject} {
+			res, err := NewExec(fakeBin(t), s, "/tmp/proj").Run(context.Background(), c.args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.TrimSpace(res.Stdout)
+			if hasScopeFlag(got) != c.wantScope || !strings.HasSuffix(got, "--no-input --color never") {
+				t.Errorf("%v/%s: argv = %q", c.args, s, got)
+			}
 		}
 	}
 }
 
 func TestInteractiveOmitsScopeForMachineCommands(t *testing.T) {
-	for _, cmd := range []string{"version", "doctor"} {
+	for _, c := range scopeCases {
 		for _, s := range []Scope{ScopeUser, ScopeProject} {
-			got := strings.Join(NewExec("agentsync", s, "/p").Interactive(cmd).Args, " ")
-			if hasScopeFlag(got) {
-				t.Errorf("%s/%s: args = %q", cmd, s, got)
+			got := strings.Join(NewExec("agentsync", s, "/p").Interactive(c.args...).Args, " ")
+			if hasScopeFlag(got) != c.wantScope {
+				t.Errorf("%v/%s: args = %q", c.args, s, got)
 			}
 		}
-	}
-	if got := strings.Join(NewExec("agentsync", ScopeUser, "").Interactive("init").Args, " "); !hasScopeFlag(got) {
-		t.Errorf("init should keep scope: %q", got)
 	}
 }
 
 func TestCheckVersionAgainstRealBinary(t *testing.T) {
+	env := testenv.New(t)
 	bin, err := exec.LookPath("agentsync")
 	if err != nil {
 		t.Skip("agentsync not on PATH")
 	}
+	env.Init(t)
 	r := NewExec(bin, ScopeUser, "")
-	res, err := r.Run(context.Background(), "version")
-	if err != nil || res.ExitCode != 0 {
-		t.Fatalf("exit=%d err=%v stderr=%q", res.ExitCode, err, res.Stderr)
+	r.Env = env.Env
+	// Read-only commands only. Non-zero exit is tolerated only when it is
+	// not a scope rejection.
+	for _, args := range [][]string{
+		{"version"}, {"doctor"}, {"secret", "list"}, {"marketplace", "list"},
+		{"plugin", "list"}, {"completion", "bash"}, {"help"},
+	} {
+		res, err := r.Run(context.Background(), args...)
+		if err != nil {
+			t.Errorf("%v: %v", args, err)
+			continue
+		}
+		if strings.Contains(res.Stderr+res.Stdout, "does not take --scope") ||
+			strings.Contains(res.Stderr+res.Stdout, "does not take --project") {
+			t.Errorf("%v: scope rejected: %q", args, res.Stderr)
+		}
+		if res.ExitCode != 0 {
+			t.Logf("%v: exit %d (not a scope error): %s", args, res.ExitCode, res.Stderr)
+		}
 	}
 	if _, _, err := CheckVersion(context.Background(), r); err != nil {
 		t.Fatal(err)
