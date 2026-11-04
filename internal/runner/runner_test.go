@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -120,5 +121,62 @@ func TestCheckVersionWarnsOnOtherMinor(t *testing.T) {
 func TestCheckVersionPatchDifferenceSupported(t *testing.T) {
 	if !sameMinor("v0.17.3", TestedVersion) {
 		t.Fatal("patch difference should be supported")
+	}
+}
+
+func hasScopeFlag(argv string) bool {
+	return strings.Contains(argv, "--scope") || strings.Contains(argv, "--project")
+}
+
+func TestRunOmitsScopeForMachineCommands(t *testing.T) {
+	for _, c := range []struct {
+		cmd       string
+		scope     Scope
+		wantScope bool
+	}{
+		{"version", ScopeUser, false},
+		{"version", ScopeProject, false},
+		{"doctor", ScopeUser, false},
+		{"doctor", ScopeProject, false},
+		{"status", ScopeUser, true},
+		{"mcp", ScopeProject, true},
+	} {
+		res, err := NewExec(fakeBin(t), c.scope, "/tmp/proj").Run(context.Background(), c.cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := strings.TrimSpace(res.Stdout)
+		if hasScopeFlag(got) != c.wantScope || !strings.HasSuffix(got, "--no-input --color never") {
+			t.Errorf("%s/%s: argv = %q", c.cmd, c.scope, got)
+		}
+	}
+}
+
+func TestInteractiveOmitsScopeForMachineCommands(t *testing.T) {
+	for _, cmd := range []string{"version", "doctor"} {
+		for _, s := range []Scope{ScopeUser, ScopeProject} {
+			got := strings.Join(NewExec("agentsync", s, "/p").Interactive(cmd).Args, " ")
+			if hasScopeFlag(got) {
+				t.Errorf("%s/%s: args = %q", cmd, s, got)
+			}
+		}
+	}
+	if got := strings.Join(NewExec("agentsync", ScopeUser, "").Interactive("init").Args, " "); !hasScopeFlag(got) {
+		t.Errorf("init should keep scope: %q", got)
+	}
+}
+
+func TestCheckVersionAgainstRealBinary(t *testing.T) {
+	bin, err := exec.LookPath("agentsync")
+	if err != nil {
+		t.Skip("agentsync not on PATH")
+	}
+	r := NewExec(bin, ScopeUser, "")
+	res, err := r.Run(context.Background(), "version")
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("exit=%d err=%v stderr=%q", res.ExitCode, err, res.Stderr)
+	}
+	if _, _, err := CheckVersion(context.Background(), r); err != nil {
+		t.Fatal(err)
 	}
 }

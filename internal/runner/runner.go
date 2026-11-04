@@ -44,7 +44,13 @@ func NewExec(bin string, scope Scope, projectDir string) *Exec {
 	return &Exec{bin: bin, scope: scope, projectDir: projectDir}
 }
 
-func (e *Exec) scopeArgs() []string {
+// machineScoped commands report on the binary or machine and reject scope flags.
+var machineScoped = map[string]bool{"version": true, "doctor": true}
+
+func (e *Exec) scopeArgs(args []string) []string {
+	if len(args) > 0 && machineScoped[args[0]] {
+		return nil
+	}
 	if e.scope == ScopeProject {
 		return []string{"--project", e.projectDir}
 	}
@@ -54,7 +60,7 @@ func (e *Exec) scopeArgs() []string {
 // Run executes agentsync with the scope flags followed by the global
 // non-interactive flags: args --scope user --no-input --color never.
 func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
-	full := append(append(append([]string{}, args...), e.scopeArgs()...), "--no-input", "--color", "never")
+	full := append(append(append([]string{}, args...), e.scopeArgs(args)...), "--no-input", "--color", "never")
 	cmd := exec.CommandContext(ctx, e.bin, full...)
 	cmd.WaitDelay = time.Second
 	var out, errb bytes.Buffer
@@ -81,5 +87,5 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 // the CLI may prompt, and omits --color (the user's terminal decides); only
 // the scope flags are appended.
 func (e *Exec) Interactive(args ...string) *exec.Cmd {
-	return exec.Command(e.bin, append(append([]string{}, args...), e.scopeArgs()...)...)
+	return exec.Command(e.bin, append(append([]string{}, args...), e.scopeArgs(args)...)...)
 }
