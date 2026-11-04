@@ -153,19 +153,19 @@ func (s *Screen) CapturesKeys() bool { return s.typing }
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
 	s.invalidate()
-	gen, r, home := s.gen, s.run, s.home
+	gen, r, home, base := s.gen, s.run, s.home, ui.BaseCtx(s.d)
 	return func() tea.Msg {
-		m := readList(gen, r, listTimeout)
+		m := readList(base, gen, r, listTimeout)
 		m.uses, m.srv = loadUses(home)
 		return m
 	}
 }
 
-func readList(gen int, r runner.Runner, timeout time.Duration) listMsg {
+func readList(base context.Context, gen int, r runner.Runner, timeout time.Duration) listMsg {
 	if r == nil {
 		return listMsg{gen: gen, note: "no runner"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(base, timeout)
 	defer cancel()
 	res, err := r.Run(ctx, "secret", "list")
 	if err != nil {

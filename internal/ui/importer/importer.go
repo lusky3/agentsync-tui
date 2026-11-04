@@ -99,17 +99,17 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 // shell refreshes the screen after every run, including the dry run itself.
 func (s *Screen) Refresh() tea.Cmd {
 	s.agen++
-	gen, r := s.agen, s.run
-	return func() tea.Msg { return readAgents(gen, r) }
+	gen, r, base := s.agen, s.run, ui.BaseCtx(s.d)
+	return func() tea.Msg { return readAgents(base, gen, r) }
 }
 
-func readAgents(gen int, r runner.Runner) agentsMsg {
+func readAgents(base context.Context, gen int, r runner.Runner) agentsMsg {
 	m := agentsMsg{gen: gen}
 	if r == nil {
 		m.note = "agent list unavailable: no runner"
 		return m
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	ctx, cancel := context.WithTimeout(base, readTimeout)
 	defer cancel()
 	res, err := r.Run(ctx, "agent", "list")
 	if err != nil {

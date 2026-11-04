@@ -549,7 +549,7 @@ func TestStaleStatusResultDropped(t *testing.T) {
 	s := newLoaded(t, statusRunner(multiStatus))
 	oldGen := s.gen
 	s.SetScope(statusRunner(`{"agents":[{"agent":"newagent","items":[]}]}`), runner.ScopeProject, "")
-	stale := readStatus(oldGen, statusRunner(multiStatus))
+	stale := readStatus(context.Background(), oldGen, statusRunner(multiStatus))
 	s.Update(stale)
 	if strings.Contains(view(s), "antigravity") || s.loaded {
 		t.Errorf("status from before scope switch applied:\n%s", view(s))

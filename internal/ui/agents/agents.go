@@ -95,15 +95,15 @@ func (s *Screen) CapturesKeys() bool { return false }
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
 	s.invalidate()
-	gen, r := s.gen, s.run
-	return func() tea.Msg { return readList(gen, r, listTimeout) }
+	gen, r, base := s.gen, s.run, ui.BaseCtx(s.d)
+	return func() tea.Msg { return readList(base, gen, r, listTimeout) }
 }
 
-func readList(gen int, r runner.Runner, timeout time.Duration) listMsg {
+func readList(base context.Context, gen int, r runner.Runner, timeout time.Duration) listMsg {
 	if r == nil {
 		return listMsg{gen: gen, note: "no runner"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(base, timeout)
 	defer cancel()
 	res, err := r.Run(ctx, "agent", "list", "--all")
 	if err != nil {
@@ -200,20 +200,24 @@ func (s *Screen) mutate(k string) tea.Cmd {
 	}
 	s.vreq++
 	s.verifying, s.note = true, "verifying…"
-	req, r := s.vreq, s.run
+	req, r, base := s.vreq, s.run, ui.BaseCtx(s.d)
 	return func() tea.Msg {
-		return verifyMsg{req: req, key: k, sel: sel, fresh: readList(0, r, verifyTimeout)}
+		return verifyMsg{req: req, key: k, sel: sel, fresh: readList(base, 0, r, verifyTimeout)}
 	}
 }
 
-// verified handles a re-read result: stale requests are dropped; a failed
-// read or a changed agent emits nothing.
+// verified handles a re-read result: stale requests are dropped; a current
+// request always ends the verifying state, and a failed read or a changed
+// or re-ordered agent then emits nothing.
 func (s *Screen) verified(m verifyMsg) tea.Cmd {
-	cur, ok := s.selected()
-	if !s.verifying || m.req != s.vreq || !ok || cur.Name != m.sel.Name {
+	if !s.verifying || m.req != s.vreq {
 		return nil
 	}
 	s.verifying = false
+	if cur, ok := s.selected(); !ok || cur.Name != m.sel.Name {
+		s.note = ""
+		return nil
+	}
 	sel, k, fresh := m.sel, m.key, m.fresh
 	if fresh.note != "" {
 		s.note = "cannot verify the agent list: " + fresh.note

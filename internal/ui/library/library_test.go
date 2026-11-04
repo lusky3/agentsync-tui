@@ -669,3 +669,32 @@ func TestKeyCapturerFalse(t *testing.T) {
 }
 
 func itemOf(n string) model.Item { return model.Item{Name: n} }
+
+// storedLines caps raw input before masking; the cut must fall on a line
+// boundary so a secret straddling the cap cannot survive half-masked.
+func TestStoredLinesCapDoesNotSplitSecret(t *testing.T) {
+	const rawCap = 4 * maxStored
+	line := `"api_key": "CANARYx1secret"` + "\n"
+	// Filler that masks to a fraction of its size, so the masked text stays
+	// under maxStored and the raw cut (22 bytes into line) is what survives.
+	filler := "password=" + strings.Repeat("A", 90) + "\n" // 100 bytes -> 13 after masking
+	var b strings.Builder
+	for i := 0; i < (rawCap-22)/len(filler); i++ {
+		b.WriteString(filler)
+	}
+	for b.Len() < rawCap-22 {
+		b.WriteString("x\n")
+	}
+	if b.Len() != rawCap-22 {
+		t.Fatalf("filler length %d", b.Len())
+	}
+	b.WriteString(line)
+	for _, l := range storedLines(b.String(), "") {
+		if strings.Contains(l, "CANARY") {
+			t.Fatalf("leaked across the cap: %q", l)
+		}
+	}
+	if got := storedLines("ok\n", ""); len(got) != 1 || got[0] != "ok" {
+		t.Errorf("small input changed: %q", got)
+	}
+}

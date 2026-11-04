@@ -38,10 +38,11 @@ type versionMsg struct {
 	err       error
 }
 
-// checkVersionCmd runs runner.CheckVersion in the background.
-func checkVersionCmd(r runner.Runner) tea.Cmd {
+// checkVersionCmd runs runner.CheckVersion in the background, bounded by
+// versionCheckTimeout and cancelled with base.
+func checkVersionCmd(base context.Context, r runner.Runner) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), versionCheckTimeout)
+		ctx, cancel := context.WithTimeout(base, versionCheckTimeout)
 		defer cancel()
 		v, ok, err := runner.CheckVersion(ctx, r)
 		return versionMsg{v: v, supported: ok, err: err}

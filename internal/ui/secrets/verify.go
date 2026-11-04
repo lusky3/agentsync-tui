@@ -1,12 +1,17 @@
 package secrets
 
 import (
+	"strconv"
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/ui"
-	"strings"
 )
+
+// maxWarnUsers bounds how many referencing servers the remove warning names.
+const maxWarnUsers = 5
 
 // remove starts the asynchronous freshness check for removing the selected
 // key; the destructive action is only built in verified.
@@ -25,9 +30,9 @@ func (s *Screen) remove() tea.Cmd {
 	}
 	s.vreq++
 	s.verifying, s.vkey, s.note = true, key, "verifying…"
-	req, r := s.vreq, s.run
+	req, r, base := s.vreq, s.run, ui.BaseCtx(s.d)
 	return func() tea.Msg {
-		return verifyMsg{req: req, key: key, fresh: readList(0, r, verifyTimeout)}
+		return verifyMsg{req: req, key: key, fresh: readList(base, 0, r, verifyTimeout)}
 	}
 }
 
@@ -69,7 +74,12 @@ func (s *Screen) verified(m verifyMsg) tea.Cmd {
 func (s *Screen) removeWarning(key string) string {
 	users := "no known users"
 	if ids := s.uses[key]; len(ids) > 0 {
-		users = "used by " + strings.Join(ids, ", ")
+		more := ""
+		if len(ids) > maxWarnUsers {
+			more = " and " + strconv.Itoa(len(ids)-maxWarnUsers) + " more"
+			ids = ids[:maxWarnUsers]
+		}
+		users = "used by " + strings.Join(ids, ", ") + more
 	}
 	if s.srvNote != "" {
 		users += " (server files partly unreadable)"

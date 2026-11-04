@@ -80,8 +80,10 @@ func LoadServers(agentsyncHome string) ([]Server, error) {
 		if e.IsDir() || !strings.HasSuffix(name, ".toml") {
 			continue
 		}
-		if e.Type()&os.ModeSymlink != 0 {
-			errs = append(errs, fmt.Errorf("%s: symlinks are not followed", name))
+		if !e.Type().IsRegular() {
+			// Symlinks are not followed; a FIFO or device would block the
+			// read (and the UI, which loads inside Update) forever.
+			errs = append(errs, fmt.Errorf("%s: not a regular file", name))
 			continue
 		}
 		id := strings.TrimSuffix(name, ".toml")

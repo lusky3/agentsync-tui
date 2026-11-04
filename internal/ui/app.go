@@ -44,6 +44,9 @@ type Shutdowner interface{ Shutdown() }
 // shutdown cancels every background read the shell and its screens own.
 func (a *App) shutdown() {
 	a.rootCancel()
+	if a.d.Cancel != nil {
+		a.d.Cancel()
+	}
 	for _, s := range a.screens {
 		if sd, ok := s.(Shutdowner); ok {
 			sd.Shutdown()
@@ -72,6 +75,22 @@ type Deps struct {
 	// WithScope returns the runner and interactive builder for a scope.
 	// Nil disables scope switching.
 	WithScope func(runner.Scope) (runner.Runner, func(args ...string) *exec.Cmd)
+	// Ctx is the root of every background read a screen starts (BaseCtx);
+	// Cancel cancels it. main creates both before the screens are built;
+	// App.shutdown calls Cancel so quitting kills in-flight children (the
+	// Exec runner kills the process when its context is cancelled). Nil Ctx
+	// means context.Background (reads then outlive a quit).
+	Ctx    context.Context
+	Cancel context.CancelFunc
+}
+
+// BaseCtx is the context a screen derives its reads from: Deps.Ctx, or
+// context.Background when none was given.
+func BaseCtx(d Deps) context.Context {
+	if d.Ctx != nil {
+		return d.Ctx
+	}
+	return context.Background()
 }
 
 // HomeFor returns the canonical tree the given scope reads: AgentsyncHome for
@@ -143,7 +162,7 @@ func NewApp(d Deps, screens ...Screen) *App {
 	if d.Scope == "" {
 		d.Scope = runner.ScopeUser
 	}
-	root, rootCancel := context.WithCancel(context.Background())
+	root, rootCancel := context.WithCancel(BaseCtx(d))
 	return &App{
 		root:        root,
 		rootCancel:  rootCancel,
@@ -164,7 +183,7 @@ func NewApp(d Deps, screens ...Screen) *App {
 func (a *App) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	if a.run != nil {
-		cmds = append(cmds, checkVersionCmd(a.run))
+		cmds = append(cmds, checkVersionCmd(a.root, a.run))
 	}
 	cmds = append(cmds, a.chipCmd()) // unavailable, not pending, without a runner or project
 	// Nothing screen-side runs in project scope without a directory; leaving

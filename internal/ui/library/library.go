@@ -132,18 +132,18 @@ func (s *Screen) CapturesKeys() bool { return false }
 // Refresh re-reads the list; nothing runs inside Update.
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
-	id, gen, kind, r, home := s.id, s.gen, s.kind, s.run, s.home
+	id, gen, kind, r, home, base := s.id, s.gen, s.kind, s.run, s.home, ui.BaseCtx(s.d)
 	if kind == Memory {
 		return func() tea.Msg { return readMemory(id, gen, home) }
 	}
-	return func() tea.Msg { return readList(id, gen, kind, r) }
+	return func() tea.Msg { return readList(base, id, gen, kind, r) }
 }
 
-func readList(id uint64, gen int, kind Kind, r runner.Runner) listMsg {
+func readList(base context.Context, id uint64, gen int, kind Kind, r runner.Runner) listMsg {
 	if r == nil {
 		return listMsg{id: id, gen: gen, note: "no runner"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
+	ctx, cancel := context.WithTimeout(base, listTimeout)
 	defer cancel()
 	word := infos[kind].word
 	res, err := r.Run(ctx, word, "list")
@@ -313,12 +313,17 @@ func (s *Screen) onRun(m ui.RunMsg) {
 }
 
 // storedLines masks and sanitises the streams, then caps the result at
-// maxStored bytes; nothing raw is kept.
+// maxStored bytes; nothing raw is kept. The raw input is cut at rawCap
+// first, on a line boundary: a secret never straddles a line, so a cut
+// inside one cannot leave a half-masked value behind.
 func storedLines(first, second string) []string {
 	const rawCap = 4 * maxStored
 	in := func(x string) string {
 		if len(x) > rawCap {
 			x = x[:rawCap]
+			if i := strings.LastIndexByte(x, '\n'); i >= 0 {
+				x = x[:i]
+			}
 		}
 		return strings.TrimSpace(mask.Text(x))
 	}

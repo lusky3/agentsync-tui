@@ -519,3 +519,30 @@ func TestNavigation(t *testing.T) {
 		t.Fatal("k")
 	}
 }
+
+// A verify result whose request is current but whose agent no longer sits
+// under the cursor (the list re-ordered meanwhile) must end the verifying
+// state, not leave "still verifying" until the cursor moves.
+func TestVerifyEndsWhenIdentityChanged(t *testing.T) {
+	s, _ := loaded(t, fixture(t, "agent-list-all.txt"))
+	moveTo(t, s, "claude")
+	sel, ok := s.selected()
+	if !ok {
+		t.Fatal("nothing selected")
+	}
+	s.vreq++
+	s.verifying, s.note = true, "verifying…"
+	other := sel
+	other.Name = "someone-else"
+	if cmd := s.verified(verifyMsg{req: s.vreq, key: "x", sel: other, fresh: listMsg{}}); cmd != nil {
+		t.Errorf("emitted %v", cmd())
+	}
+	if s.verifying || s.note != "" {
+		t.Errorf("verifying=%v note=%q after an identity mismatch", s.verifying, s.note)
+	}
+	_, cmd := s.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if strings.Contains(s.note, "still verifying") {
+		t.Errorf("x refused: %q", s.note)
+	}
+	_ = cmd
+}

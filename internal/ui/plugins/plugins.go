@@ -154,23 +154,23 @@ func (s *Screen) closeDetail() {
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
 	s.invalidate()
-	gen, r := s.gen, s.run
+	gen, r, base := s.gen, s.run, ui.BaseCtx(s.d)
 	return tea.Batch(
-		func() tea.Msg { return readPlugins(gen, r, listTimeout) },
-		func() tea.Msg { return readMarkets(gen, r, listTimeout) },
+		func() tea.Msg { return readPlugins(base, gen, r, listTimeout) },
+		func() tea.Msg { return readMarkets(base, gen, r, listTimeout) },
 	)
 }
 
 // runRead runs one read-only command and returns stdout, or a display-safe
 // failure note.
-func runRead(r runner.Runner, timeout time.Duration, args ...string) (string, string) {
+func runRead(base context.Context, r runner.Runner, timeout time.Duration, args ...string) (string, string) {
 	if r == nil {
 		return "", "no runner"
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(base)
 	if timeout > 0 {
 		cancel()
-		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		ctx, cancel = context.WithTimeout(base, timeout)
 	}
 	defer cancel()
 	name := strings.Join(args[:min(len(args), 2)], " ")
@@ -188,8 +188,8 @@ func runRead(r runner.Runner, timeout time.Duration, args ...string) (string, st
 	return res.Stdout, ""
 }
 
-func readPlugins(gen int, r runner.Runner, timeout time.Duration) pluginsMsg {
-	out, note := runRead(r, timeout, "plugin", "list")
+func readPlugins(base context.Context, gen int, r runner.Runner, timeout time.Duration) pluginsMsg {
+	out, note := runRead(base, r, timeout, "plugin", "list")
 	if note != "" {
 		return pluginsMsg{gen: gen, note: note}
 	}
@@ -200,8 +200,8 @@ func readPlugins(gen int, r runner.Runner, timeout time.Duration) pluginsMsg {
 	return pluginsMsg{gen: gen, plugins: list}
 }
 
-func readMarkets(gen int, r runner.Runner, timeout time.Duration) marketsMsg {
-	out, note := runRead(r, timeout, "marketplace", "list")
+func readMarkets(base context.Context, gen int, r runner.Runner, timeout time.Duration) marketsMsg {
+	out, note := runRead(base, r, timeout, "marketplace", "list")
 	if note != "" {
 		return marketsMsg{gen: gen, note: note}
 	}

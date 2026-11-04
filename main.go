@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -63,7 +64,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	ex := runner.NewExec("agentsync", scope, projectDir)
+	// Every background read a screen starts derives from ctx; the shell
+	// cancels it on quit so no agentsync child outlives the TUI.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	deps := ui.Deps{
+		Ctx:           ctx,
+		Cancel:        cancel,
 		Runner:        ex,
 		Interactive:   ex.Interactive,
 		AgentsyncHome: agentsyncHome(),

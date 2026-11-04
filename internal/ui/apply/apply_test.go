@@ -589,3 +589,22 @@ func TestForeignReadOnlyRunKeepsPreview(t *testing.T) {
 		t.Fatal("a foreign read-only run invalidated the preview")
 	}
 }
+
+// A mutation from another screen drops an in-flight preview; the status must
+// not keep saying "running preview…" for a preview that will be ignored.
+func TestForeignMutationClearsPreviewMessage(t *testing.T) {
+	h := newShell(t, okRunner("x"))
+	h.s.agents = "claude"
+	h.s.preview() // request recorded, DoMsg not run: the preview is in flight
+	if h.s.msg != "running preview…" {
+		t.Fatalf("precondition: msg %q", h.s.msg)
+	}
+	foreign := actions.Action{Title: "Disable server", Argv: []string{"mcp", "disable", "x"}}
+	h.s.Update(ui.RunMsg{Action: foreign})
+	if h.s.msg == "running preview…" || !strings.Contains(h.s.msg, "preview") {
+		t.Errorf("msg after a foreign mutation: %q", h.s.msg)
+	}
+	if h.s.req[h.s.mode] != nil {
+		t.Error("preview request still pending")
+	}
+}

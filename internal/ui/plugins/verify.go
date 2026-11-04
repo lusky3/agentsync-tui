@@ -61,12 +61,12 @@ func (s *Screen) mutate(k string) tea.Cmd {
 	}
 	s.vreq++
 	s.verifying, s.note = true, "verifying…"
-	r := s.run
+	r, base := s.run, ui.BaseCtx(s.d)
 	return func() tea.Msg {
 		if v.pane == panePlugins {
-			v.pf = readPlugins(0, r, verifyTimeout)
+			v.pf = readPlugins(base, 0, r, verifyTimeout)
 		} else {
-			v.mf = readMarkets(0, r, verifyTimeout)
+			v.mf = readMarkets(base, 0, r, verifyTimeout)
 		}
 		return v
 	}

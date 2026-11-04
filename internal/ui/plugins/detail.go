@@ -90,9 +90,9 @@ func (s *Screen) checkOutdated() tea.Cmd {
 	}
 	s.oreq++
 	s.oChecking, s.note = true, "checking for updates (network)…"
-	req, r := s.oreq, s.run
+	req, r, base := s.oreq, s.run, ui.BaseCtx(s.d)
 	return func() tea.Msg {
-		out, note := runRead(r, ui.NetworkTimeout, "plugin", "outdated")
+		out, note := runRead(base, r, ui.NetworkTimeout, "plugin", "outdated")
 		if note != "" {
 			return outdatedMsg{req: req, note: note}
 		}
@@ -144,9 +144,9 @@ func (s *Screen) openDetail() tea.Cmd {
 		return nil
 	}
 	s.detailFor, s.detail, s.detailBusy = p.Name, "", true
-	req, r, name := s.dreq, s.run, p.Name
+	req, r, name, base := s.dreq, s.run, p.Name, ui.BaseCtx(s.d)
 	return func() tea.Msg {
-		out, note := runRead(r, explainTimeout, "plugin", "explain", name)
+		out, note := runRead(base, r, explainTimeout, "plugin", "explain", name)
 		return explainMsg{req: req, name: name, text: capText(out), note: note}
 	}
 }

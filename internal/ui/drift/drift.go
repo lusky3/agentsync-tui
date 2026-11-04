@@ -111,12 +111,12 @@ func (s *Screen) CapturesKeys() bool { return false }
 // Refresh re-reads the status report.
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
-	gen, r := s.gen, s.run
-	return func() tea.Msg { return readStatus(gen, r) }
+	gen, r, base := s.gen, s.run, ui.BaseCtx(s.d)
+	return func() tea.Msg { return readStatus(base, gen, r) }
 }
 
-func readStatus(gen int, r runner.Runner) statusMsg {
-	res, err := call(r, "status", "--json")
+func readStatus(base context.Context, gen int, r runner.Runner) statusMsg {
+	res, err := call(base, r, "status", "--json")
 	if err != nil {
 		return statusMsg{gen: gen, note: "status failed: " + firstLine(mask.Text(err.Error()))}
 	}
@@ -136,11 +136,11 @@ func readStatus(gen int, r runner.Runner) statusMsg {
 	return statusMsg{gen: gen, rep: rep}
 }
 
-func call(r runner.Runner, args ...string) (runner.Result, error) {
+func call(base context.Context, r runner.Runner, args ...string) (runner.Result, error) {
 	if r == nil {
 		return runner.Result{}, errors.New("no runner")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	ctx, cancel := context.WithTimeout(base, readTimeout)
 	defer cancel()
 	return r.Run(ctx, args...)
 }
@@ -278,9 +278,9 @@ func (s *Screen) clamp() {
 func (s *Screen) openLegend() tea.Cmd {
 	s.lseq++
 	s.legend, s.legendText, s.legendNote = true, "", ""
-	seq, r := s.lseq, s.run
+	seq, r, base := s.lseq, s.run, ui.BaseCtx(s.d)
 	return func() tea.Msg {
-		res, err := call(r, "status", "--legend")
+		res, err := call(base, r, "status", "--legend")
 		if err != nil {
 			return legendMsg{seq: seq, note: "legend unavailable: " + firstLine(mask.Text(err.Error()))}
 		}
@@ -319,15 +319,15 @@ func (s *Screen) openDetail() tea.Cmd {
 	if !s.diffable {
 		return nil
 	}
-	seq, r := s.seq, s.run
-	diff := func() tea.Msg { return loadDiff(seq, r, it) }
-	explain := func() tea.Msg { return loadExplain(seq, r, it) }
+	seq, r, base := s.seq, s.run, ui.BaseCtx(s.d)
+	diff := func() tea.Msg { return loadDiff(base, seq, r, it) }
+	explain := func() tea.Msg { return loadExplain(base, seq, r, it) }
 	return tea.Batch(diff, explain)
 }
 
-func loadDiff(seq int, r runner.Runner, it model.StatusItem) detailMsg {
+func loadDiff(base context.Context, seq int, r runner.Runner, it model.StatusItem) detailMsg {
 	m := detailMsg{seq: seq, kind: kindDiff}
-	res, err := call(r, "diff", it.Path, "--json")
+	res, err := call(base, r, "diff", it.Path, "--json")
 	if err != nil {
 		m.note = "diff unavailable: " + firstLine(mask.Text(err.Error()))
 		return m
@@ -345,9 +345,9 @@ func loadDiff(seq int, r runner.Runner, it model.StatusItem) detailMsg {
 	return m
 }
 
-func loadExplain(seq int, r runner.Runner, it model.StatusItem) detailMsg {
+func loadExplain(base context.Context, seq int, r runner.Runner, it model.StatusItem) detailMsg {
 	m := detailMsg{seq: seq, kind: kindExplain}
-	res, err := call(r, "explain", it.Path+"#"+it.Pointer, "--json")
+	res, err := call(base, r, "explain", it.Path+"#"+it.Pointer, "--json")
 	if err != nil {
 		m.note = "provenance unavailable: " + firstLine(mask.Text(err.Error()))
 		return m

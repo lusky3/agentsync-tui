@@ -3,6 +3,7 @@ package secrets
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -767,5 +768,60 @@ func TestKeyFieldOpeningCancelsVerify(t *testing.T) {
 	}
 	if msgs := drive(s, cmd); len(msgs) != 0 {
 		t.Fatalf("late verify emitted %v while typing", msgs)
+	}
+}
+
+// ---- error notes are masked (whole-branch review I-4) ----------------------
+
+// A spawn error whose first line quotes a secret must reach neither the
+// stored note nor the view.
+func TestSpawnErrorNoteMasksCanary(t *testing.T) {
+	s, fr := loaded(t)
+	fr.set("", "", 0, errors.New("token=CANARYx1 refused\nsecond line"))
+	drive(s, s.Refresh())
+	if s.loadNote == "" || strings.Contains(s.loadNote, "CANARY") {
+		t.Errorf("stored note %q", s.loadNote)
+	}
+	if v := view(s); strings.Contains(v, "CANARY") || !strings.Contains(v, "token=") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+// A server file whose name cannot be a server id is reported by name; the
+// note goes through mask.Text so a secret-shaped name is masked.
+func TestServerLoadNoteMasksCanary(t *testing.T) {
+	s, _ := loadedWith(t, fixture(t, "secret-list.txt"), map[string]string{
+		"good":           "[server]\ntype = 'stdio'\ncommand = 'echo'\n",
+		"token=CANARYx1": "[server]\ntype = 'stdio'\ncommand = 'echo'\n",
+	})
+	if s.srvNote == "" || strings.Contains(s.srvNote, "CANARY") {
+		t.Errorf("stored note %q", s.srvNote)
+	}
+	if v := view(s); strings.Contains(v, "CANARY") || !strings.Contains(v, "servers unavailable: token=") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+// ---- remove warning is bounded (whole-branch review m-5) --------------------
+
+func TestRemoveWarningCapsUsers(t *testing.T) {
+	s, _ := loaded(t)
+	var ids []string
+	for i := 0; i < 12; i++ {
+		ids = append(ids, fmt.Sprintf("srv%02d", i))
+	}
+	s.uses = map[string][]string{"API_KEY": ids}
+	w := s.removeWarning("API_KEY")
+	for _, want := range []string{"srv00", "srv04", "and 7 more"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("warning missing %q: %q", want, w)
+		}
+	}
+	if strings.Contains(w, "srv05") || strings.Contains(w, "srv11") {
+		t.Errorf("warning lists beyond the cap: %q", w)
+	}
+	s.uses["API_KEY"] = ids[:5]
+	if w5 := s.removeWarning("API_KEY"); !strings.Contains(w5, "srv04") || strings.Contains(w5, "more") {
+		t.Errorf("five users must be listed in full: %q", w5)
 	}
 }

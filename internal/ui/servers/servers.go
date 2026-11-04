@@ -96,9 +96,9 @@ func (s *Screen) CapturesKeys() bool { return s.form != nil }
 // Refresh re-reads the canonical servers and the status report concurrently.
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
-	gen, home, r := s.gen, s.home, s.run
+	gen, home, r, base := s.gen, s.home, s.run, ui.BaseCtx(s.d)
 	load := func() tea.Msg { return loadSource(gen, home) }
-	status := func() tea.Msg { return readStatus(gen, r) }
+	status := func() tea.Msg { return readStatus(base, gen, r) }
 	return tea.Batch(load, status)
 }
 
@@ -108,11 +108,11 @@ func loadSource(gen int, home string) loadedMsg {
 	return loadedMsg{gen: gen, servers: srv, dirGone: errors.Is(statErr, os.ErrNotExist), err: err}
 }
 
-func readStatus(gen int, r runner.Runner) statusMsg {
+func readStatus(base context.Context, gen int, r runner.Runner) statusMsg {
 	if r == nil {
 		return statusMsg{gen: gen, note: "no runner"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), statusTimeout)
+	ctx, cancel := context.WithTimeout(base, statusTimeout)
 	defer cancel()
 	res, err := r.Run(ctx, "status", "--json")
 	switch {

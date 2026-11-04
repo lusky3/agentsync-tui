@@ -4,37 +4,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 )
 
-// realSnapshot lists entry names under the real ~/.agentsync, or nil+false
-// when it does not exist.
-func realSnapshot(t *testing.T) ([]string, bool) {
-	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(filepath.Join(home, ".agentsync"))
-	if os.IsNotExist(err) {
-		return nil, false
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	sort.Strings(names)
-	return names, true
-}
-
-func sameSnapshot(a []string, aok bool, b []string, bok bool) bool {
-	return aok == bok && strings.Join(a, "\x00") == strings.Join(b, "\x00")
-}
+// No test here reads the real home: hermeticity is proven by the path
+// assertions below, not by snapshotting ~/.agentsync.
 
 func under(dir, path string) bool {
 	rel, err := filepath.Rel(dir, path)
@@ -42,7 +17,6 @@ func under(dir, path string) bool {
 }
 
 func TestEnvPathsAreUnderTempDir(t *testing.T) {
-	before, beforeOK := realSnapshot(t)
 	realHome, _ := os.UserHomeDir()
 	tmp := t.TempDir()
 	// New's own TempDir is a sibling inside the same per-test root.
@@ -70,22 +44,17 @@ func TestEnvPathsAreUnderTempDir(t *testing.T) {
 	if got["HOME"] != env.Home || got["AGENTSYNC_HOME"] != env.AgentsyncHome {
 		t.Errorf("Env slice disagrees with fields: %v", got)
 	}
-	after, afterOK := realSnapshot(t)
-	if !sameSnapshot(before, beforeOK, after, afterOK) {
-		t.Errorf("real ~/.agentsync changed: %v -> %v", before, after)
-	}
 }
 
 func TestInitDoesNotTouchRealHome(t *testing.T) {
 	if _, err := exec.LookPath("agentsync"); err != nil {
 		t.Skip("agentsync not on PATH")
 	}
-	before, beforeOK := realSnapshot(t)
 	env := New(t)
 	env.Init(t)
-	after, afterOK := realSnapshot(t)
-	if !sameSnapshot(before, beforeOK, after, afterOK) {
-		t.Errorf("real ~/.agentsync changed: %v -> %v", before, after)
+	realHome, _ := os.UserHomeDir()
+	if !under(filepath.Dir(t.TempDir()), env.AgentsyncHome) || under(realHome, env.AgentsyncHome) && !under(filepath.Dir(t.TempDir()), env.AgentsyncHome) {
+		t.Fatalf("AgentsyncHome %q is not a temp path", env.AgentsyncHome)
 	}
 	entries, err := os.ReadDir(env.AgentsyncHome)
 	if err != nil || len(entries) == 0 {

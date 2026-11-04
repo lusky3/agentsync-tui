@@ -88,17 +88,17 @@ func (s *Screen) CapturesKeys() bool { return false }
 // Refresh re-runs the read-only report through the Runner (never a DoMsg).
 func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
-	gen, r := s.gen, s.run
-	return func() tea.Msg { return readReport(gen, r) }
+	gen, r, base := s.gen, s.run, ui.BaseCtx(s.d)
+	return func() tea.Msg { return readReport(base, gen, r) }
 }
 
-func readReport(gen int, r runner.Runner) reportMsg {
+func readReport(base context.Context, gen int, r runner.Runner) reportMsg {
 	m := reportMsg{gen: gen}
 	if r == nil {
 		m.note = "reconcile report unavailable: no runner"
 		return m
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	ctx, cancel := context.WithTimeout(base, readTimeout)
 	defer cancel()
 	res, err := r.Run(ctx, actions.ReconcileReport().Argv...)
 	if err != nil {

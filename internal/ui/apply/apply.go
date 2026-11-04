@@ -292,7 +292,11 @@ func (s *Screen) onRun(m ui.RunMsg) {
 	if !m.Action.ReadOnly {
 		// A mutation issued elsewhere (another tab) may change what an apply
 		// or revert would do; read-only runs are harmless.
+		had := s.req[0] != nil || s.req[1] != nil || s.prev[0] != nil || s.prev[1] != nil
 		s.dropPreviews()
+		if had {
+			s.msg = "preview invalidated by another action — preview again"
+		}
 	}
 }
 

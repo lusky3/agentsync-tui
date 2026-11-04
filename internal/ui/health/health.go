@@ -90,7 +90,7 @@ func (s *Screen) Refresh() tea.Cmd {
 	s.gen++
 	s.Shutdown() // the superseded round's children die now, not after readTimeout
 	gen, r := s.gen, s.run
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ui.BaseCtx(s.d))
 	s.cancel = cancel
 	return tea.Batch(
 		func() tea.Msg { return readOne(ctx, gen, r, "doctor", actions.Doctor().Argv) },
