@@ -115,7 +115,7 @@ func TestCtrlCOnWriteNeedsConfirmation(t *testing.T) {
 	if v := content(app); !strings.Contains(v, "interrupted: ") {
 		t.Errorf("view: %q", v)
 	}
-	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "cancelled" {
+	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "interrupted" {
 		t.Errorf("log %+v", es)
 	}
 }
@@ -184,10 +184,10 @@ func TestQuitDuringWriteThenCtrlCInterrupts(t *testing.T) {
 	if err := fr.ctxErr(0); !errors.Is(err, context.Canceled) {
 		t.Errorf("write not interrupted: %v", err)
 	}
-	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "cancelled" {
+	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "interrupted" {
 		t.Fatalf("log %+v", es)
 	}
-	if b, err := os.ReadFile(d.LogPath); err != nil || !bytes.Contains(b, []byte("cancelled")) {
+	if b, err := os.ReadFile(d.LogPath); err != nil || !bytes.Contains(b, []byte("interrupted")) {
 		t.Errorf("log file %q err %v", b, err)
 	}
 }
@@ -210,11 +210,75 @@ func TestQuitDuringWriteFallsBackAfterInterrupt(t *testing.T) {
 		t.Fatal("ctrl+c after q must interrupt and schedule the quit deadline")
 	}
 	_, cmd = app.Update(quitDeadlineMsg{})
-	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "cancelled" {
+	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "interrupted" {
 		t.Fatalf("log entries %+v", es)
 	}
 	if cmd == nil {
 		t.Fatal("fallback did not quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("fallback cmd is not tea.Quit")
+	}
+}
+
+// ---- external quit (SIGTERM, SIGHUP, InterruptMsg) --------------------------
+
+// Bubble Tea turns SIGTERM into a QuitMsg (and SIGINT off a TTY into an
+// InterruptMsg) that the model never sees; main installs Filter so a run in
+// flight is logged as abandoned, and the reads are cancelled, before the
+// program exits.
+func TestExternalQuitLogsAbandonedRun(t *testing.T) {
+	for _, m := range []tea.Msg{tea.QuitMsg{}, tea.InterruptMsg{}} {
+		d := baseDeps(newFakeRunner())
+		d.LogPath = filepath.Join(t.TempDir(), "activity.log")
+		app := NewApp(d, newScreen("A", "a"))
+		app.Update(DoMsg{Action: actions.PluginUpgradeAll()})
+		app.Update(key("y")) // the write is running; its cmd is never executed
+		if app.running == nil {
+			t.Fatal("precondition: write running")
+		}
+		if got := app.Filter(app, m); got != m {
+			t.Errorf("Filter changed %T into %T", m, got)
+		}
+		if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "abandoned" {
+			t.Fatalf("%T: log %+v, want one abandoned entry", m, es)
+		}
+		if b, err := os.ReadFile(d.LogPath); err != nil || !bytes.Contains(b, []byte("abandoned")) {
+			t.Errorf("%T: log file %q err %v", m, b, err)
+		}
+		if app.root.Err() == nil {
+			t.Errorf("%T: background reads not cancelled", m)
+		}
+	}
+	// Idle: nothing to log, the message passes through.
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
+	app.Filter(app, tea.QuitMsg{})
+	if es := app.log.entries(); len(es) != 0 {
+		t.Errorf("idle quit logged %+v", es)
+	}
+}
+
+// q after a double ctrl+c (the write is already interrupted) must not offer
+// ctrl+c again and must bound the exit with the quit deadline.
+func TestQuitAfterInterruptedWriteSchedulesDeadline(t *testing.T) {
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
+	app.Update(DoMsg{Action: actions.PluginUpgradeAll()})
+	app.Update(key("y"))
+	app.Update(key("ctrl+c"))
+	app.Update(key("ctrl+c"))
+	if app.running == nil || !app.running.interrupted {
+		t.Fatal("precondition: write interrupted")
+	}
+	_, cmd := app.Update(key("q"))
+	if cmd == nil {
+		t.Fatal("q after an interrupt scheduled no quit deadline")
+	}
+	if v := content(app); strings.Contains(v, "press ctrl+c") || !strings.Contains(v, "interrupted") {
+		t.Errorf("status still offers ctrl+c: %q", app.status)
+	}
+	_, cmd = app.Update(quitDeadlineMsg{})
+	if es := app.log.entries(); len(es) != 1 || es[0].Outcome != "interrupted" {
+		t.Fatalf("log entries %+v", es)
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Error("fallback cmd is not tea.Quit")

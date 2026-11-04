@@ -56,7 +56,12 @@ later, SIGKILL. `ctrl+c` cancels a running read at once. A running write needs
 finished (or, after a `ctrl+c`, once it has stopped). agentsync v0.17.0 does
 not handle SIGINT itself, so an interrupted write still stops where it is:
 its single files are written atomically, but a multi-file run can be left
-half done, and `check` or a new preview shows what changed.
+half done, and `check` or a new preview shows what changed. The activity log
+records a stopped read as `cancelled` and a stopped write as `interrupted`.
+If the TUI itself is ended from outside (SIGTERM, SIGHUP when the terminal
+closes, or SIGINT while its input is not a terminal), a command still in
+flight is logged as `abandoned` and left running: a write is not cut off,
+and nothing else is stopped either.
 
 ### Navigation
 
@@ -132,7 +137,11 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
 - The activity log (in memory, and a file at
   `$XDG_STATE_HOME/agentsync-tui/activity.log`, default `~/.local/state`)
   records only the masked command line, outcome and duration of each action
-  the TUI runs, not command output or error text.
+  the TUI runs, not command output or error text. The file and its directory
+  are kept at mode 0600 and 0700 (a pre-existing looser mode is tightened,
+  a symlink in their place is refused and the file log is disabled with a
+  notice in the log pane), and the file is rotated at 1 MiB: `activity.log.1`
+  to `.3` are the older files, the oldest is dropped.
 - Text from outside (command output, errors, file names) has terminal control
   bytes stripped before it is rendered.
 

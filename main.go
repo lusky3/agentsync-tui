@@ -9,8 +9,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -91,9 +93,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	// The initial runner is the same pair a scope switch would build.
 	deps.Runner, deps.Interactive = withScope(scope)
+	a := ui.NewApp(deps, app.Screens(deps)...)
+	// Filter logs a run still in flight as abandoned when Bubble Tea ends the
+	// program on SIGTERM (QuitMsg) or an off-TTY SIGINT (InterruptMsg).
+	// SIGHUP (terminal closed) would otherwise end the process at once with
+	// no record, so it is turned into the same QuitMsg.
+	p := tea.NewProgram(a, tea.WithFilter(a.Filter))
+	hup, done := make(chan os.Signal, 1), make(chan struct{})
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		select {
+		case <-hup:
+			p.Send(tea.QuitMsg{})
+		case <-done:
+		}
+	}()
 	// Run restores the terminal (alt screen, raw mode) before returning,
 	// including after a recovered panic.
-	if _, err := tea.NewProgram(ui.NewApp(deps, app.Screens(deps)...)).Run(); err != nil {
+	_, err = p.Run()
+	signal.Stop(hup)
+	close(done)
+	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
 		return 1
 	}

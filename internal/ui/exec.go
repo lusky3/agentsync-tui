@@ -221,7 +221,11 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 		}
 		a.running = nil
 	}
-	a.record(m.Action, outcome(m.Result, m.Err), dur)
+	oc := outcome(m.Result, m.Err)
+	if oc == "cancelled" && !m.Action.ReadOnly {
+		oc = "interrupted" // a write was sent SIGINT (interrupt), not just dropped
+	}
+	a.record(m.Action, oc, dur)
 	if a.quitting {
 		// q was pressed while this run was in flight: it is now cancelled
 		// and logged, so exit.
@@ -292,10 +296,15 @@ func (a *App) quitWhenCancelled() tea.Cmd {
 // quitAfterWrite handles q while a write is running. The write is not
 // stopped: the program exits once it has finished and been logged (see
 // finish). A ctrl+c meanwhile interrupts it (interrupt), and then the exit
-// waits at most quitGrace.
+// waits at most quitGrace. If the write was already interrupted, the exit
+// is bounded by quitGrace from now.
 func (a *App) quitAfterWrite() tea.Cmd {
 	a.quitting = true
 	a.shutdown()
+	if a.running.interrupted {
+		a.setStatus(statusWarn, "an interrupted write is still stopping: quitting when it has")
+		return a.quitTick()
+	}
 	a.running.armed = time.Now()
 	a.setStatus(statusWarn, "a write is running: quitting when it finishes; press ctrl+c to interrupt it, or wait")
 	return nil
@@ -308,9 +317,34 @@ func (a *App) quitTick() tea.Cmd {
 
 // quitDeadline is the quitGrace fallback.
 func (a *App) quitDeadline() tea.Cmd {
-	if a.running != nil {
-		a.record(a.running.act, "cancelled", time.Since(a.running.start))
+	if r := a.running; r != nil {
+		oc := "cancelled"
+		if r.interrupted {
+			oc = "interrupted"
+		}
+		a.record(r.act, oc, time.Since(r.start))
 		a.running = nil
 	}
 	return tea.Quit
+}
+
+// Filter is the tea.WithFilter hook main installs. Bubble Tea turns SIGTERM
+// into a tea.QuitMsg and SIGINT off a TTY into a tea.InterruptMsg, and ends
+// the program on either without the model seeing it; main also sends a
+// QuitMsg on SIGHUP. A run still in flight is logged here as "abandoned"
+// (a write keeps running on its own, which is the safe choice for a write;
+// a read or editor is simply left) and the background reads are cancelled,
+// so the next start has a record of it. The shell's own quits (q, ctrl+c
+// when idle, the quit after a logged run) have already logged and cleared
+// the run, so they pass through unchanged.
+func (a *App) Filter(_ tea.Model, msg tea.Msg) tea.Msg {
+	switch msg.(type) {
+	case tea.QuitMsg, tea.InterruptMsg:
+		if r := a.running; r != nil {
+			a.record(r.act, "abandoned", time.Since(r.start))
+			a.running = nil
+		}
+		a.shutdown()
+	}
+	return msg
 }
