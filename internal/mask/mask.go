@@ -308,49 +308,10 @@ func walk(v any, key string, forced bool) any {
 		}
 		return v
 	case map[string]any:
-		keys := make([]string, 0, len(x))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		out := make(map[string]any, len(x))
-		for _, k := range keys {
-			mk := Text(k)
-			for n := 2; ; n++ { // masked keys may collide; never drop a value
-				if _, dup := out[mk]; !dup {
-					break
-				}
-				mk = Text(k) + "#" + strconv.Itoa(n)
-			}
-			sk := Sanitize(k)
-			out[mk] = walk(x[k], sk, forced || secretKey(sk))
-		}
-		return out
+		return walkObject(x, forced)
 	case []any:
 		if !forced && strings.EqualFold(key, "args") {
-			// Scalars are stringified so the flag-to-next-value logic still
-			// applies across a number ("--port", 8080, "--token", "x");
-			// containers are walked in place.
-			strs := make([]string, len(x))
-			for i, c := range x {
-				switch c := c.(type) {
-				case string:
-					strs[i] = c
-				case json.Number, bool:
-					strs[i] = fmt.Sprint(c)
-				}
-			}
-			masked := Args(strs)
-			out := make([]any, len(x))
-			for i, c := range x {
-				switch c.(type) {
-				case string, json.Number, bool:
-					out[i] = masked[i]
-				default:
-					out[i] = walk(c, key, forced)
-				}
-			}
-			return out
+			return walkArgs(x, key)
 		}
 		out := make([]any, len(x))
 		for i, c := range x {
@@ -359,6 +320,62 @@ func walk(v any, key string, forced bool) any {
 		return out
 	}
 	return v
+}
+
+// walkObject walks an object in key order. Keys go through Text; a value
+// under a secret-bearing key is walked as forced.
+func walkObject(x map[string]any, forced bool) map[string]any {
+	keys := make([]string, 0, len(x))
+	for k := range x {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make(map[string]any, len(x))
+	for _, k := range keys {
+		sk := Sanitize(k)
+		out[uniqueMaskedKey(out, k)] = walk(x[k], sk, forced || secretKey(sk))
+	}
+	return out
+}
+
+// uniqueMaskedKey returns Text(k), suffixed "#2", "#3", ... while that is
+// already a key of out: masked keys may collide, and a value is never dropped.
+func uniqueMaskedKey(out map[string]any, k string) string {
+	base := Text(k)
+	mk := base
+	for n := 2; ; n++ {
+		if _, dup := out[mk]; !dup {
+			return mk
+		}
+		mk = base + "#" + strconv.Itoa(n)
+	}
+}
+
+// walkArgs masks an args array (not under a secret-bearing key) as one
+// command line. Scalars are stringified so the flag-to-next-value logic of
+// Args still applies across a number ("--port", 8080, "--token", "x");
+// containers are walked in place, under key and unforced.
+func walkArgs(x []any, key string) []any {
+	strs := make([]string, len(x))
+	for i, c := range x {
+		switch c := c.(type) {
+		case string:
+			strs[i] = c
+		case json.Number, bool:
+			strs[i] = fmt.Sprint(c)
+		}
+	}
+	masked := Args(strs)
+	out := make([]any, len(x))
+	for i, c := range x {
+		switch c.(type) {
+		case string, json.Number, bool:
+			out[i] = masked[i]
+		default:
+			out[i] = walk(c, key, false)
+		}
+	}
+	return out
 }
 
 // OneLine sanitises s and folds newlines and tabs into spaces, for status

@@ -516,3 +516,16 @@ func TestDebugMasksStructurallyAndAfterSecretWords(t *testing.T) {
 		t.Error("Text must not use the whitespace rule")
 	}
 }
+
+// Containers inside an args array are walked too: a secret-named key in an
+// object, or a flag and its value in a nested array, is masked as it would
+// be anywhere else.
+func TestHunkWalksContainersInsideArgs(t *testing.T) {
+	h := Hunk(model.Hunk{Pointer: "/mcpServers/x", Source: `{"args":["--flag",{"token":"CANARYa1"},["--api-key","CANARYa2"]]}`})
+	noCanary(t, "args containers", h.Source)
+	for _, want := range []string{`"token": "` + Mask + `"`, `"--api-key",`, `"--flag",`} {
+		if !strings.Contains(h.Source, want) {
+			t.Errorf("missing %q in %s", want, h.Source)
+		}
+	}
+}
