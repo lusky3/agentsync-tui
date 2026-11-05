@@ -446,7 +446,7 @@ func TestStatusFailureStillListsServers(t *testing.T) {
 }
 
 func TestScopeAwareSwapsRunner(t *testing.T) {
-	var _ ui.ScopeAware = (*Screen)(nil)
+	var _ ui.ScopeSetter = (*Screen)(nil)
 	var _ ui.KeyCapturer = (*Screen)(nil)
 	var _ ui.Screen = (*Screen)(nil)
 	fr1, fr2 := okRunner(), okRunner()

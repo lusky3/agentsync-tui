@@ -23,6 +23,10 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
+// progName names the binary in flag errors, the version line and messages,
+// and is the directory of its state under $XDG_STATE_HOME.
+const progName = "agentsync-tui"
+
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
@@ -73,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
-	fs := flag.NewFlagSet("agentsync-tui", flag.ContinueOnError)
+	fs := flag.NewFlagSet(progName, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	scopeFlag := fs.String("scope", "", "agentsync scope: user or project (default user; --project implies project)")
@@ -91,7 +95,7 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 		return 2
 	}
 	if *readTimeout < 0 || *writeTimeout < 0 {
-		_, _ = fmt.Fprintln(stderr, "agentsync-tui: --read-timeout and --write-timeout must not be negative")
+		_, _ = fmt.Fprintln(stderr, progName+": --read-timeout and --write-timeout must not be negative")
 		return 2
 	}
 	if *debugLog != "" {
@@ -100,19 +104,19 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 			err = ui.SetDebugLog(abs)
 		}
 		if err != nil {
-			_, _ = fmt.Fprintln(stderr, "agentsync-tui: --debug-log:", err)
+			_, _ = fmt.Fprintln(stderr, progName+": --debug-log:", err)
 			return 2
 		}
 	}
 
 	if *showVersion {
-		_, _ = fmt.Fprintln(stdout, "agentsync-tui "+resolveVersion(version, debug.ReadBuildInfo))
+		_, _ = fmt.Fprintln(stdout, progName+" "+resolveVersion(version, debug.ReadBuildInfo))
 		return 0
 	}
 
 	scope, projectDir, err := resolveScope(*scopeFlag, *project)
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
+		_, _ = fmt.Fprintln(stderr, progName+":", err)
 		return 2
 	}
 
@@ -196,7 +200,7 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	a.RecordShutdown(endChildren(sig, sigs, h))
 	h.stop(sigs)
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
+		_, _ = fmt.Fprintln(stderr, progName+":", err)
 		return 1
 	}
 	return 0
@@ -267,16 +271,16 @@ func resolveScope(scopeFlag, project string) (runner.Scope, string, error) {
 // is for the CLI's --project.
 func agentsyncHome(getenv func(string) string) string {
 	if root := getenv("AGENTSYNC_TARGET_ROOT"); root != "" {
-		return filepath.Join(root, ".agentsync")
+		return filepath.Join(root, ui.HomeDirName)
 	}
 	if h := getenv("AGENTSYNC_HOME"); h != "" {
 		return h
 	}
 	if home := getenv("HOME"); home != "" {
-		return filepath.Join(home, ".agentsync")
+		return filepath.Join(home, ui.HomeDirName)
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".agentsync")
+		return filepath.Join(home, ui.HomeDirName)
 	}
 	return ""
 }
@@ -285,10 +289,10 @@ func agentsyncHome(getenv func(string) string) string {
 // ~/.local/state; empty (file log disabled) when neither is known.
 func logPath() string {
 	if s := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(s) {
-		return filepath.Join(s, "agentsync-tui", "activity.log")
+		return filepath.Join(s, progName, "activity.log")
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".local", "state", "agentsync-tui", "activity.log")
+		return filepath.Join(home, ".local", "state", progName, "activity.log")
 	}
 	return ""
 }

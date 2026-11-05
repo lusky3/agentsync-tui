@@ -65,7 +65,7 @@ func (s *Screen) Title() string { return "Agents" }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware.
+// SetScope implements ui.ScopeSetter.
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.reads.Supersede()

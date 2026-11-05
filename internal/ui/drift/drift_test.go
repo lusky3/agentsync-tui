@@ -453,7 +453,7 @@ func TestDetailScroll(t *testing.T) {
 func TestScopeAwareSwapsRunner(t *testing.T) {
 	old := statusRunner(multiStatus)
 	s := newLoaded(t, old)
-	var _ ui.ScopeAware = s
+	var _ ui.ScopeSetter = s
 	var _ ui.KeyCapturer = s
 	nr := statusRunner(`{"agents":[{"agent":"newagent","items":[]}]}`)
 	s.SetScope(nr, runner.ScopeProject, "")

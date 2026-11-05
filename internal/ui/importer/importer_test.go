@@ -486,7 +486,7 @@ func TestImportPendingDisplayShownInHeader(t *testing.T) {
 
 func TestImportScopeAwareSwapsRunner(t *testing.T) {
 	h := claudeShell(t, "plan")
-	var _ ui.ScopeAware = h.s
+	var _ ui.ScopeSetter = h.s
 	var _ ui.Screen = h.s
 	r2 := newRunner("codex enabled=true scope=project\n", "plan")
 	h.s.SetScope(r2, runner.ScopeProject, "")

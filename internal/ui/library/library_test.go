@@ -608,7 +608,7 @@ func TestNoCreateDeleteKeys(t *testing.T) {
 func TestScopeAwareSwapsRunner(t *testing.T) {
 	r1 := stdoutRunner("one\n")
 	s, _ := loaded(t, Skill, r1, "one", "two")
-	var sa ui.ScopeAware = s
+	var sa ui.ScopeSetter = s
 	r2 := stdoutRunner("two\n")
 	sa.SetScope(r2, runner.ScopeProject, s.home)
 	drive(s, s.Refresh())

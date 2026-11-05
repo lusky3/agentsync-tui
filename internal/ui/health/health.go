@@ -65,7 +65,7 @@ func (s *Screen) Title() string { return "Health" }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware: swap the runner and forget both outputs.
+// SetScope implements ui.ScopeSetter: swap the runner and forget both outputs.
 func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, _ string) {
 	s.run = r
 	s.reads.Supersede()

@@ -458,7 +458,7 @@ func TestNoValueInputField(t *testing.T) {
 
 func TestKeyCapturerWhileTyping(t *testing.T) {
 	var _ ui.KeyCapturer = (*Screen)(nil)
-	var _ ui.ScopeAware = (*Screen)(nil)
+	var _ ui.ScopeSetter = (*Screen)(nil)
 	s, _ := loaded(t)
 	if s.CapturesKeys() {
 		t.Fatal("captures at rest")

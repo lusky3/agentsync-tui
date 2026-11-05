@@ -125,7 +125,7 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 // CapturesKeys implements ui.KeyCapturer: true while the add field is open.
 func (s *Screen) CapturesKeys() bool { return s.typing >= 0 }
 
-// SetScope implements ui.ScopeAware.
+// SetScope implements ui.ScopeSetter.
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.reads.Supersede()

@@ -591,7 +591,7 @@ func TestPartialFailureKeepsOtherPane(t *testing.T) {
 }
 
 func TestScopeAwareSwapsRunner(t *testing.T) {
-	var _ ui.ScopeAware = (*Screen)(nil)
+	var _ ui.ScopeSetter = (*Screen)(nil)
 	a, b := standardFake(t), standardFake(t)
 	s := loaded(t, a)
 	n := a.count()
