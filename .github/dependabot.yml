@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Test-only, pinned on purpose to a pseudo-version of an exp module
+      # (see go.mod); bump it by hand and expect breaking changes.
+      - dependency-name: github.com/charmbracelet/x/exp/teatest/v2
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,112 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install agentsync (the version the TUI is tested against)
+        # v0.17.0
+        run: go install github.com/spxrogers/agentsync/cmd/agentsync@db33c6a70da69f990c878b9f07fe94f42e62c0ed
+      - name: Install age (for the secrets tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age
+      - name: Vet
+        run: go vet ./...
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Test (includes the e2e smoke test against the real agentsync)
+        run: |
+          agentsync --version
+          go test -race -count=1 ./...
+
+  sonarcloud:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    # Repository secrets are not exposed to pull requests from forks (or to
+    # Dependabot's PRs unless duplicated under its own secrets), so the scan is
+    # skipped there instead of failing.
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Sonar needs full history for blame and new-code detection
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install agentsync (the version the TUI is tested against)
+        # v0.17.0
+        run: go install github.com/spxrogers/agentsync/cmd/agentsync@db33c6a70da69f990c878b9f07fe94f42e62c0ed
+      - name: Install age (for the secrets tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age
+      - name: Test with coverage
+        run: go test -count=1 -coverprofile=coverage.out ./...
+      - name: SonarCloud scan
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+      - name: SonarCloud scan skipped (no SONAR_TOKEN available)
+        if: ${{ env.SONAR_TOKEN == '' }}
+        run: echo "SONAR_TOKEN is not available to this run; skipping the scan."
+
+  govulncheck:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: govulncheck (pinned; module verified through GOSUMDB)
+        # v1.9.0
+        run: go run golang.org/x/vuln/cmd/govulncheck@e672cbe8fbc8c76e28fcb6db0efd9ce354e0dac5 ./...
+
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+
+  goreleaser-check:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.19.0
+          args: check

@@ -1,0 +1,45 @@
+version: 2
+
+project_name: agentsync-tui
+
+builds:
+  - id: agentsync-tui
+    main: .
+    binary: agentsync-tui
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "agentsync-tui_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+# One SPDX SBOM per archive (<archive>.sbom.json), built with syft.
+sboms:
+  - artifacts: archive
+
+release:
+  # A pre-release tag (v1.0.0-rc1, v0.2.0-beta.1) publishes a GitHub
+  # pre-release, never a full one.
+  prerelease: auto
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

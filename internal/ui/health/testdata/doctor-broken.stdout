@@ -1,0 +1,55 @@
+agentsync doctor
+  AGENTSYNC_HOME: /tmp/TestCaptureTmp3272272341/001/home/.agentsync
+  Go version:     go1.26.10
+  OS / arch:      linux amd64
+
+Source repo
+  ✓ home dir   ok
+  ✓ .state/    ok (writable)
+  ✓ state file ok
+  ✗ schema     invalid: parse /tmp/TestCaptureTmp3272272341/001/home/.agentsync/mcp/broken.toml: toml: basic strings cannot have new lines
+
+Secrets
+  skipped (schema invalid above)
+
+Adapter detection
+  ✓ amazonq      detected
+  • amp          not detected
+  ✓ antigravity  detected
+  • augmentcode  not detected
+  ✓ claude       detected
+  • cline        not detected
+  • codex        not detected
+  • continue     not detected
+  • copilot      not detected
+  • copilot-cli  not detected
+  ✓ crush        detected
+  • cursor       not detected
+  • factory      not detected
+  • firebase     not detected
+  • gemini       not detected
+  ✓ goose        detected
+  • grok         not detected
+  • jetbrains    not detected
+  • jules        not detected
+  • junie        not detected
+  • kilocode     not detected
+  • kiro         not detected
+  • mistral      not detected
+  • opencode     not detected
+  • openhands    not detected
+  • pi           not detected
+  • qwen         not detected
+  • roo          not detected
+  • trae         not detected
+  • warp         not detected
+  • windsurf     not detected
+  • zed          not detected
+
+Plugins
+  skipped (schema invalid above)
+
+Destination git backup
+  skipped (schema invalid above)
+
+✗ 1 issue(s) detected — fix before running `agentsync apply`

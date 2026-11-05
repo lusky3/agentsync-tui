@@ -1,0 +1,1 @@
+(no agents registered; try: agentsync agent add claude, or agentsync agent list --all)

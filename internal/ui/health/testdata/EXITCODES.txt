@@ -1,0 +1,4 @@
+doctor-fresh: exit 0
+check-fresh: exit 0
+doctor-broken: exit 1
+check-broken: exit 1

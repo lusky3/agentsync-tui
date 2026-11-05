@@ -1,0 +1,32 @@
+amazonq      available
+amp          available
+antigravity  registered enabled=false scope=user
+augmentcode  available
+claude       registered enabled=true scope=user
+cline        available
+codex        available
+continue     available
+copilot      available
+copilot-cli  available
+crush        available
+cursor       available
+factory      available
+firebase     available
+gemini       available
+goose        available
+grok         available
+jetbrains    available
+jules        available
+junie        available
+kilocode     available
+kiro         available
+mistral      available
+opencode     available
+openhands    available
+pi           available
+qwen         available
+roo          available
+trae         available
+warp         available
+windsurf     available
+zed          available

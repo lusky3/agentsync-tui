@@ -1,0 +1,2 @@
+antigravity enabled=false scope=user
+claude     enabled=true scope=user

@@ -1,0 +1,4 @@
+agentsync plugin explain — translation coverage for 1 plugin
+
+▸ hello@localmkt  v1.0.0
+  → claude      ✓ full        1 command
