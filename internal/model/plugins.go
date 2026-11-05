@@ -218,8 +218,12 @@ func parseMarketplaceLine(line string) (Marketplace, bool) {
 		return Marketplace{}, false
 	}
 	m := Marketplace{Name: name}
+	// i indexes " "+rest, so (" "+rest)[k] is rest[k-1]: the sha value
+	// starts at rest[i+len("sha=")], and the url ends at the space before
+	// "sha=", rest[:i-1]. At i == 0 the matched space is the prepended one,
+	// so a sha field right after "url=" means an empty url.
 	if i := strings.LastIndex(" "+rest, " sha="); i >= 0 {
-		sha := strings.Fields(rest[max(i-1, 0)+len(" sha="):])
+		sha := strings.Fields(rest[i+len("sha="):])
 		rest = strings.TrimSpace(rest[:max(i-1, 0)])
 		if len(sha) > 0 && tokenRe.MatchString(sha[0]) {
 			m.SHA = sha[0]
