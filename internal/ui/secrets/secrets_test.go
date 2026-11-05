@@ -362,6 +362,23 @@ func TestRemoveIsDestructiveWithWarning(t *testing.T) {
 }
 
 func TestNoRevealKey(t *testing.T) {
+	keys := everyKeyPress()
+	for _, typing := range []bool{false, true} {
+		reached := 0
+		for _, k := range keys {
+			checkKeyRevealsNothing(t, typing, k)
+			reached++
+		}
+		if reached != len(keys) {
+			t.Fatalf("typing=%v: reached %d of %d keys", typing, reached, len(keys))
+		}
+	}
+}
+
+// everyKeyPress is every printable ASCII key, every letter with ctrl, alt,
+// alt+shift and ctrl+alt (with and without text, as terminals send them),
+// and the named keys and F1-F12 bare and with shift, ctrl or alt.
+func everyKeyPress() []tea.KeyPressMsg {
 	var keys []tea.KeyPressMsg
 	for r := rune(0x20); r < 0x7f; r++ {
 		keys = append(keys, tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -384,33 +401,31 @@ func TestNoRevealKey(t *testing.T) {
 		keys = append(keys, tea.KeyPressMsg{Code: c}, tea.KeyPressMsg{Code: c, Mod: tea.ModShift},
 			tea.KeyPressMsg{Code: c, Mod: tea.ModCtrl}, tea.KeyPressMsg{Code: c, Mod: tea.ModAlt})
 	}
-	for _, typing := range []bool{false, true} {
-		reached := 0
-		for _, k := range keys {
-			// a fresh screen per key, so every key meets the handler for
-			// its mode instead of whatever an earlier key left open
-			s, fr := loadedWith(t, fixture(t, "secret-list.txt"), nil)
-			if typing {
-				press(s, "n")
-			}
-			if s.CapturesKeys() != typing {
-				t.Fatalf("typing=%v: wrong mode before %q", typing, k.String())
-			}
-			_, cmd := s.Update(k)
-			reached++
-			for _, m := range drive(s, cmd) {
-				a := m.(ui.DoMsg).Action
-				if len(a.Argv) > 1 && a.Argv[0] == "secret" && a.Argv[1] == "get" {
-					t.Fatalf("typing=%v: key %q emitted secret get", typing, k.String())
-				}
-			}
-			if fr.sawGet() {
-				t.Fatalf("typing=%v: key %q made the runner run secret get", typing, k.String())
-			}
+	return keys
+}
+
+// checkKeyRevealsNothing presses k on a fresh screen, in the key-name field
+// when typing, and fails if it emitted or ran `secret get`.
+func checkKeyRevealsNothing(t *testing.T, typing bool, k tea.KeyPressMsg) {
+	t.Helper()
+	// a fresh screen per key, so every key meets the handler for
+	// its mode instead of whatever an earlier key left open
+	s, fr := loadedWith(t, fixture(t, "secret-list.txt"), nil)
+	if typing {
+		press(s, "n")
+	}
+	if s.CapturesKeys() != typing {
+		t.Fatalf("typing=%v: wrong mode before %q", typing, k.String())
+	}
+	_, cmd := s.Update(k)
+	for _, m := range drive(s, cmd) {
+		a := m.(ui.DoMsg).Action
+		if len(a.Argv) > 1 && a.Argv[0] == "secret" && a.Argv[1] == "get" {
+			t.Fatalf("typing=%v: key %q emitted secret get", typing, k.String())
 		}
-		if reached != len(keys) {
-			t.Fatalf("typing=%v: reached %d of %d keys", typing, reached, len(keys))
-		}
+	}
+	if fr.sawGet() {
+		t.Fatalf("typing=%v: key %q made the runner run secret get", typing, k.String())
 	}
 }
 

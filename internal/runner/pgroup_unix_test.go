@@ -33,6 +33,33 @@ func TestCancelSignalsProcessGroup(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, rerr := e.Run(ctx, "plugin", "upgrade", "--all"); done <- rerr }()
+	child := waitChildPid(t, logPath)
+	t.Cleanup(func() { _ = syscall.Kill(child, syscall.SIGKILL) })
+	if !alive(child) {
+		t.Fatal("precondition: child not running")
+	}
+	cancel()
+	select {
+	case err = <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for alive(child) {
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d survived the cancelled run (not in the signalled process group)", child)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// waitChildPid waits (10 s at most) for spawn-child.sh to log "ready" in
+// logPath and returns the pid of the child it reported.
+func waitChildPid(t *testing.T, logPath string) int {
+	t.Helper()
 	var child int
 	deadline := time.Now().Add(10 * time.Second)
 	for child == 0 {
@@ -47,26 +74,7 @@ func TestCancelSignalsProcessGroup(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Cleanup(func() { _ = syscall.Kill(child, syscall.SIGKILL) })
-	if !alive(child) {
-		t.Fatal("precondition: child not running")
-	}
-	cancel()
-	select {
-	case err = <-done:
-	case <-time.After(20 * time.Second):
-		t.Fatal("Run did not return after cancel")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("err = %v, want context.Canceled", err)
-	}
-	deadline = time.Now().Add(5 * time.Second)
-	for alive(child) {
-		if time.Now().After(deadline) {
-			t.Fatalf("child %d survived the cancelled run (not in the signalled process group)", child)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	return child
 }
 
 // spawn starts spawn-child.sh through Exec and returns the helper's pid
@@ -111,30 +119,36 @@ func TestShutdownTerminatesLiveGroups(t *testing.T) {
 		name string
 		sig  os.Signal
 	}{{"quit (SIGINT)", os.Interrupt}, {"SIGTERM", syscall.SIGTERM}, {"terminal closed (SIGHUP)", syscall.SIGHUP}} {
-		t.Run(c.name, func(t *testing.T) {
-			self, child, done := spawn(t, 10*time.Second)
-			if pgidGone(self) || !alive(child) {
-				t.Fatal("precondition: group running")
-			}
-			start := time.Now()
-			Shutdown(c.sig, 300*time.Millisecond, 300*time.Millisecond)
-			if d := time.Since(start); d > 5*time.Second {
-				t.Errorf("Shutdown took %v", d)
-			}
-			if !pgidGone(self) || alive(child) {
-				t.Fatalf("process group %d survived %v: group gone %v, child alive %v", self, c.sig, pgidGone(self), alive(child))
-			}
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Errorf("Run returned %v (a killed child is an exit code, not an error)", err)
-				}
-			case <-time.After(5 * time.Second):
-				t.Error("Run did not return after the group was killed")
-			}
-		})
+		t.Run(c.name, func(t *testing.T) { checkShutdownEndsGroup(t, c.sig) })
 	}
 	Shutdown(os.Interrupt, time.Second, time.Second) // nothing live: returns at once
+}
+
+// checkShutdownEndsGroup runs a helper group that ignores sig, ends it
+// with Shutdown(sig) and checks the whole group is gone promptly and Run
+// reports the kill as an exit, not an error.
+func checkShutdownEndsGroup(t *testing.T, sig os.Signal) {
+	t.Helper()
+	self, child, done := spawn(t, 10*time.Second)
+	if pgidGone(self) || !alive(child) {
+		t.Fatal("precondition: group running")
+	}
+	start := time.Now()
+	Shutdown(sig, 300*time.Millisecond, 300*time.Millisecond)
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("Shutdown took %v", d)
+	}
+	if !pgidGone(self) || alive(child) {
+		t.Fatalf("process group %d survived %v: group gone %v, child alive %v", self, sig, pgidGone(self), alive(child))
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run returned %v (a killed child is an exit code, not an error)", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("Run did not return after the group was killed")
+	}
 }
 
 // pidsFrom reads the "self <pid>" and "child <pid>" lines of a helper log.

@@ -208,28 +208,34 @@ func TestListsItemsPerKind(t *testing.T) {
 	}
 	titles := map[Kind]string{Skill: "Skills", Subagent: "Subagents", Command: "Commands", Hook: "Hooks", LSP: "LSP", Memory: "Memory"}
 	for kind, w := range want {
-		t.Run(kindWord[kind], func(t *testing.T) {
-			fr := stdoutRunner(fixture(t, kindWord[kind]+"-list.txt"))
-			s, _ := loaded(t, kind, fr)
-			if !reflect.DeepEqual(names(s), w) {
-				t.Errorf("items %v, want %v", names(s), w)
-			}
-			if got := fr.callList(); len(got) != 1 || got[0] != kindWord[kind]+" list" {
-				t.Errorf("calls %q", got)
-			}
-			v := view(s)
-			for _, n := range w {
-				if !strings.Contains(v, n) {
-					t.Errorf("view lacks %q:\n%s", n, v)
-				}
-			}
-			if s.Title() != titles[kind] {
-				t.Errorf("title %q", s.Title())
-			}
-		})
+		t.Run(kindWord[kind], func(t *testing.T) { checkListsKind(t, kind, w, titles[kind]) })
 	}
 	if New(ui.Deps{}, Memory).Title() != "Memory" {
 		t.Error("memory title")
+	}
+}
+
+// checkListsKind loads kind from its fixture and checks it lists exactly
+// want (reading through one "<kind> list" call), shows each name and is
+// titled title.
+func checkListsKind(t *testing.T, kind Kind, want []string, title string) {
+	t.Helper()
+	fr := stdoutRunner(fixture(t, kindWord[kind]+"-list.txt"))
+	s, _ := loaded(t, kind, fr)
+	if !reflect.DeepEqual(names(s), want) {
+		t.Errorf("items %v, want %v", names(s), want)
+	}
+	if got := fr.callList(); len(got) != 1 || got[0] != kindWord[kind]+" list" {
+		t.Errorf("calls %q", got)
+	}
+	v := view(s)
+	for _, n := range want {
+		if !strings.Contains(v, n) {
+			t.Errorf("view lacks %q:\n%s", n, v)
+		}
+	}
+	if s.Title() != title {
+		t.Errorf("title %q", s.Title())
 	}
 }
 
@@ -570,23 +576,10 @@ func TestNoCreateDeleteKeys(t *testing.T) {
 	keys := allKeys()
 	reached, edits := 0, map[string]bool{}
 	for _, k := range keys {
-		// The constructed press must really be the key it is named after.
-		if got := key(k).String(); got != k {
-			t.Fatalf("key(%q).String() = %q: the harness does not send what it names", k, got)
-		}
-		s, _ := loaded(t, Skill, stdoutRunner("alpha\nbeta\n"), "alpha", "beta") // fresh per key
-		if len(s.items) != 2 {
-			t.Fatalf("setup: %v", names(s))
+		if pressOnFreshList(t, k) {
+			edits[k] = true
 		}
 		reached++
-		for _, m := range press(s, k) {
-			switch m.(type) {
-			case ui.EditFileMsg:
-				edits[k] = true
-			default:
-				t.Errorf("key %q emitted %#v", k, m)
-			}
-		}
 	}
 	if reached != len(keys) || reached < 300 {
 		t.Errorf("reached %d of %d keys", reached, len(keys))
@@ -601,6 +594,29 @@ func TestNoCreateDeleteKeys(t *testing.T) {
 			t.Errorf("burst emitted %#v", m)
 		}
 	}
+}
+
+// pressOnFreshList presses k on a freshly loaded two-item list and reports
+// whether it asked to edit a file; any other message fails the test.
+func pressOnFreshList(t *testing.T, k string) (edited bool) {
+	t.Helper()
+	// The constructed press must really be the key it is named after.
+	if got := key(k).String(); got != k {
+		t.Fatalf("key(%q).String() = %q: the harness does not send what it names", k, got)
+	}
+	s, _ := loaded(t, Skill, stdoutRunner("alpha\nbeta\n"), "alpha", "beta") // fresh per key
+	if len(s.items) != 2 {
+		t.Fatalf("setup: %v", names(s))
+	}
+	for _, m := range press(s, k) {
+		switch m.(type) {
+		case ui.EditFileMsg:
+			edited = true
+		default:
+			t.Errorf("key %q emitted %#v", k, m)
+		}
+	}
+	return edited
 }
 
 // ---- shell integration ------------------------------------------------------

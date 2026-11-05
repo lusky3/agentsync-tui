@@ -257,47 +257,56 @@ func TestEditOutcomeBroadcastRefused(t *testing.T) {
 	})
 }
 
+// editOutcomeCase is one editor run: the $VISUAL to use, the prefix the
+// finish error must have ("" = none) and the follow-up runs expected.
+type editOutcomeCase struct {
+	name, editor string
+	wantErr      string
+	wantCalls    int
+}
+
 func TestEditOutcomeBroadcastStartedFinishedFailed(t *testing.T) {
-	for _, tc := range []struct {
-		name, editor string
-		wantErr      string
-		wantCalls    int
-	}{
+	for _, tc := range []editOutcomeCase{
 		{"exit 0", "true", "", 1},
 		{"exit nonzero", "false", "editor failed (exit 1)", 0},
 		{"spawn error", "/nonexistent/editor-\x1b[31m", "editor error", 0},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home, file := editHome(t, "srv.toml")
-			t.Setenv("VISUAL", tc.editor)
-			fr := newFakeRunner()
-			d := baseDeps(fr)
-			d.AgentsyncHome = home
-			rs := &outcomeScreen{fakeScreen: newScreen("A", "a")}
-			h := start(t, d, rs)
-			h.tm.Send(EditFileMsg{Path: file, After: []actions.Action{actions.Check()}})
-			h.waitMsg("editDoneMsg", isEditDone)
-			if tc.wantCalls > 0 {
-				h.waitStarted()
-				fr.respond <- fakeResp{}
-				h.waitRun()
-			}
-			h.final()
-			outs := rs.got()
-			if len(outs) != 2 || !outs[0].Started || outs[0].Finished || outs[0].Path != file ||
-				!outs[1].Finished || outs[1].Path != file {
-				t.Fatalf("outcomes %+v", outs)
-			}
-			if tc.wantErr == "" && outs[1].Err != "" || !strings.HasPrefix(outs[1].Err, tc.wantErr) {
-				t.Errorf("finish err %q want prefix %q", outs[1].Err, tc.wantErr)
-			}
-			if strings.ContainsAny(outs[1].Err, "\x1b\x07") {
-				t.Errorf("unsanitised %q", outs[1].Err)
-			}
-			if fr.nCalls() != tc.wantCalls {
-				t.Errorf("calls %d want %d", fr.nCalls(), tc.wantCalls)
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { checkEditOutcome(t, tc) })
+	}
+}
+
+// checkEditOutcome edits a file with tc.editor and checks the Started and
+// Finished outcomes broadcast to the screens and the follow-up runs.
+func checkEditOutcome(t *testing.T, tc editOutcomeCase) {
+	t.Helper()
+	home, file := editHome(t, "srv.toml")
+	t.Setenv("VISUAL", tc.editor)
+	fr := newFakeRunner()
+	d := baseDeps(fr)
+	d.AgentsyncHome = home
+	rs := &outcomeScreen{fakeScreen: newScreen("A", "a")}
+	h := start(t, d, rs)
+	h.tm.Send(EditFileMsg{Path: file, After: []actions.Action{actions.Check()}})
+	h.waitMsg("editDoneMsg", isEditDone)
+	if tc.wantCalls > 0 {
+		h.waitStarted()
+		fr.respond <- fakeResp{}
+		h.waitRun()
+	}
+	h.final()
+	outs := rs.got()
+	if len(outs) != 2 || !outs[0].Started || outs[0].Finished || outs[0].Path != file ||
+		!outs[1].Finished || outs[1].Path != file {
+		t.Fatalf("outcomes %+v", outs)
+	}
+	if tc.wantErr == "" && outs[1].Err != "" || !strings.HasPrefix(outs[1].Err, tc.wantErr) {
+		t.Errorf("finish err %q want prefix %q", outs[1].Err, tc.wantErr)
+	}
+	if strings.ContainsAny(outs[1].Err, "\x1b\x07") {
+		t.Errorf("unsanitised %q", outs[1].Err)
+	}
+	if fr.nCalls() != tc.wantCalls {
+		t.Errorf("calls %d want %d", fr.nCalls(), tc.wantCalls)
 	}
 }
 
