@@ -23,9 +23,6 @@ const (
 	kindExplain = "explain"
 )
 
-// jsonFlag asks agentsync for machine-readable output (status, diff, explain).
-const jsonFlag = "--json"
-
 // Screen is the drift tab.
 type Screen struct {
 	base  context.Context
@@ -126,7 +123,7 @@ func (s *Screen) Refresh() tea.Cmd {
 }
 
 func readStatus(ctx context.Context, gen int, r runner.Runner, timeout time.Duration) statusMsg {
-	res, err := ui.Read(ctx, r, timeout, "status", jsonFlag)
+	res, err := ui.Read(ctx, r, timeout, "status", ui.JSONFlag)
 	if err != nil {
 		return statusMsg{gen: gen, note: ui.ReadNote("status", res, err)}
 	}
@@ -306,7 +303,7 @@ func (s *Screen) openDetail() tea.Cmd {
 
 func loadDiff(ctx context.Context, gen int, r runner.Runner, timeout time.Duration, it model.StatusItem) detailMsg {
 	m := detailMsg{gen: gen, kind: kindDiff}
-	res, err := ui.Read(ctx, r, timeout, "diff", it.Path, jsonFlag)
+	res, err := ui.Read(ctx, r, timeout, "diff", it.Path, ui.JSONFlag)
 	if err != nil {
 		m.note = "diff unavailable: " + mask.FirstLine(err.Error())
 		return m
@@ -326,7 +323,7 @@ func loadDiff(ctx context.Context, gen int, r runner.Runner, timeout time.Durati
 
 func loadExplain(ctx context.Context, gen int, r runner.Runner, timeout time.Duration, it model.StatusItem) detailMsg {
 	m := detailMsg{gen: gen, kind: kindExplain}
-	res, err := ui.Read(ctx, r, timeout, "explain", it.Path+"#"+it.Pointer, jsonFlag)
+	res, err := ui.Read(ctx, r, timeout, "explain", it.Path+"#"+it.Pointer, ui.JSONFlag)
 	if err != nil {
 		m.note = "provenance unavailable: " + mask.FirstLine(err.Error())
 		return m

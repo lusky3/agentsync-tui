@@ -125,7 +125,7 @@ func loadSource(gen int, home string) loadedMsg {
 }
 
 func readStatus(ctx context.Context, gen int, r runner.Runner, timeout time.Duration) statusMsg {
-	res, err := ui.Read(ctx, r, timeout, "status", "--json")
+	res, err := ui.Read(ctx, r, timeout, "status", ui.JSONFlag)
 	if note := ui.ReadNote("status", res, err); note != "" {
 		return statusMsg{gen: gen, note: note}
 	}
