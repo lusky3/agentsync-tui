@@ -170,3 +170,46 @@ func TestPluginAndOutdatedID(t *testing.T) {
 		}
 	}
 }
+
+// The url runs to the last " sha=" field; a sha field directly after
+// "url=" (no space) means an empty url. Only the first word after sha= is
+// the sha, and only when it is a safe token. None of these may panic.
+func TestParseMarketplacesURLAndSHAFields(t *testing.T) {
+	for _, tc := range []struct{ line, url, sha string }{
+		{"m url=sha=", "", ""},                      // empty url, empty sha: used to panic
+		{"m url=sha=abc", "", "abc"},                // used to read the sha as "bc"
+		{"m url=sha=a", "", "a"},                    // used to drop the sha
+		{"m url=x sha=abc", "x", "abc"},             //
+		{"m url=a b sha=c d", "a b", "c"},           // spaces in the url; first word of the sha
+		{"m url= sha=", "", ""},                     //
+		{"m url=  sha=abc", "", "abc"},              //
+		{"m url=a sha=b sha=c", "a sha=b", "c"},     // the last sha field wins
+		{"m url=sha=abc sha=def", "sha=abc", "def"}, // a url that starts with sha=
+		{"m url=x sha=!!", "x", ""},                 // unsafe sha dropped, row kept
+		{"m url=x", "x", ""},                        // no sha field
+		{"m url=sha", "sha", ""},                    // no '=' after sha
+		{"m url=xsha=abc", "xsha=abc", ""},          // sha= inside a word is not a field
+	} {
+		got, err := ParseMarketplaces(tc.line)
+		want := []Marketplace{{Name: "m", URL: tc.url, SHA: tc.sha}}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("ParseMarketplaces(%q) = %+v, %v; want %+v", tc.line, got, err, want)
+		}
+	}
+}
+
+// ParseMarketplaces never panics, and what it keeps is display-safe: a
+// clean url and a sha that is empty or a safe token.
+func FuzzParseMarketplaces(f *testing.F) {
+	for _, s := range []string{"m url=sha=", "m url=sha=abc", "m url=a b sha=c d", "m url= sha=", "(none)", "m url=x\x1b sha=y"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		got, _ := ParseMarketplaces(s)
+		for _, m := range got {
+			if !cleanText(m.URL) || (m.SHA != "" && !tokenRe.MatchString(m.SHA)) {
+				t.Fatalf("ParseMarketplaces(%q) kept %+v", s, m)
+			}
+		}
+	})
+}
