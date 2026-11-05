@@ -2,3 +2,4 @@
 .claude/worktrees/
 /agentsync-tui
 dist/
+coverage.out

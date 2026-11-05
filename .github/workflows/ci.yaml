@@ -36,6 +36,35 @@ jobs:
           agentsync --version
           go test -race -count=1 ./...
 
+  sonarcloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Repository secrets are not exposed to pull requests from forks (or to
+    # Dependabot's PRs unless duplicated under its own secrets), so the scan is
+    # skipped there instead of failing.
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Sonar needs full history for blame and new-code detection
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install agentsync (the version the TUI is tested against)
+        run: go install github.com/spxrogers/agentsync/cmd/agentsync@v0.17.0
+      - name: Install age (for the secrets tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age
+      - name: Test with coverage
+        run: go test -count=1 -coverprofile=coverage.out ./...
+      - name: SonarCloud scan
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+      - name: SonarCloud scan skipped (no SONAR_TOKEN available)
+        if: ${{ env.SONAR_TOKEN == '' }}
+        run: echo "SONAR_TOKEN is not available to this run; skipping the scan."
+
   govulncheck:
     runs-on: ubuntu-latest
     timeout-minutes: 15
