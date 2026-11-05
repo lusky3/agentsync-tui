@@ -38,42 +38,69 @@ func (s *Screen) fieldLine(label, val string, focused bool) string {
 // header is every fixed line above the output: the mode tabs, the form,
 // the command, the status and the output title. The body gets the rest.
 func (s *Screen) header() []string {
-	var lines []string
+	lines := []string{s.modeTabs()}
+	if s.mode == modeApply {
+		lines = append(lines, s.applyForm()...)
+	} else {
+		lines = append(lines, s.revertForm()...)
+	}
+	lines = append(lines, s.commandLines()...)
+	return append(lines, s.outputTitle())
+}
+
+// modeTabs renders "Apply Revert" with the current mode highlighted.
+func (s *Screen) modeTabs() string {
 	apply, revert := "Apply", "Revert"
 	if s.mode == modeApply {
 		apply = theme.Sel.Render(" Apply ")
 	} else {
 		revert = theme.Sel.Render(" Revert ")
 	}
-	lines = append(lines, apply+" "+revert)
-	if s.mode == modeApply {
-		lines = append(lines, theme.Warn.Render("apply writes destination files (agent config on disk)"))
-		agents := s.agents.Value
-		if agents == "" && s.focus == focusNone {
-			agents = "(all enabled)"
-		}
-		lines = append(lines, s.fieldLine("agents:", agents, s.focus == focusTarget))
-		lines = append(lines, "")
-	} else {
-		lines = append(lines, theme.Warn.Render("revert is destructive: it rewinds destination files to a checkpoint"))
-		target := s.target.Value
-		if s.all {
-			target = "all (--all)"
-		} else if target == "" && s.focus != focusTarget {
-			target = "(none: press e, or A for all)"
-		}
-		lines = append(lines, s.fieldLine("target:", target, s.focus == focusTarget))
-		to := s.to.Value
-		if to == "" && s.focus != focusTo {
-			to = "(previous checkpoint)"
-		}
-		lines = append(lines, s.fieldLine("--to:  ", to, s.focus == focusTo))
+	return apply + " " + revert
+}
+
+// applyForm is the apply warning and the agents field.
+func (s *Screen) applyForm() []string {
+	agents := s.agents.Value
+	if agents == "" && s.focus == focusNone {
+		agents = "(all enabled)"
 	}
+	return []string{
+		theme.Warn.Render("apply writes destination files (agent config on disk)"),
+		s.fieldLine("agents:", agents, s.focus == focusTarget),
+		"",
+	}
+}
+
+// revertForm is the revert warning and the target and --to fields.
+func (s *Screen) revertForm() []string {
+	target := s.target.Value
+	if s.all {
+		target = "all (--all)"
+	} else if target == "" && s.focus != focusTarget {
+		target = "(none: press e, or A for all)"
+	}
+	to := s.to.Value
+	if to == "" && s.focus != focusTo {
+		to = "(previous checkpoint)"
+	}
+	return []string{
+		theme.Warn.Render("revert is destructive: it rewinds destination files to a checkpoint"),
+		s.fieldLine("target:", target, s.focus == focusTarget),
+		s.fieldLine("--to:  ", to, s.focus == focusTo),
+	}
+}
+
+// commandLines is the command the form would run (or why it cannot be
+// built), whether its preview has passed, and the revert hint (a blank
+// line in apply mode).
+func (s *Screen) commandLines() []string {
+	var cmd string
 	p, err := s.pair()
 	if err != nil {
-		lines = append(lines, theme.Bad.Render("  "+mask.OneLine(mask.Text(err.Error()))))
+		cmd = theme.Bad.Render("  " + mask.OneLine(mask.Text(err.Error())))
 	} else {
-		lines = append(lines, theme.Bold.Render("  will run: ")+mask.OneLine(p.Real.Display()))
+		cmd = theme.Bold.Render("  will run: ") + mask.OneLine(p.Real.Display())
 	}
 	st := theme.Dim.Render("  no preview yet: preview first")
 	if err == nil && s.gates[s.mode].Allows(p.Real, s.scope) {
@@ -82,12 +109,16 @@ func (s *Screen) header() []string {
 	if s.msg != "" {
 		st = theme.Warn.Render("  " + mask.OneLine(s.msg))
 	}
-	lines = append(lines, st)
+	hint := ""
 	if s.mode == modeRevert {
-		lines = append(lines, theme.Dim.Render(revertHint))
-	} else {
-		lines = append(lines, "")
+		hint = theme.Dim.Render(revertHint)
 	}
+	return []string{cmd, st, hint}
+}
+
+// outputTitle names the output below: the last run's title and note, or a
+// dim "output" before any run.
+func (s *Screen) outputTitle() string {
 	head := theme.Dim.Render("output")
 	if o := s.out[s.mode]; o != nil {
 		head = theme.Bold.Render(o.Title)
@@ -95,7 +126,7 @@ func (s *Screen) header() []string {
 			head += "  " + theme.Bad.Render(mask.OneLine(o.Note))
 		}
 	}
-	return append(lines, head)
+	return head
 }
 
 // View implements tea.Model. Every outside string is sanitised or masked.

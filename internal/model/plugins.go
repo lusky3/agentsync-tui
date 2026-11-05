@@ -72,6 +72,35 @@ func lines(s string) (out []string, nonBlank bool) {
 	return out, len(out) > 0
 }
 
+// parseRows is the shared shape of the plain-text list parsers: each
+// trimmed non-blank line is either a status note (isNote: it counts as
+// recognised output but is not a row) or a candidate row (parse: ok false
+// skips it). Non-blank input with nothing recognised is an error naming
+// cmd. No rows is a nil slice.
+func parseRows[T any](stdout, cmd string, isNote func(line string) bool, parse func(line string) (T, bool)) ([]T, error) {
+	var out []T
+	ls, nonBlank := lines(stdout)
+	recognised := false
+	for _, line := range ls {
+		if isNote(line) {
+			recognised = true
+			continue
+		}
+		if row, ok := parse(line); ok {
+			out = append(out, row)
+			recognised = true
+		}
+	}
+	if nonBlank && !recognised {
+		return nil, errors.New(cmd + ": " + errNoRows.Error())
+	}
+	return out, nil
+}
+
+// parenNote reports a parenthesised status line ("(no plugins installed;
+// ...)"), as plugin list and marketplace list print when empty.
+func parenNote(line string) bool { return strings.HasPrefix(line, "(") }
+
 // ParsePluginList parses `plugin list` (no --json exists). Formats seen with
 // agentsync dev, 2026-11:
 //
@@ -84,44 +113,44 @@ func lines(s string) (out []string, nonBlank bool) {
 // and unparseable lines are ignored. Non-blank input with nothing
 // recognisable (and no parenthesised note) is an error.
 func ParsePluginList(stdout string) ([]Plugin, error) {
-	var out []Plugin
-	ls, nonBlank := lines(stdout)
-	recognised := false
-	for _, line := range ls {
-		if strings.HasPrefix(line, "(") {
-			recognised = true
-			continue
-		}
-		f := strings.Fields(line)
-		if len(f) < 2 || !validPluginID(f[0]) {
-			continue
-		}
-		p, known := Plugin{Name: f[0]}, false
-		for _, tok := range f[1:] {
-			k, v, eq := strings.Cut(tok, "=")
-			switch {
-			case !eq && tok == "enabled":
-				p.Enabled, known = true, true
-			case !eq && tok == "disabled":
-				known = true
-			case eq && k == "version":
-				known = true
-				if tokenRe.MatchString(v) {
-					p.Version = v
-				}
-			case eq && k == "sha" && tokenRe.MatchString(v):
-				p.SHA = v
-			}
-		}
-		if known {
-			out = append(out, p)
-			recognised = true
-		}
+	return parseRows(stdout, "plugin list", parenNote, parsePluginLine)
+}
+
+// parsePluginLine parses one `plugin list` row; ok is false unless the
+// line names a valid plugin id and holds at least one known field.
+func parsePluginLine(line string) (p Plugin, ok bool) {
+	f := strings.Fields(line)
+	if len(f) < 2 || !validPluginID(f[0]) {
+		return Plugin{}, false
 	}
-	if nonBlank && !recognised {
-		return nil, errors.New("plugin list: " + errNoRows.Error())
+	p = Plugin{Name: f[0]}
+	known := false
+	for _, tok := range f[1:] {
+		known = p.setField(tok) || known
 	}
-	return out, nil
+	return p, known
+}
+
+// setField applies one `plugin list` token to p and reports whether it is
+// a known field: "enabled", "disabled" or version=. A version or sha that
+// is not a safe token is left empty; sha= alone does not make a row.
+func (p *Plugin) setField(tok string) (known bool) {
+	k, v, eq := strings.Cut(tok, "=")
+	switch {
+	case !eq && tok == "enabled":
+		p.Enabled = true
+		return true
+	case !eq && tok == "disabled":
+		return true
+	case eq && k == "version":
+		if tokenRe.MatchString(v) {
+			p.Version = v
+		}
+		return true
+	case eq && k == "sha" && tokenRe.MatchString(v):
+		p.SHA = v
+	}
+	return false
 }
 
 // ParseOutdated parses `plugin outdated`:
@@ -137,33 +166,31 @@ func ParsePluginList(stdout string) ([]Plugin, error) {
 // [mode]" ("->" is accepted too). Other lines are ignored; non-blank input
 // with neither a bump nor a recognised status line is an error.
 func ParseOutdated(stdout string) ([]Outdated, error) {
-	var out []Outdated
-	ls, nonBlank := lines(stdout)
-	recognised := false
-	for _, line := range ls {
-		low := strings.ToLower(line)
-		if strings.Contains(low, "up to date") || strings.Contains(low, "pending bumps") || strings.Contains(low, "fetched marketplace") {
-			recognised = true
-			continue
-		}
-		f := strings.Fields(line)
-		if len(f) < 4 || (f[2] != "→" && f[2] != "->") || !validPluginID(f[0]) ||
-			!tokenRe.MatchString(f[1]) || !tokenRe.MatchString(f[3]) {
-			continue
-		}
-		o := Outdated{Name: f[0], From: f[1], To: f[3]}
-		if len(f) > 4 && strings.HasPrefix(f[4], "[") && strings.HasSuffix(f[4], "]") {
-			if m := f[4][1 : len(f[4])-1]; modeRe.MatchString(m) {
-				o.Mode = m
-			}
-		}
-		out = append(out, o)
-		recognised = true
+	return parseRows(stdout, "plugin outdated", outdatedNote, parseBump)
+}
+
+// outdatedNote reports one of the status lines `plugin outdated` prints
+// around (or instead of) the bumps.
+func outdatedNote(line string) bool {
+	low := strings.ToLower(line)
+	return strings.Contains(low, "up to date") || strings.Contains(low, "pending bumps") || strings.Contains(low, "fetched marketplace")
+}
+
+// parseBump parses one "<id> <from> → <to> [mode]" line; a mode that is
+// not a safe word is left empty.
+func parseBump(line string) (Outdated, bool) {
+	f := strings.Fields(line)
+	if len(f) < 4 || (f[2] != "→" && f[2] != "->") || !validPluginID(f[0]) ||
+		!tokenRe.MatchString(f[1]) || !tokenRe.MatchString(f[3]) {
+		return Outdated{}, false
 	}
-	if nonBlank && !recognised {
-		return nil, errors.New("plugin outdated: " + errNoRows.Error())
+	o := Outdated{Name: f[0], From: f[1], To: f[3]}
+	if len(f) > 4 && strings.HasPrefix(f[4], "[") && strings.HasSuffix(f[4], "]") {
+		if m := f[4][1 : len(f[4])-1]; modeRe.MatchString(m) {
+			o.Mode = m
+		}
 	}
-	return out, nil
+	return o, true
 }
 
 // ParseMarketplaces parses `marketplace list`:
@@ -175,39 +202,31 @@ func ParseOutdated(stdout string) ([]Outdated, error) {
 // must be plain ids (no "@"). Unparseable lines are ignored; non-blank
 // input with nothing recognisable is an error.
 func ParseMarketplaces(stdout string) ([]Marketplace, error) {
-	var out []Marketplace
-	ls, nonBlank := lines(stdout)
-	recognised := false
-	for _, line := range ls {
-		if strings.HasPrefix(line, "(") {
-			recognised = true
-			continue
-		}
-		name, rest, ok := strings.Cut(line, " ")
-		if !ok || !ident.Valid(name) {
-			continue
-		}
-		rest = strings.TrimSpace(rest)
-		if !strings.HasPrefix(rest, "url=") {
-			continue
-		}
-		rest = rest[len("url="):]
-		m := Marketplace{Name: name}
-		if i := strings.LastIndex(" "+rest, " sha="); i >= 0 {
-			sha := strings.Fields(rest[max(i-1, 0)+len(" sha="):])
-			rest = strings.TrimSpace(rest[:max(i-1, 0)])
-			if len(sha) > 0 && tokenRe.MatchString(sha[0]) {
-				m.SHA = sha[0]
-			}
-		}
-		if cleanText(rest) {
-			m.URL = rest
-		}
-		out = append(out, m)
-		recognised = true
+	return parseRows(stdout, "marketplace list", parenNote, parseMarketplaceLine)
+}
+
+// parseMarketplaceLine parses one "<name> url=<url> sha=<sha>" row. A sha
+// that is not a safe token, or a url holding control characters, is left
+// empty; the row is still kept.
+func parseMarketplaceLine(line string) (Marketplace, bool) {
+	name, rest, ok := strings.Cut(line, " ")
+	if !ok || !ident.Valid(name) {
+		return Marketplace{}, false
 	}
-	if nonBlank && !recognised {
-		return nil, errors.New("marketplace list: " + errNoRows.Error())
+	rest, ok = strings.CutPrefix(strings.TrimSpace(rest), "url=")
+	if !ok {
+		return Marketplace{}, false
 	}
-	return out, nil
+	m := Marketplace{Name: name}
+	if i := strings.LastIndex(" "+rest, " sha="); i >= 0 {
+		sha := strings.Fields(rest[max(i-1, 0)+len(" sha="):])
+		rest = strings.TrimSpace(rest[:max(i-1, 0)])
+		if len(sha) > 0 && tokenRe.MatchString(sha[0]) {
+			m.SHA = sha[0]
+		}
+	}
+	if cleanText(rest) {
+		m.URL = rest
+	}
+	return m, true
 }

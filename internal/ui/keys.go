@@ -34,31 +34,58 @@ const noProjectText = "no project directory: start with --project <path>"
 // key-capturing screen, then the global keys, then the active screen.
 func (a *App) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	s := k.String()
-	if s == "ctrl+c" {
-		if a.running != nil {
-			return a.interrupt()
-		}
-		a.shutdown()
-		return tea.Quit
-	}
-	if a.modal != nil {
+	switch {
+	case s == "ctrl+c":
+		return a.ctrlC()
+	case a.modal != nil:
 		return a.modalKey(k)
+	case a.activeCapturesKeys():
+		return a.updateActive(k)
 	}
-	if scr := a.current(); scr != nil && !a.noProject {
-		if kc, ok := scr.(KeyCapturer); ok && kc.CapturesKeys() {
-			return a.updateActive(k)
+	return a.globalKey(s, k)
+}
+
+// ctrlC interrupts the running action, or quits when nothing runs.
+func (a *App) ctrlC() tea.Cmd {
+	if a.running != nil {
+		return a.interrupt()
+	}
+	a.shutdown()
+	return tea.Quit
+}
+
+// activeCapturesKeys reports whether the active screen is taking text input
+// (KeyCapturer), so every key but ctrl+c goes to it. Never without a
+// project, whose placeholder replaces the screen.
+func (a *App) activeCapturesKeys() bool {
+	scr := a.current()
+	if scr == nil || a.noProject {
+		return false
+	}
+	kc, ok := scr.(KeyCapturer)
+	return ok && kc.CapturesKeys()
+}
+
+// quit handles q: a running write is waited for, a running read cancelled
+// first; otherwise the program quits at once.
+func (a *App) quit() tea.Cmd {
+	if a.running != nil && a.running.cancel != nil {
+		if !a.running.act.ReadOnly {
+			return a.quitAfterWrite()
 		}
+		return a.quitWhenCancelled()
 	}
+	a.shutdown()
+	return tea.Quit
+}
+
+// globalKey handles the shell's own keys (s is k.String()); any other key
+// goes to the active screen unless help or the no-project placeholder is
+// on show.
+func (a *App) globalKey(s string, k tea.KeyPressMsg) tea.Cmd {
 	switch s {
 	case "q":
-		if a.running != nil && a.running.cancel != nil {
-			if !a.running.act.ReadOnly {
-				return a.quitAfterWrite()
-			}
-			return a.quitWhenCancelled()
-		}
-		a.shutdown()
-		return tea.Quit
+		return a.quit()
 	case "tab":
 		return a.selectScreen(a.active + 1)
 	case "shift+tab":

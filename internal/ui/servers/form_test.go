@@ -177,6 +177,17 @@ func TestFormMasksEnvValueAndWarnsOnLiteral(t *testing.T) {
 	if n := strings.Count(v, literalWarning); n != 2 {
 		t.Errorf("want 2 literal warnings, got %d:\n%s", n, v)
 	}
+	// Each warning sits under a literal entry, never under a reference.
+	lines := strings.Split(v, "\n")
+	for i, l := range lines[:len(lines)-1] {
+		warned := strings.Contains(lines[i+1], literalWarning)
+		switch {
+		case (strings.Contains(l, "API_KEY = ") || strings.Contains(l, "X-Api-Key = ")) && !warned:
+			t.Errorf("literal entry %q has no warning under it", l)
+		case (strings.Contains(l, "TOKEN = ") || strings.Contains(l, "Authorization = ")) && warned:
+			t.Errorf("reference entry %q is warned about", l)
+		}
+	}
 	// ctrl+d removes the last entry of the focused list.
 	press(s, "ctrl+d")
 	if v := view(s); strings.Contains(v, "Authorization = ") || !strings.Contains(v, "X-Api-Key = ••••") {

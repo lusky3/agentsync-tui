@@ -85,40 +85,58 @@ func (f *form) update(k tea.KeyPressMsg) formResult {
 	case "shift+tab", "up":
 		f.focus = (f.focus + nFields - 1) % nFields
 	case "enter":
-		switch {
-		case (f.focus == fEnv || f.focus == fHeader) && strings.TrimSpace(f.vals[f.focus].Value) != "":
-			f.addEntry()
-		case f.focus == fAgents:
-			return formSubmit
-		default:
-			f.focus++
-		}
+		return f.enter()
 	case "left":
-		if f.focus == fType {
-			f.typ = (f.typ + len(serverTypes) - 1) % len(serverTypes)
-		}
+		f.cycleType(-1)
 	case "right":
-		if f.focus == fType {
-			f.typ = (f.typ + 1) % len(serverTypes)
-		}
+		f.cycleType(1)
 	case "space":
 		if f.focus == fType {
-			f.typ = (f.typ + 1) % len(serverTypes)
+			f.cycleType(1)
 		} else {
 			f.insert(" ")
 		}
 	case "ctrl+d":
-		if f.focus == fEnv && len(f.env) > 0 {
-			f.env = f.env[:len(f.env)-1]
-		} else if f.focus == fHeader && len(f.headers) > 0 {
-			f.headers = f.headers[:len(f.headers)-1]
-		}
+		f.dropLastEntry()
 	default:
 		if f.focus != fType {
 			f.vals[f.focus].Key(k)
 		}
 	}
 	return formNone
+}
+
+// enter adds a pending env/header entry to its list, submits from the
+// last field, and otherwise moves to the next field.
+func (f *form) enter() formResult {
+	switch {
+	case (f.focus == fEnv || f.focus == fHeader) && strings.TrimSpace(f.vals[f.focus].Value) != "":
+		f.addEntry()
+	case f.focus == fAgents:
+		return formSubmit
+	default:
+		f.focus++
+	}
+	return formNone
+}
+
+// cycleType steps the server type by step (wrapping) when the type field
+// has focus.
+func (f *form) cycleType(step int) {
+	if f.focus == fType {
+		f.typ = (f.typ + len(serverTypes) + step) % len(serverTypes)
+	}
+}
+
+// dropLastEntry removes the last added env or header entry, whichever list
+// the focused field feeds.
+func (f *form) dropLastEntry() {
+	switch {
+	case f.focus == fEnv && len(f.env) > 0:
+		f.env = f.env[:len(f.env)-1]
+	case f.focus == fHeader && len(f.headers) > 0:
+		f.headers = f.headers[:len(f.headers)-1]
+	}
 }
 
 // paste inserts bracketed-paste content into the focused input.
@@ -186,16 +204,9 @@ func (f *form) spec() (actions.AddSpec, error) {
 	if len(args) > 0 {
 		s.Args = args
 	}
-	env, headers := f.env, f.headers
-	if strings.TrimSpace(f.vals[fEnv].Value) != "" {
-		if env, err = addKV(env, f.vals[fEnv].Value, "="); err != nil {
-			return s, err
-		}
-	}
-	if strings.TrimSpace(f.vals[fHeader].Value) != "" {
-		if headers, err = addKV(headers, f.vals[fHeader].Value, ":"); err != nil {
-			return s, err
-		}
+	env, headers, err := f.withPending()
+	if err != nil {
+		return s, err
 	}
 	if len(env) > 0 {
 		s.Env = make(map[string]string, len(env))
@@ -206,12 +217,37 @@ func (f *form) spec() (actions.AddSpec, error) {
 	for _, h := range headers {
 		s.Headers = append(s.Headers, h.k+": "+h.v)
 	}
-	for _, a := range strings.Split(f.vals[fAgents].Value, ",") {
-		if a = strings.TrimSpace(a); a != "" {
-			s.Agents = append(s.Agents, a)
+	s.Agents = agentList(f.vals[fAgents].Value)
+	return s, nil
+}
+
+// withPending returns the env and header lists with the pending env and
+// header input, if any, added as enter would add it.
+func (f *form) withPending() (env, headers []kv, err error) {
+	env, headers = f.env, f.headers
+	if strings.TrimSpace(f.vals[fEnv].Value) != "" {
+		if env, err = addKV(env, f.vals[fEnv].Value, "="); err != nil {
+			return nil, nil, err
 		}
 	}
-	return s, nil
+	if strings.TrimSpace(f.vals[fHeader].Value) != "" {
+		if headers, err = addKV(headers, f.vals[fHeader].Value, ":"); err != nil {
+			return nil, nil, err
+		}
+	}
+	return env, headers, nil
+}
+
+// agentList splits the comma-separated agents field; blanks are dropped,
+// and none is nil (agentsync's default allowlist).
+func agentList(v string) []string {
+	var agents []string
+	for _, a := range strings.Split(v, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			agents = append(agents, a)
+		}
+	}
+	return agents
 }
 
 // submit validates the form and builds the add action. An existing ID is
@@ -282,41 +318,11 @@ func (f *form) view() string {
 	if serverTypes[f.typ] != "stdio" {
 		labels[fTarget] = "url"
 	}
-	id := strings.TrimSpace(f.vals[fID].Value)
-	if !actions.ValidID(id) {
-		id = "<id>"
-	}
-	warn := "literal value will be stored in plain text in mcp/" + mask.OneLine(id) +
-		".toml — prefer ${env:NAME} or ${secret:NAME}"
 	out := []string{theme.Bold.Render("Add MCP server"), ""}
+	warn := f.literalWarning()
 	for i := 0; i < nFields; i++ {
-		prefix, text := "  ", f.live(i)
-		if i == f.focus {
-			prefix = "> "
-			if i != fType {
-				text += "_"
-			}
-		}
-		out = append(out, prefix+fmt.Sprintf("%-8s ", labels[i])+text)
-		var list []kv
-		switch i {
-		case fEnv:
-			list = f.env
-		case fHeader:
-			list = f.headers
-		case fArgs:
-			for _, l := range freeTextWarning {
-				out = append(out, theme.Warn.Render("           "+l))
-			}
-		case fAgents:
-			out = append(out, theme.Dim.Render("           comma-separated agent names; empty = agentsync default"))
-		}
-		for _, e := range list {
-			out = append(out, "           "+mask.OneLine(mask.Text(e.k))+" = "+mask.OneLine(mask.Value(e.v)))
-			if !refVisible(e.v) {
-				out = append(out, theme.Warn.Render("           ! "+warn))
-			}
-		}
+		out = append(out, f.fieldLine(i, labels[i]))
+		out = append(out, f.fieldNotes(i, warn)...)
 	}
 	out = append(out, "")
 	if f.err != "" {
@@ -326,4 +332,61 @@ func (f *form) view() string {
 		out = append(out, theme.Dim.Render(l))
 	}
 	return strings.Join(out, "\n")
+}
+
+// literalWarning is the warning shown under an env or header entry whose
+// value is a literal, naming the file it would be stored in.
+func (f *form) literalWarning() string {
+	id := strings.TrimSpace(f.vals[fID].Value)
+	if !actions.ValidID(id) {
+		id = "<id>"
+	}
+	return "literal value will be stored in plain text in mcp/" + mask.OneLine(id) +
+		".toml — prefer ${env:NAME} or ${secret:NAME}"
+}
+
+// fieldLine renders field i as "label value", marked and followed by a
+// cursor when it has focus (the type field takes no cursor).
+func (f *form) fieldLine(i int, label string) string {
+	prefix, text := "  ", f.live(i)
+	if i == f.focus {
+		prefix = "> "
+		if i != fType {
+			text += "_"
+		}
+	}
+	return prefix + fmt.Sprintf("%-8s ", label) + text
+}
+
+// fieldNotes is what follows field i: the added env or header entries
+// (each literal one warned about with warn), the args warning, or the
+// agents hint.
+func (f *form) fieldNotes(i int, warn string) []string {
+	var out []string
+	switch i {
+	case fEnv:
+		out = entryLines(f.env, warn)
+	case fHeader:
+		out = entryLines(f.headers, warn)
+	case fArgs:
+		for _, l := range freeTextWarning {
+			out = append(out, theme.Warn.Render("           "+l))
+		}
+	case fAgents:
+		out = append(out, theme.Dim.Render("           comma-separated agent names; empty = agentsync default"))
+	}
+	return out
+}
+
+// entryLines renders added entries, masked, each literal value followed by
+// warn.
+func entryLines(list []kv, warn string) []string {
+	var out []string
+	for _, e := range list {
+		out = append(out, "           "+mask.OneLine(mask.Text(e.k))+" = "+mask.OneLine(mask.Value(e.v)))
+		if !refVisible(e.v) {
+			out = append(out, theme.Warn.Render("           ! "+warn))
+		}
+	}
+	return out
 }

@@ -550,3 +550,48 @@ func startWrite(t *testing.T, h *harness) {
 	h.pressAndWait(key("y"))
 	h.waitStarted()
 }
+
+// Without a project the placeholder replaces the screen, so a screen that
+// captures keys does not get them: the global keys work, and s switches
+// back to user scope.
+func TestNoProjectGlobalKeysBypassCapturingScreen(t *testing.T) {
+	fr := newFakeRunner()
+	d := Deps{Runner: fr, Scope: runner.ScopeProject}
+	d.WithScope = func(runner.Scope) (runner.Runner, func(...string) *exec.Cmd) { return fr, nil }
+	a := newScreen("A", "body-a")
+	a.capture = true
+	app := NewApp(d, a)
+	if !app.noProject {
+		t.Fatal("precondition: project scope without a directory")
+	}
+	app.Update(key("s"))
+	if app.scope != runner.ScopeUser || app.noProject {
+		t.Errorf("s did not switch to user scope: scope=%v noProject=%v", app.scope, app.noProject)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.keys) != 0 {
+		t.Errorf("hidden screen got keys %q", a.keys)
+	}
+}
+
+// An open confirm dialog takes keys before a screen that captures them:
+// esc cancels the dialog and the screen sees nothing.
+func TestModalTakesKeysBeforeCapturingScreen(t *testing.T) {
+	a := newScreen("A", "body-a")
+	a.capture = true
+	app := NewApp(baseDeps(newFakeRunner()), a)
+	app.Update(DoMsg{Action: mustAct(actions.McpRemove("x"))})
+	if app.modal == nil {
+		t.Fatal("precondition: confirm dialog open")
+	}
+	app.Update(key("esc"))
+	if app.modal != nil {
+		t.Error("esc did not cancel the dialog")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.keys) != 0 {
+		t.Errorf("screen got keys %q while the dialog was open", a.keys)
+	}
+}
