@@ -55,42 +55,42 @@ func tabWindow(widths []int, active, avail int) (lo, hi int, ok bool) {
 		return 0, -1, false
 	}
 	active = min(max(active, 0), n-1)
-	total := 0
-	for _, w := range widths {
-		total += w
-	}
-	if avail <= 0 || total <= avail {
+	if avail <= 0 || windowCost(widths, 0, n-1) <= avail {
 		return 0, n - 1, true
 	}
-	cost := func(lo, hi int) int {
-		c := 0
-		for i := lo; i <= hi; i++ {
-			c += widths[i]
-		}
-		if lo > 0 {
-			c++
-		}
-		if hi < n-1 {
-			c++
-		}
-		return c
-	}
-	if cost(active, active) > avail {
+	if windowCost(widths, active, active) > avail {
 		return active, active, false
 	}
 	lo, hi = active, active
 	for grew := true; grew; {
 		grew = false
-		if hi < n-1 && cost(lo, hi+1) <= avail {
+		if hi < n-1 && windowCost(widths, lo, hi+1) <= avail {
 			hi++
 			grew = true
 		}
-		if lo > 0 && cost(lo-1, hi) <= avail {
+		if lo > 0 && windowCost(widths, lo-1, hi) <= avail {
 			lo--
 			grew = true
 		}
 	}
 	return lo, hi, true
+}
+
+// windowCost is the width of labels [lo, hi] plus one column for each of
+// the ‹ / › markers the window needs (hidden labels to its left or right).
+// The whole strip, [0, n-1], needs no marker and costs the plain sum.
+func windowCost(widths []int, lo, hi int) int {
+	c := 0
+	for _, w := range widths[lo : hi+1] {
+		c += w
+	}
+	if lo > 0 {
+		c++
+	}
+	if hi < len(widths)-1 {
+		c++
+	}
+	return c
 }
 
 // tabStrip renders the labels that tabWindow keeps, or the "n/N Title"
