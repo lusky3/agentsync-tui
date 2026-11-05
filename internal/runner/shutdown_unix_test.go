@@ -60,17 +60,7 @@ func TestMarkWrite(t *testing.T) {
 func TestShutdownOutcomesAndKinds(t *testing.T) {
 	rself, rchild, _ := spawnKind(t, false)
 	wself, wchild, _ := spawnKind(t, true)
-	wd, _ := os.Getwd()
-	logPath := filepath.Join(t.TempDir(), "trap.log")
-	e := NewExec(filepath.Join(wd, "testdata", "trap-int.sh"), ScopeUser, "")
-	e.Env = append(os.Environ(), "TRAP_LOG="+logPath, "TRAP_MODE=exit")
-	go func() { _, _ = e.Run(context.Background(), "status", "--json") }()
-	for {
-		if b, _ := os.ReadFile(logPath); strings.Contains(string(b), "ready") {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	startExitingOnInt(t, "status", "--json")
 	start := time.Now()
 	ended := Shutdown(os.Interrupt, 300*time.Millisecond, 1500*time.Millisecond)
 	took := time.Since(start)
@@ -80,17 +70,7 @@ func TestShutdownOutcomesAndKinds(t *testing.T) {
 	if !pgidGone(rself) || !pgidGone(wself) || alive(rchild) || alive(wchild) {
 		t.Fatal("a group survived")
 	}
-	var read, write, exited *Ended
-	for i := range ended {
-		switch {
-		case ended[i].Args[0] == "status":
-			exited = &ended[i]
-		case ended[i].Write:
-			write = &ended[i]
-		default:
-			read = &ended[i]
-		}
-	}
+	read, write, exited := byKind(ended)
 	if read == nil || write == nil || exited == nil {
 		t.Fatalf("outcomes %+v", ended)
 	}
@@ -103,6 +83,39 @@ func TestShutdownOutcomesAndKinds(t *testing.T) {
 	if exited.Outcome != "exited" || exited.Took > time.Second || exited.Write {
 		t.Errorf("exiting child: %+v, want exited quickly", *exited)
 	}
+}
+
+// startExitingOnInt runs trap-int.sh with args, in the mode that exits on
+// SIGINT, and returns once its trap is armed.
+func startExitingOnInt(t *testing.T, args ...string) {
+	t.Helper()
+	wd, _ := os.Getwd()
+	logPath := filepath.Join(t.TempDir(), "trap.log")
+	e := NewExec(filepath.Join(wd, "testdata", "trap-int.sh"), ScopeUser, "")
+	e.Env = append(os.Environ(), "TRAP_LOG="+logPath, "TRAP_MODE=exit")
+	go func() { _, _ = e.Run(context.Background(), args...) }()
+	for {
+		if b, _ := os.ReadFile(logPath); strings.Contains(string(b), "ready") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// byKind picks out of ended the "status" run (the one that exits on the
+// signal), the write and the other read; nil for any that is missing.
+func byKind(ended []Ended) (read, write, exited *Ended) {
+	for i := range ended {
+		switch {
+		case ended[i].Args[0] == "status":
+			exited = &ended[i]
+		case ended[i].Write:
+			write = &ended[i]
+		default:
+			read = &ended[i]
+		}
+	}
+	return read, write, exited
 }
 
 // KillAll during a Shutdown (a second ctrl+c or SIGTERM while the TUI is

@@ -202,20 +202,7 @@ func TestSpawnErrorNote(t *testing.T) {
 			errors.New("exec: token=" + canary + " \x1b[31mred"),
 			runner.ErrNotInstalled,
 		} {
-			fr := newFake()
-			fr.errs[kind] = err
-			s := newScreen(fr)
-			refresh(s)
-			v := ansi.Strip(view(s)) // our own styling is not the command's
-			if strings.Contains(v, canary) || strings.ContainsRune(v, 0x1b) {
-				t.Errorf("%s: error text leaked: %q", kind, v)
-			}
-			if !strings.Contains(v, kind+" unavailable") {
-				t.Errorf("%s: no dim note: %q", kind, v)
-			}
-			if s.doctor.note != "" && kind == "check" || s.check.note != "" && kind == "doctor" {
-				t.Errorf("%s: the other section got the note", kind)
-			}
+			checkSpawnErrorNote(t, kind, err)
 		}
 	}
 	// No runner at all.
@@ -223,6 +210,27 @@ func TestSpawnErrorNote(t *testing.T) {
 	refresh(s)
 	if v := view(s); !strings.Contains(v, "doctor unavailable") || !strings.Contains(v, "check unavailable") {
 		t.Errorf("nil runner: %q", v)
+	}
+}
+
+// checkSpawnErrorNote makes the kind ("doctor" or "check") read fail with
+// err and checks the note is masked and sanitised, shown dim, and set on
+// that section only.
+func checkSpawnErrorNote(t *testing.T, kind string, err error) {
+	t.Helper()
+	fr := newFake()
+	fr.errs[kind] = err
+	s := newScreen(fr)
+	refresh(s)
+	v := ansi.Strip(view(s)) // our own styling is not the command's
+	if strings.Contains(v, canary) || strings.ContainsRune(v, 0x1b) {
+		t.Errorf("%s: error text leaked: %q", kind, v)
+	}
+	if !strings.Contains(v, kind+" unavailable") {
+		t.Errorf("%s: no dim note: %q", kind, v)
+	}
+	if s.doctor.note != "" && kind == "check" || s.check.note != "" && kind == "doctor" {
+		t.Errorf("%s: the other section got the note", kind)
 	}
 }
 

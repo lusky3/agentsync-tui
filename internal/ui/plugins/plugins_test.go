@@ -279,24 +279,7 @@ func TestRemoveIsDestructiveWithWarning(t *testing.T) {
 func TestAddPluginValidatesInline(t *testing.T) {
 	s := loaded(t, standardFake(t))
 	for _, bad := range []string{"-rf", "../x", "a b", "a@", "a@-b", "x\ay", ""} {
-		press(s, "a")
-		if !s.CapturesKeys() {
-			t.Fatal("add field must capture keys")
-		}
-		s.buf.Value = bad // straight into the buffer: typing already strips controls
-		if got := press(s, "enter"); len(got) != 0 {
-			t.Errorf("%q emitted %v", bad, got)
-		}
-		if !s.CapturesKeys() || s.inlineE == "" {
-			t.Errorf("%q: field closed or no inline error (%q)", bad, s.inlineE)
-		}
-		if !strings.Contains(view(s), "invalid") && bad != "" {
-			t.Errorf("%q: inline error not visible:\n%s", bad, view(s))
-		}
-		press(s, "esc")
-		if s.CapturesKeys() {
-			t.Fatal("esc must close the field")
-		}
+		checkAddRefused(t, s, bad)
 	}
 	press(s, "a")
 	typeText(s, "hello@localmkt")
@@ -306,6 +289,31 @@ func TestAddPluginValidatesInline(t *testing.T) {
 	}
 	if s.CapturesKeys() {
 		t.Error("field must close after submit")
+	}
+}
+
+// checkAddRefused opens the add field on s, submits bad and checks it is
+// refused inline (nothing emitted, the field stays open with a visible
+// error), then closes the field with esc.
+func checkAddRefused(t *testing.T, s *Screen, bad string) {
+	t.Helper()
+	press(s, "a")
+	if !s.CapturesKeys() {
+		t.Fatal("add field must capture keys")
+	}
+	s.buf.Value = bad // straight into the buffer: typing already strips controls
+	if got := press(s, "enter"); len(got) != 0 {
+		t.Errorf("%q emitted %v", bad, got)
+	}
+	if !s.CapturesKeys() || s.inlineE == "" {
+		t.Errorf("%q: field closed or no inline error (%q)", bad, s.inlineE)
+	}
+	if !strings.Contains(view(s), "invalid") && bad != "" {
+		t.Errorf("%q: inline error not visible:\n%s", bad, view(s))
+	}
+	press(s, "esc")
+	if s.CapturesKeys() {
+		t.Fatal("esc must close the field")
 	}
 }
 

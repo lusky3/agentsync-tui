@@ -107,6 +107,32 @@ func TestConfirmModalShowsMaskedDisplayAndBadges(t *testing.T) {
 	}
 }
 
+// mustNotRun asserts that the enter just processed (o) left the modal open
+// and started nothing.
+func mustNotRun(t *testing.T, fr *fakeRunner, label string, o observed) {
+	t.Helper()
+	if !o.modalOpen || o.running {
+		t.Fatalf("%s: modalOpen=%v running=%v, want modal open and nothing running", label, o.modalOpen, o.running)
+	}
+	if n := fr.nCalls(); n != 0 {
+		t.Fatalf("%s: runner called %d times", label, n)
+	}
+}
+
+// erase presses backspace n times.
+func (h *harness) erase(n int) {
+	for i := 0; i < n; i++ {
+		h.pressAndWait(key("backspace"))
+	}
+}
+
+// typeAndWait types s one key press at a time.
+func (h *harness) typeAndWait(s string) {
+	for _, r := range s {
+		h.pressAndWait(key(string(r)))
+	}
+}
+
 func TestDestructiveNeedsTypedConfirm(t *testing.T) {
 	fr := newFakeRunner()
 	h := start(t, baseDeps(fr), newScreen("A", "a"))
@@ -115,38 +141,18 @@ func TestDestructiveNeedsTypedConfirm(t *testing.T) {
 		t.Fatal("McpRemove should be destructive")
 	}
 	h.tm.Send(DoMsg{Action: act})
-	// mustNotRun asserts that the enter just processed left the modal open
-	// and started nothing.
-	mustNotRun := func(label string, o observed) {
-		t.Helper()
-		if !o.modalOpen || o.running {
-			t.Fatalf("%s: modalOpen=%v running=%v, want modal open and nothing running", label, o.modalOpen, o.running)
-		}
-		if n := fr.nCalls(); n != 0 {
-			t.Fatalf("%s: runner called %d times", label, n)
-		}
-	}
-	erase := func(n int) { // backspace n times
-		for i := 0; i < n; i++ {
-			h.pressAndWait(key("backspace"))
-		}
-	}
-	mustNotRun("y", h.pressAndWait(key("y")))
-	erase(1)
-	mustNotRun("enter on empty buffer", h.pressAndWait(key("enter")))
+	mustNotRun(t, fr, "y", h.pressAndWait(key("y")))
+	h.erase(1)
+	mustNotRun(t, fr, "enter on empty buffer", h.pressAndWait(key("enter")))
 	h.pressAndWait(key("y"))
-	mustNotRun("y then enter", h.pressAndWait(key("enter")))
-	erase(1)
+	mustNotRun(t, fr, "y then enter", h.pressAndWait(key("enter")))
+	h.erase(1)
 	for _, wrong := range []string{"REMOVE", " remove", "removex", "remov"} {
-		for _, r := range wrong {
-			h.pressAndWait(key(string(r)))
-		}
-		mustNotRun(fmt.Sprintf("wrong verb %q", wrong), h.pressAndWait(key("enter")))
-		erase(len(wrong))
+		h.typeAndWait(wrong)
+		mustNotRun(t, fr, fmt.Sprintf("wrong verb %q", wrong), h.pressAndWait(key("enter")))
+		h.erase(len(wrong))
 	}
-	for _, r := range "remove" {
-		h.pressAndWait(key(string(r)))
-	}
+	h.typeAndWait("remove")
 	if o := h.pressAndWait(key("enter")); o.modalOpen || !o.running {
 		t.Fatalf("typed verb did not start the run: modalOpen=%v running=%v", o.modalOpen, o.running)
 	}
@@ -188,32 +194,41 @@ func TestModalPromptVisibleAtSmallHeights(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, h := range []int{10, 12, 24} {
-		app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "body-a"))
-		app.Update(tea.WindowSizeMsg{Width: 100, Height: h})
-		app.Update(DoMsg{Action: act})
-		out := ansi.Strip(content(app))
-		if n := strings.Count(out, "\n") + 1; n > h {
-			t.Errorf("height %d: view has %d lines", h, n)
+		checkModalAtHeight(t, act, h)
+	}
+}
+
+// checkModalAtHeight opens the confirm dialog for act in a body h rows tall
+// and checks that the view fits, the prompt, badges and title (and from 12
+// rows the warning) are visible, a clipped box is marked, and typing still
+// reaches the prompt.
+func checkModalAtHeight(t *testing.T, act actions.Action, h int) {
+	t.Helper()
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "body-a"))
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: h})
+	app.Update(DoMsg{Action: act})
+	out := ansi.Strip(content(app))
+	if n := strings.Count(out, "\n") + 1; n > h {
+		t.Errorf("height %d: view has %d lines", h, n)
+	}
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(out, "│", " ")), " ")
+	for _, want := range []string{"Type purge to confirm", "[destructive]", "Disable agent"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("height %d: modal missing %q:\n%s", h, want, out)
 		}
-		flat := strings.Join(strings.Fields(strings.ReplaceAll(out, "│", " ")), " ")
-		for _, want := range []string{"Type purge to confirm", "[destructive]", "Disable agent"} {
-			if !strings.Contains(flat, want) {
-				t.Errorf("height %d: modal missing %q:\n%s", h, want, out)
-			}
-		}
-		if h >= 12 && !strings.Contains(flat, "This cannot be undone") {
-			t.Errorf("height %d: warning missing:\n%s", h, out)
-		}
-		if h == 10 && !strings.Contains(out, "│ …") {
-			t.Errorf("height %d: no clip marker inside the box:\n%s", h, out)
-		}
-		// Typing still works against the visible prompt.
-		for _, r := range "purge" {
-			app.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		}
-		if !strings.Contains(ansi.Strip(content(app)), "purge_") {
-			t.Errorf("height %d: typed verb not shown:\n%s", h, ansi.Strip(content(app)))
-		}
+	}
+	if h >= 12 && !strings.Contains(flat, "This cannot be undone") {
+		t.Errorf("height %d: warning missing:\n%s", h, out)
+	}
+	if h == 10 && !strings.Contains(out, "│ …") {
+		t.Errorf("height %d: no clip marker inside the box:\n%s", h, out)
+	}
+	// Typing still works against the visible prompt.
+	for _, r := range "purge" {
+		app.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if !strings.Contains(ansi.Strip(content(app)), "purge_") {
+		t.Errorf("height %d: typed verb not shown:\n%s", h, ansi.Strip(content(app)))
 	}
 }
 

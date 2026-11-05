@@ -29,27 +29,7 @@ func TestHeaderAlwaysShowsActiveTab(t *testing.T) {
 			a.active = i
 			a.Init() // no runner: the chip settles on "? unavailable"
 			reached++
-			h := ansi.Strip(header(a))
-			num := i + 1
-			whole := fmt.Sprintf(" %d Screen%d", num, num)
-			short := fmt.Sprintf("%d/", num) // the "n/N Title" fallback at narrow widths
-			switch {
-			case w >= 60 && !strings.Contains(h, whole):
-				t.Errorf("w=%d active=%d: active tab missing: %q", w, num, h)
-			case w < 60 && !strings.Contains(h, whole) && !strings.HasPrefix(h, short):
-				t.Errorf("w=%d active=%d: neither tab nor n/N shown: %q", w, num, h)
-			}
-			for _, l := range strings.Split(ansi.Strip(a.View().Content), "\n") {
-				if ansi.StringWidth(l) > w {
-					t.Errorf("w=%d active=%d: line %q is %d wide", w, num, l, ansi.StringWidth(l))
-				}
-			}
-			if w == 80 && (!strings.Contains(h, "? unavailable") || !strings.Contains(h, "scope: user")) {
-				t.Errorf("w=80 active=%d: chip or scope lost: %q", num, h)
-			}
-			if (w == 80 || w == 60) && !strings.HasPrefix(h, " 1 Screen1 ") && !strings.Contains(h, "‹") {
-				t.Errorf("w=%d active=%d: no marker for hidden left tabs: %q", w, num, h)
-			}
+			checkHeaderAt(t, a, w, i+1)
 		}
 	}
 	if reached != 5*n {
@@ -59,4 +39,32 @@ func TestHeaderAlwaysShowsActiveTab(t *testing.T) {
 	a.Update(tea.WindowSizeMsg{Width: 0, Height: 12})
 	a.active = 14
 	_ = a.View() // width 0 must not panic
+}
+
+// checkHeaderAt checks the header and view of a, w columns wide with tab
+// num (1-based) active: the active tab (or its "n/N" fallback) is shown,
+// no line is wider than w, the chip and scope survive at 80 columns, and
+// hidden tabs to the left are marked.
+func checkHeaderAt(t *testing.T, a *App, w, num int) {
+	t.Helper()
+	h := ansi.Strip(header(a))
+	whole := fmt.Sprintf(" %d Screen%d", num, num)
+	short := fmt.Sprintf("%d/", num) // the "n/N Title" fallback at narrow widths
+	switch {
+	case w >= 60 && !strings.Contains(h, whole):
+		t.Errorf("w=%d active=%d: active tab missing: %q", w, num, h)
+	case w < 60 && !strings.Contains(h, whole) && !strings.HasPrefix(h, short):
+		t.Errorf("w=%d active=%d: neither tab nor n/N shown: %q", w, num, h)
+	}
+	for _, l := range strings.Split(ansi.Strip(a.View().Content), "\n") {
+		if ansi.StringWidth(l) > w {
+			t.Errorf("w=%d active=%d: line %q is %d wide", w, num, l, ansi.StringWidth(l))
+		}
+	}
+	if w == 80 && (!strings.Contains(h, "? unavailable") || !strings.Contains(h, "scope: user")) {
+		t.Errorf("w=80 active=%d: chip or scope lost: %q", num, h)
+	}
+	if (w == 80 || w == 60) && !strings.HasPrefix(h, " 1 Screen1 ") && !strings.Contains(h, "‹") {
+		t.Errorf("w=%d active=%d: no marker for hidden left tabs: %q", w, num, h)
+	}
 }
