@@ -141,7 +141,26 @@ func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
 	for _, c := range children {
 		_ = signalGroup(c.cmd, sig)
 	}
-	start := time.Now()
+	r := newEnding(children, time.Now(), readWait, writeWait)
+	for !r.poll(time.Now()) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	escalated.Store(false)
+	forgetKilled(children)
+	return r.out
+}
+
+// ending is one Shutdown's progress: the children it signalled, when each
+// one's wait runs out, which are gone, and the outcomes recorded so far.
+type ending struct {
+	children []*child
+	start    time.Time
+	deadline map[*child]time.Time
+	gone     map[*child]bool
+	out      []Ended
+}
+
+func newEnding(children []*child, start time.Time, readWait, writeWait time.Duration) *ending {
 	deadline := make(map[*child]time.Time, len(children))
 	for _, c := range children {
 		wait := readWait
@@ -150,53 +169,80 @@ func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
 		}
 		deadline[c] = start.Add(wait)
 	}
-	gone := map[*child]bool{}
-	var out []Ended
-	for {
-		now := time.Now()
-		left, allKilled := 0, true
-		var lastKill time.Time
-		for _, c := range children {
-			if gone[c] {
-				continue
-			}
-			if groupGone(c.cmd) {
-				gone[c] = true
-				oc := "exited"
-				if _, k := killedAt(c); k {
-					oc = "killed"
-				}
-				out = append(out, Ended{Args: c.args, Write: c.write, Outcome: oc, Took: now.Sub(start)})
-				continue
-			}
-			left++
-			if _, k := killedAt(c); !k && (escalated.Load() || !now.Before(deadline[c])) {
-				if signalGroup(c.cmd, os.Kill) == nil {
-					markKilled(c)
-				}
-			}
-			k, ok := killedAt(c)
-			allKilled = allKilled && ok
-			if k.After(lastKill) {
-				lastKill = k
-			}
+	return &ending{children: children, start: start, deadline: deadline, gone: map[*child]bool{}}
+}
+
+// poll checks every child not yet gone once, at now: a group that has gone
+// is recorded as exited or killed; one still present is sent SIGKILL when
+// its wait has run out or a KillAll escalated. It reports whether the
+// Shutdown is over: every group gone, or every one left killed more than
+// killGrace ago (those are recorded as orphaned).
+func (r *ending) poll(now time.Time) bool {
+	left, allKilled := 0, true
+	var lastKill time.Time
+	for _, c := range r.children {
+		if r.gone[c] {
+			continue
 		}
-		if left == 0 {
-			break
+		if groupGone(c.cmd) {
+			r.reap(c, now)
+			continue
 		}
-		if allKilled && now.After(lastKill.Add(killGrace)) {
-			for _, c := range children {
-				if !gone[c] {
-					out = append(out, Ended{Args: c.args, Write: c.write, Outcome: "orphaned", Took: now.Sub(start)})
-				}
-			}
-			break
+		left++
+		r.killIfDue(c, now)
+		k, ok := killedAt(c)
+		allKilled = allKilled && ok
+		if k.After(lastKill) {
+			lastKill = k
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
-	escalated.Store(false)
-	forgetKilled(children)
-	return out
+	if left == 0 {
+		return true
+	}
+	if allKilled && now.After(lastKill.Add(killGrace)) {
+		r.orphanRest(now)
+		return true
+	}
+	return false
+}
+
+// reap records c, whose group is gone, as killed if it was sent SIGKILL and
+// as exited otherwise.
+func (r *ending) reap(c *child, now time.Time) {
+	r.gone[c] = true
+	oc := "exited"
+	if _, k := killedAt(c); k {
+		oc = "killed"
+	}
+	r.record(c, oc, now)
+}
+
+// killIfDue sends SIGKILL to c's group, once, when its wait has run out or
+// a KillAll escalated this Shutdown.
+func (r *ending) killIfDue(c *child, now time.Time) {
+	if _, killed := killedAt(c); killed {
+		return
+	}
+	if !escalated.Load() && now.Before(r.deadline[c]) {
+		return
+	}
+	if signalGroup(c.cmd, os.Kill) == nil {
+		markKilled(c)
+	}
+}
+
+// orphanRest records every child not gone as orphaned: even SIGKILL did not
+// end its group within killGrace.
+func (r *ending) orphanRest(now time.Time) {
+	for _, c := range r.children {
+		if !r.gone[c] {
+			r.record(c, "orphaned", now)
+		}
+	}
+}
+
+func (r *ending) record(c *child, outcome string, now time.Time) {
+	r.out = append(r.out, Ended{Args: c.args, Write: c.write, Outcome: outcome, Took: now.Sub(r.start)})
 }
 
 // KillAll sends SIGKILL to every live child's process group at once and
