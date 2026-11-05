@@ -26,7 +26,8 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Install agentsync (the version the TUI is tested against)
-        run: go install github.com/spxrogers/agentsync/cmd/agentsync@v0.17.0
+        # v0.17.0
+        run: go install github.com/spxrogers/agentsync/cmd/agentsync@db33c6a70da69f990c878b9f07fe94f42e62c0ed
       - name: Install age (for the secrets tests)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age
       - name: Vet
@@ -34,7 +35,8 @@ jobs:
       - name: Format
         run: test -z "$(gofmt -l .)"
       - name: govulncheck (pinned; module verified through GOSUMDB)
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        # v1.9.0
+        run: go run golang.org/x/vuln/cmd/govulncheck@e672cbe8fbc8c76e28fcb6db0efd9ce354e0dac5 ./...
       - name: Test
         run: go test -race -count=1 ./...
 
