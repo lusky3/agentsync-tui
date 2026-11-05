@@ -555,3 +555,14 @@ func TestFooterKeepsScrollHintsAt80Cols(t *testing.T) {
 		t.Fatalf("footer cut at 80 cols:\n%s", v)
 	}
 }
+
+// Before the first list arrives the screen says it is loading, with the
+// key hints still shown, rather than claiming no agents are registered.
+func TestViewBeforeLoadSaysLoading(t *testing.T) {
+	s := New(ui.Deps{})
+	s.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	v := view(s)
+	if !strings.Contains(v, "loading…") || strings.Contains(v, emptyNotice) || !strings.Contains(v, "refresh") {
+		t.Errorf("view before load:\n%s", v)
+	}
+}
