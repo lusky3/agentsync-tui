@@ -158,3 +158,15 @@ func TestParseMarketplacesHostileNamesRejected(t *testing.T) {
 		t.Errorf("control chars in url kept: %+v", got)
 	}
 }
+
+// ID drops the "@marketplace" qualifier and leaves a bare name alone.
+func TestPluginAndOutdatedID(t *testing.T) {
+	for name, want := range map[string]string{"hello@localmkt": "hello", "hello": "hello"} {
+		if got := (Plugin{Name: name}).ID(); got != want {
+			t.Errorf("Plugin{%q}.ID() = %q, want %q", name, got, want)
+		}
+		if got := (Outdated{Name: name}).ID(); got != want {
+			t.Errorf("Outdated{%q}.ID() = %q, want %q", name, got, want)
+		}
+	}
+}
