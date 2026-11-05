@@ -221,3 +221,29 @@ func warningsUnderLiterals(t *testing.T, v string, literals, refs []string) {
 		}
 	}
 }
+
+// left and right cycle the server type, wrapping, only while the type
+// field has focus; the target field's label ("command" or "url", padded
+// to the label column) follows the type.
+func TestAddFormTypeCyclesWithArrows(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a", "left") // on the id field: no effect on the type
+	if v := view(s); !strings.Contains(v, "‹stdio›") {
+		t.Fatalf("arrows off the type field changed it:\n%s", v)
+	}
+	press(s, "tab")
+	for _, want := range []string{"‹sse›", "‹http›", "‹stdio›"} {
+		press(s, "left")
+		if v := view(s); !strings.Contains(v, want) {
+			t.Fatalf("left: want %s:\n%s", want, v)
+		}
+	}
+	press(s, "left")
+	if v := view(s); !strings.Contains(v, "url      ") || strings.Contains(v, "command  ") {
+		t.Errorf("sse keeps the command label:\n%s", v)
+	}
+	press(s, "right")
+	if v := view(s); !strings.Contains(v, "‹stdio›") || !strings.Contains(v, "command  ") {
+		t.Errorf("right did not wrap back to stdio:\n%s", v)
+	}
+}
