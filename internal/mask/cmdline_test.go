@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lusky3/agentsync-tui/internal/shellwords"
 )
 
 func TestCommandLine(t *testing.T) {
@@ -210,5 +212,19 @@ func TestCommandLineNewlineSplitScript(t *testing.T) {
 	// (fail-safe); the first word keeps its shape.
 	if len(got) != 2 || got[0] != "-c" || got[1] != Mask {
 		t.Errorf("shape: %q", got)
+	}
+}
+
+// A word re-quoted for display keeps any single quote it holds escaped,
+// POSIX style, so the display splits back into exactly the masked words and
+// a quote inside a word cannot end the quoting early.
+func TestFreeTextRequotesSingleQuotes(t *testing.T) {
+	got := FreeText(`run "it\\\'s here" --token CANARYq1`)
+	if want := `run 'it\'\''s here' --token ` + Mask; got != want {
+		t.Fatalf("FreeText = %q, want %q", got, want)
+	}
+	words, err := shellwords.Split(got)
+	if want := []string{"run", `it\'s here`, "--token", Mask}; err != nil || !reflect.DeepEqual(words, want) {
+		t.Errorf("display splits into %q (%v), want %q", words, err, want)
 	}
 }

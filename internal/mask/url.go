@@ -145,33 +145,58 @@ func TokenShaped(s string) bool {
 	}
 	var digits, letters, humps int
 	for _, w := range strings.FieldsFunc(s, func(r rune) bool { return r == '_' || r == '-' || r == '.' }) {
-		var wd, wl, alternations int
-		prevLower, prevDigit := false, false
-		for i, r := range w {
-			isDigit := unicode.IsDigit(r)
-			switch {
-			case isDigit:
-				wd++
-			case unicode.IsUpper(r):
-				wl++
-				if prevLower {
-					humps++
-				}
-			case unicode.IsLetter(r):
-				wl++
-			}
-			if i > 0 && (unicode.IsLetter(r) || isDigit) && isDigit != prevDigit {
-				alternations++
-			}
-			prevLower, prevDigit = unicode.IsLower(r), isDigit
-		}
-		digits += wd
-		letters += wl
-		if len(w) >= 12 && wl > 0 && wd >= 2 && (alternations >= 5 || 3*wd >= len(w)) {
+		ws := scanWord(w)
+		digits += ws.digits
+		letters += ws.letters
+		humps += ws.humps
+		if ws.opaque(len(w)) {
 			return true
 		}
 	}
 	return len(s) >= 20 && digits > 0 && humps >= 3 && humps*4 >= letters
+}
+
+// wordShape counts what TokenShaped weighs in one separator-free word.
+type wordShape struct {
+	digits, letters int
+	// humps counts lower-to-upper case changes (the "AbCd" of base64).
+	humps int
+	// alternations counts changes between a letter and a digit.
+	alternations int
+}
+
+// scanWord measures w; runes other than letters and digits count for
+// neither and do not end a letter or digit run.
+func scanWord(w string) wordShape {
+	var ws wordShape
+	prevLower, prevDigit := false, false
+	for i, r := range w {
+		isDigit := unicode.IsDigit(r)
+		switch {
+		case isDigit:
+			ws.digits++
+		case unicode.IsUpper(r):
+			ws.letters++
+			if prevLower {
+				ws.humps++
+			}
+		case unicode.IsLetter(r):
+			ws.letters++
+		}
+		if i > 0 && (unicode.IsLetter(r) || isDigit) && isDigit != prevDigit {
+			ws.alternations++
+		}
+		prevLower, prevDigit = unicode.IsLower(r), isDigit
+	}
+	return ws
+}
+
+// opaque reports whether a word of n bytes with this shape reads as a
+// secret on its own: 12+ bytes with letters and two or more digits, whose
+// letters and digits alternate five or more times or that is a third
+// digits or more.
+func (ws wordShape) opaque(n int) bool {
+	return n >= 12 && ws.letters > 0 && ws.digits >= 2 && (ws.alternations >= 5 || 3*ws.digits >= n)
 }
 
 // hexRun reports whether s is 16+ hexadecimal characters with at least one
