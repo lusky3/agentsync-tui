@@ -295,7 +295,7 @@ func TestReconcileOutputStoredMasked(t *testing.T) {
 func TestReconcileScopeAwareSwapsRunner(t *testing.T) {
 	r1, r2 := okRunner("a"), okRunner("nothing to reconcile\n")
 	h := newHarness(t, r1)
-	var _ ui.ScopeAware = h.s
+	var _ ui.ScopeSetter = h.s
 	var _ ui.KeyCapturer = h.s
 	var _ ui.Screen = h.s
 	h.s.SetScope(r2, runner.ScopeProject, "")

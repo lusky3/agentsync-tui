@@ -22,16 +22,19 @@ func (s *Screen) outLines() []string {
 	return s.out.Lines()
 }
 
+// agentLabel starts the agent selector line; the value follows it.
+const agentLabel = "  agent:     "
+
 func (s *Screen) agentLine() string {
 	switch {
 	case !s.loaded:
-		return "  agent:     " + theme.Dim.Render("loading agents…")
+		return agentLabel + theme.Dim.Render("loading agents…")
 	case len(s.agents) == 0 && s.note == "":
-		return "  agent:     " + theme.Warn.Render("no registered agents (add one with: agentsync agent add <name>)")
+		return agentLabel + theme.Warn.Render("no registered agents (add one with: agentsync agent add <name>)")
 	case len(s.agents) == 0:
-		return "  agent:     " + theme.Bad.Render(mask.OneLine(s.note))
+		return agentLabel + theme.Bad.Render(mask.OneLine(s.note))
 	}
-	line := "  agent:     " + theme.Bold.Render(mask.OneLine(s.agent))
+	line := agentLabel + theme.Bold.Render(mask.OneLine(s.agent))
 	for i, a := range s.agents {
 		if a.Name == s.agent {
 			line += theme.Dim.Render("  (" + strconv.Itoa(i+1) + "/" + strconv.Itoa(len(s.agents)) + ")")

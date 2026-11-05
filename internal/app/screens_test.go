@@ -23,8 +23,8 @@ func TestScreensOrderAndTitles(t *testing.T) {
 		if s == nil {
 			t.Fatalf("screen %d is nil", i)
 		}
-		if _, ok := s.(ui.ScopeAware); !ok {
-			t.Errorf("screen %d (%s) is not ui.ScopeAware", i, s.Title())
+		if _, ok := s.(ui.ScopeSetter); !ok {
+			t.Errorf("screen %d (%s) is not ui.ScopeSetter", i, s.Title())
 		}
 		titles = append(titles, s.Title())
 	}

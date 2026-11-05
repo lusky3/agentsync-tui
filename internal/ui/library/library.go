@@ -137,7 +137,7 @@ func (s *Screen) Title() string { return infos[s.kind].title }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware: swap the runner and the home (memory
+// SetScope implements ui.ScopeSetter: swap the runner and the home (memory
 // is listed from it and every edit path is built under it) and drop the
 // items loaded from the old tree.
 func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, home string) {

@@ -16,6 +16,16 @@ var (
 	revisionRe = regexp.MustCompile(`^(HEAD(~[0-9]{1,3})?|[0-9a-f]{7,40})$`)
 )
 
+// The kinds of identifier named in validation errors (invalid server id "x").
+const (
+	kindServerID  = "server id"
+	kindAgentName = "agent name"
+	kindPluginID  = "plugin id"
+)
+
+// dryRunFlag turns apply, revert and import into their read-only previews.
+const dryRunFlag = "--dry-run"
+
 func checkID(kind, s string) error {
 	if !ValidID(s) {
 		return fmt.Errorf("invalid %s %q", kind, s)
@@ -26,8 +36,8 @@ func checkID(kind, s string) error {
 // checkText rejects empty or over-long values, a leading dash (it would
 // read as a flag) and control characters, for free-form values that land in
 // argv.
-func checkText(kind, s string, max int) error {
-	if s == "" || len(s) > max || strings.HasPrefix(s, "-") {
+func checkText(kind, s string, maxLen int) error {
+	if s == "" || len(s) > maxLen || strings.HasPrefix(s, "-") {
 		return fmt.Errorf("invalid %s", kind)
 	}
 	return checkNoControl(kind, s)
@@ -61,38 +71,38 @@ func sub(title, kind, id string, destructive bool, argv ...string) (Action, erro
 
 // McpEnable builds `mcp enable <id>`.
 func McpEnable(id string) (Action, error) {
-	return sub("Enable MCP server", "server id", id, false, "mcp", "enable")
+	return sub("Enable MCP server", kindServerID, id, false, "mcp", "enable")
 }
 
 // McpDisable builds `mcp disable <id>`.
 func McpDisable(id string) (Action, error) {
-	return sub("Disable MCP server", "server id", id, false, "mcp", "disable")
+	return sub("Disable MCP server", kindServerID, id, false, "mcp", "disable")
 }
 
 // McpRemove builds the destructive `mcp remove <id>`.
 func McpRemove(id string) (Action, error) {
-	return sub("Remove MCP server", "server id", id, true, "mcp", "remove")
+	return sub("Remove MCP server", kindServerID, id, true, "mcp", "remove")
 }
 
 // AgentAdd builds `agent add <name>`.
 func AgentAdd(name string) (Action, error) {
-	return sub("Add agent", "agent name", name, false, "agent", "add")
+	return sub("Add agent", kindAgentName, name, false, "agent", "add")
 }
 
 // AgentEnable builds `agent enable <name>`.
 func AgentEnable(name string) (Action, error) {
-	return sub("Enable agent", "agent name", name, false, "agent", "enable")
+	return sub("Enable agent", kindAgentName, name, false, "agent", "enable")
 }
 
 // AgentDisable builds `agent disable <name>` (destination files are kept).
 func AgentDisable(name string) (Action, error) {
-	return sub("Disable agent", "agent name", name, false, "agent", "disable")
+	return sub("Disable agent", kindAgentName, name, false, "agent", "disable")
 }
 
 // AgentDisablePurge disables an agent and deletes the destination files
 // agentsync owns for it (`agent disable <name> --purge`).
 func AgentDisablePurge(name string) (Action, error) {
-	a, err := sub("Disable agent and delete destination files agentsync owns for", "agent name", name, true, "agent", "disable")
+	a, err := sub("Disable agent and delete destination files agentsync owns for", kindAgentName, name, true, "agent", "disable")
 	if err != nil {
 		return Action{}, err
 	}
@@ -103,13 +113,13 @@ func AgentDisablePurge(name string) (Action, error) {
 
 // AgentRemove: `agentsync agent remove` has no --purge flag, so none is exposed.
 func AgentRemove(name string) (Action, error) {
-	return sub("Remove agent", "agent name", name, true, "agent", "remove")
+	return sub("Remove agent", kindAgentName, name, true, "agent", "remove")
 }
 
 // PluginAdd accepts "id" or "id@marketplace", as the CLI does.
 func PluginAdd(name string) (Action, error) {
 	id, mkt, hasMkt := strings.Cut(name, "@")
-	if err := checkID("plugin id", id); err != nil {
+	if err := checkID(kindPluginID, id); err != nil {
 		return Action{}, err
 	}
 	if hasMkt {
@@ -122,22 +132,22 @@ func PluginAdd(name string) (Action, error) {
 
 // PluginEnable builds `plugin enable <id>`.
 func PluginEnable(name string) (Action, error) {
-	return sub("Enable plugin", "plugin id", name, false, "plugin", "enable")
+	return sub("Enable plugin", kindPluginID, name, false, "plugin", "enable")
 }
 
 // PluginDisable builds `plugin disable <id>`.
 func PluginDisable(name string) (Action, error) {
-	return sub("Disable plugin", "plugin id", name, false, "plugin", "disable")
+	return sub("Disable plugin", kindPluginID, name, false, "plugin", "disable")
 }
 
 // PluginRemove builds the destructive `plugin remove <id>`.
 func PluginRemove(name string) (Action, error) {
-	return sub("Remove plugin", "plugin id", name, true, "plugin", "remove")
+	return sub("Remove plugin", kindPluginID, name, true, "plugin", "remove")
 }
 
 // PluginUpgrade builds `plugin upgrade <id>` (network).
 func PluginUpgrade(name string) (Action, error) {
-	a, err := sub("Upgrade plugin", "plugin id", name, false, "plugin", "upgrade")
+	a, err := sub("Upgrade plugin", kindPluginID, name, false, "plugin", "upgrade")
 	if err != nil {
 		return Action{}, err
 	}
@@ -231,7 +241,7 @@ func Apply(dry bool, agents ...string) (Action, error) {
 	argv := []string{"apply"}
 	title := "Apply (writes destination files)"
 	if dry {
-		argv = append(argv, "--dry-run")
+		argv = append(argv, dryRunFlag)
 		title = "Preview apply (dry run)"
 	}
 	if len(agents) > 0 {
@@ -260,11 +270,11 @@ func pair(build func(dry bool) (Action, error)) (Previewed, error) {
 	if err != nil {
 		return Previewed{}, err
 	}
-	real, err := build(false)
+	realRun, err := build(false)
 	if err != nil {
 		return Previewed{}, err
 	}
-	return Previewed{Preview: dry, Real: real}, nil
+	return Previewed{Preview: dry, Real: realRun}, nil
 }
 
 // Revert restores an agent's destination to a prior checkpoint. Exactly one of
@@ -290,7 +300,7 @@ func Revert(agent, to string, all, dry bool) (Action, error) {
 	}
 	title := "Revert"
 	if dry {
-		argv = append(argv, "--dry-run")
+		argv = append(argv, dryRunFlag)
 		title = "Preview revert (dry run)"
 	}
 	return Action{Title: title, Argv: argv, Destructive: !dry, ReadOnly: dry}, nil
@@ -325,7 +335,7 @@ func Import(agent, component, name string, dry bool) (Action, error) {
 	argv := []string{"import", sel}
 	title := "Import " + sel
 	if dry {
-		argv = append(argv, "--dry-run")
+		argv = append(argv, dryRunFlag)
 		title = "Preview import " + sel + " (dry run)"
 	}
 	return Action{
@@ -347,15 +357,15 @@ type AddSpec struct {
 // is added through add, so the two can never drift.
 type cmdline struct{ argv, disp []string }
 
-func (c *cmdline) add(flag, real, shown string) {
-	c.argv = append(c.argv, flag, real)
+func (c *cmdline) add(flag, value, shown string) {
+	c.argv = append(c.argv, flag, value)
 	c.disp = append(c.disp, flag, shown)
 }
 
 // McpAdd always passes --type explicitly: the CLI defaults to stdio, and an
 // http add without it fails.
 func McpAdd(s AddSpec) (Action, error) {
-	if err := checkID("server id", s.ID); err != nil {
+	if err := checkID(kindServerID, s.ID); err != nil {
 		return Action{}, err
 	}
 	head := []string{"mcp", "add", s.ID, "--type", s.Type}

@@ -73,7 +73,7 @@ func (s *Screen) Title() string { return "Reconcile" }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware: swap the runner and forget the report.
+// SetScope implements ui.ScopeSetter: swap the runner and forget the report.
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	s.reads.Supersede()

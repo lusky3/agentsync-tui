@@ -106,7 +106,7 @@ func (a *App) selectScreen(i int) tea.Cmd {
 
 // toggleScope switches user<->project, rebuilding the runner and
 // interactive builder through Deps.WithScope, moving the canonical home to
-// the new scope's tree (HomeFor), handing every ScopeAware screen the new
+// the new scope's tree (HomeFor), handing every ScopeSetter screen the new
 // pair and refreshing the active screen; the others load when shown.
 func (a *App) toggleScope() tea.Cmd {
 	if a.d.WithScope == nil {
@@ -132,7 +132,7 @@ func (a *App) toggleScope() tea.Cmd {
 	chip := a.chipCmd()
 	a.setStatus(statusInfo, "scope: "+string(next))
 	for _, scr := range a.screens {
-		if sa, ok := scr.(ScopeAware); ok {
+		if sa, ok := scr.(ScopeSetter); ok {
 			sa.SetScope(a.run, next, a.home)
 		}
 	}

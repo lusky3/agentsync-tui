@@ -116,7 +116,7 @@ func readAgents(ctx context.Context, gen int, r runner.Runner, timeout time.Dura
 	return m
 }
 
-// SetScope implements ui.ScopeAware: swap the runner and forget the agent
+// SetScope implements ui.ScopeSetter: swap the runner and forget the agent
 // list, the preview and any output.
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc

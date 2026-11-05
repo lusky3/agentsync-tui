@@ -80,7 +80,7 @@ func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 // refreshes the screen after every run, including the dry run itself.
 func (s *Screen) Refresh() tea.Cmd { return nil }
 
-// SetScope implements ui.ScopeAware: swap the runner and forget previews.
+// SetScope implements ui.ScopeSetter: swap the runner and forget previews.
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, _ string) {
 	s.run, s.scope = r, sc
 	for md := range s.gates {

@@ -275,7 +275,7 @@ func TestCapAfterMaskingRuneSafe(t *testing.T) {
 }
 
 func TestScopeAwareSwapsRunner(t *testing.T) {
-	var _ ui.ScopeAware = (*Screen)(nil)
+	var _ ui.ScopeSetter = (*Screen)(nil)
 	old, fresh := newFake(), newFake()
 	old.res["doctor"] = runner.Result{Stdout: "OLD\n"}
 	fresh.res["doctor"] = runner.Result{Stdout: "NEW\n"}

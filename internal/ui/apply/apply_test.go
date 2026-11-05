@@ -224,7 +224,7 @@ func TestScopeSwitchInvalidatesPreview(t *testing.T) {
 
 func TestScopeAwareSwapsRunner(t *testing.T) {
 	h := newShell(t, okRunner("x"))
-	var _ ui.ScopeAware = h.s
+	var _ ui.ScopeSetter = h.s
 	nr := okRunner("y")
 	h.s.SetScope(nr, runner.ScopeProject, "")
 	if h.s.run != runner.Runner(nr) || h.s.scope != runner.ScopeProject {

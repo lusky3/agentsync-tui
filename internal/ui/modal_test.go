@@ -126,23 +126,23 @@ func TestDestructiveNeedsTypedConfirm(t *testing.T) {
 			t.Fatalf("%s: runner called %d times", label, n)
 		}
 	}
-	clear := func(n int) {
+	erase := func(n int) { // backspace n times
 		for i := 0; i < n; i++ {
 			h.pressAndWait(key("backspace"))
 		}
 	}
 	mustNotRun("y", h.pressAndWait(key("y")))
-	clear(1)
+	erase(1)
 	mustNotRun("enter on empty buffer", h.pressAndWait(key("enter")))
 	h.pressAndWait(key("y"))
 	mustNotRun("y then enter", h.pressAndWait(key("enter")))
-	clear(1)
+	erase(1)
 	for _, wrong := range []string{"REMOVE", " remove", "removex", "remov"} {
 		for _, r := range wrong {
 			h.pressAndWait(key(string(r)))
 		}
 		mustNotRun(fmt.Sprintf("wrong verb %q", wrong), h.pressAndWait(key("enter")))
-		clear(len(wrong))
+		erase(len(wrong))
 	}
 	for _, r := range "remove" {
 		h.pressAndWait(key(string(r)))

@@ -476,7 +476,7 @@ func TestHostileAgentNameNeverActionable(t *testing.T) {
 
 func TestScopeAwareSwapsRunner(t *testing.T) {
 	s, old := loaded(t, fixture(t, "agent-list-all.txt"))
-	var _ ui.ScopeAware = s
+	var _ ui.ScopeSetter = s
 	fresh := &fakeRunner{}
 	fresh.set(fixture(t, "agent-list.txt"), 0, nil)
 	s.SetScope(fresh, runner.ScopeProject, "")

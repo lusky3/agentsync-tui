@@ -119,7 +119,7 @@ func (s *Screen) Title() string { return "Secrets" }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware: swap the runner and the home the
+// SetScope implements ui.ScopeSetter: swap the runner and the home the
 // cross-check scans, and drop the uses loaded from the old tree.
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
 	s.run, s.scope, s.home = r, sc, home
