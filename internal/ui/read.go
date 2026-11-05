@@ -17,6 +17,10 @@ import (
 // waiting on: a stale answer is worse than a refused key.
 const VerifyTimeout = 5 * time.Second
 
+// JSONFlag asks a read for agentsync's machine-readable output (status,
+// diff, explain).
+const JSONFlag = "--json"
+
 // ErrNoRunner is the Read error when the screen has no runner.
 var ErrNoRunner = errors.New("no runner")
 
