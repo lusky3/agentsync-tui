@@ -228,3 +228,15 @@ func TestFreeTextRequotesSingleQuotes(t *testing.T) {
 		t.Errorf("display splits into %q (%v), want %q", words, err, want)
 	}
 }
+
+// A word holding a tab is re-quoted too, so it stays one word.
+func TestFreeTextRequotesTabs(t *testing.T) {
+	got := FreeText("run \"a\tb\" --token CANARYt1")
+	if want := "run 'a\tb' --token " + Mask; got != want {
+		t.Fatalf("FreeText = %q, want %q", got, want)
+	}
+	words, err := shellwords.Split(got)
+	if want := []string{"run", "a\tb", "--token", Mask}; err != nil || !reflect.DeepEqual(words, want) {
+		t.Errorf("display splits into %q (%v), want %q", words, err, want)
+	}
+}

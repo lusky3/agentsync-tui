@@ -213,3 +213,12 @@ func FuzzParseMarketplaces(f *testing.F) {
 		}
 	})
 }
+
+// A version= field makes a line a plugin row even when its value is not a
+// safe token; the version is then left empty.
+func TestParsePluginListUnsafeVersionStillARow(t *testing.T) {
+	got, err := ParsePluginList("p version=!!")
+	if want := []Plugin{{Name: "p"}}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, %v; want %+v", got, err, want)
+	}
+}
