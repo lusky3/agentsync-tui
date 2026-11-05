@@ -26,6 +26,7 @@ func TestShellWordsSplitter(t *testing.T) {
 		{in: `"unterminated`, wantErr: true},
 		{in: `'unterminated`, wantErr: true},
 		{in: `trailing\`, wantErr: true},
+		{in: `"open quote ends in a backslash\`, wantErr: true}, // the backslash escapes nothing
 	}
 	for _, tt := range tests {
 		got, err := Split(tt.in)
