@@ -1,12 +1,14 @@
 package agents
 
 import (
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
+	"github.com/lusky3/agentsync-tui/internal/model"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/theme"
 )
@@ -44,13 +46,7 @@ func (s *Screen) View() tea.View {
 // table returns the header lines (empty notice, column titles) and one row
 // per agent.
 func (s *Screen) table() (header, rows []string) {
-	registered := 0
-	for _, a := range s.agents {
-		if a.Registered {
-			registered++
-		}
-	}
-	if registered == 0 {
+	if !slices.ContainsFunc(s.agents, func(a model.Agent) bool { return a.Registered }) {
 		header = append(header, emptyNotice)
 	}
 	if len(s.agents) == 0 {
@@ -58,28 +54,33 @@ func (s *Screen) table() (header, rows []string) {
 	}
 	header = append(header, theme.Bold.Render("  "+theme.Pad("AGENT", 20)+theme.Pad("STATUS", 12)+theme.Pad("STATE", 10)+"SCOPE"))
 	for i, a := range s.agents {
-		status, state, scope := "available", "-", "-"
-		if a.Registered {
-			status, state = "registered", "disabled"
-			if a.Enabled {
-				state = "enabled"
-			}
-		}
-		if a.Scope != "" {
-			scope = mask.OneLine(a.Scope)
-		}
-		line := theme.Pad(mask.OneLine(a.Name), 20) + theme.Pad(status, 12) + theme.Pad(state, 10) + scope
-		switch {
-		case i == s.list.Cursor:
-			line = theme.Sel.Render("> " + line)
-		case a.Registered && a.Enabled:
-			line = "  " + theme.OK.Render(line)
-		case !a.Registered:
-			line = "  " + theme.Dim.Render(line)
-		default:
-			line = "  " + line
-		}
-		rows = append(rows, line)
+		rows = append(rows, s.agentRow(i, a))
 	}
 	return header, rows
+}
+
+// agentRow renders agent a, row i: selected, enabled (green), available
+// but not registered (dim) or registered and disabled (plain).
+func (s *Screen) agentRow(i int, a model.Agent) string {
+	status, state, scope := "available", "-", "-"
+	if a.Registered {
+		status, state = "registered", "disabled"
+		if a.Enabled {
+			state = "enabled"
+		}
+	}
+	if a.Scope != "" {
+		scope = mask.OneLine(a.Scope)
+	}
+	line := theme.Pad(mask.OneLine(a.Name), 20) + theme.Pad(status, 12) + theme.Pad(state, 10) + scope
+	switch {
+	case i == s.list.Cursor:
+		return theme.Sel.Render("> " + line)
+	case a.Registered && a.Enabled:
+		return "  " + theme.OK.Render(line)
+	case !a.Registered:
+		return "  " + theme.Dim.Render(line)
+	default:
+		return "  " + line
+	}
 }

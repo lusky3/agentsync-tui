@@ -49,6 +49,7 @@ func TestTokenShaped(t *testing.T) {
 		"T0A1B2C3D4E5F6", // 14 chars alternating letter/digit
 		"CANARYbare1234567890abcd",
 		"x1f3a9c2d7e8b1",
+		"a1b2c3d4e5f6_x", // a 12-character alternating word is enough
 	} {
 		if !TokenShaped(s) {
 			t.Errorf("TokenShaped(%q) = false, want true", s)
@@ -62,6 +63,8 @@ func TestTokenShaped(t *testing.T) {
 		"Slack-Bot-Token-2024", "ANTHROPIC_API_KEY_PROD", "", "a",
 		// CamelCase names with a year or version are names, not tokens
 		"MyServiceApiKey2024Prod", "S3Bucket2024Backup", "myApiKey2024ProdBackup", "OpenAIKey2", "GitHubPat2025",
+		// a word needs letters (an account id is a number) and 12+ characters
+		"123456789012", "a1b2c3d4e5f_x",
 	} {
 		if TokenShaped(s) {
 			t.Errorf("TokenShaped(%q) = true, want false", s)

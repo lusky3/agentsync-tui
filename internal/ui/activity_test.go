@@ -105,6 +105,21 @@ func TestActivityLogRotates(t *testing.T) {
 	if _, err := os.Stat(path + "." + strconv.Itoa(logKeep+1)); err == nil {
 		t.Errorf("more than %d old files kept", logKeep)
 	}
+	total := rotatedLines(t, path)
+	if total == 0 || total > n {
+		t.Errorf("%d lines across the files, want >0 and <= %d", total, n)
+	}
+	// the newest lines are in the current file
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), logEntry(n-1).fileLine()) {
+		t.Errorf("last entry missing from the current file: %q", b)
+	}
+}
+
+// rotatedLines counts the lines in path and its kept rotations (.1 ...
+// .logKeep), checking that each file that exists is private (0600).
+func rotatedLines(t *testing.T, path string) int {
+	t.Helper()
 	total := 0
 	for i := 0; i <= logKeep; i++ {
 		p := path
@@ -120,14 +135,7 @@ func TestActivityLogRotates(t *testing.T) {
 		}
 		total += strings.Count(string(b), "\n")
 	}
-	if total == 0 || total > n {
-		t.Errorf("%d lines across the files, want >0 and <= %d", total, n)
-	}
-	// the newest lines are in the current file
-	b, _ := os.ReadFile(path)
-	if !strings.Contains(string(b), logEntry(n-1).fileLine()) {
-		t.Errorf("last entry missing from the current file: %q", b)
-	}
+	return total
 }
 
 // What became of each child at shutdown is logged like any run: masked

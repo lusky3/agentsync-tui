@@ -190,12 +190,21 @@ func freeText(s string, depth int, live bool) string {
 		if tail == "" && strings.Join(m, "\x00") == strings.Join(w, "\x00") {
 			return Text(s)
 		}
-		for i, x := range m {
-			if strings.ContainsAny(x, " \t'\"") {
-				m[i] = "'" + strings.ReplaceAll(x, "'", `'\''`) + "'"
-			}
-		}
-		return Text(strings.Join(m, " "))
+		return Text(joinQuoted(m))
 	}
 	return Mask
+}
+
+// joinQuoted joins words with spaces, single-quoting (POSIX style) each
+// word that holds whitespace or a quote so the result still splits back
+// into the same words.
+func joinQuoted(words []string) string {
+	q := make([]string, len(words))
+	for i, x := range words {
+		q[i] = x
+		if strings.ContainsAny(x, " \t'\"") {
+			q[i] = "'" + strings.ReplaceAll(x, "'", `'\''`) + "'"
+		}
+	}
+	return strings.Join(q, " ")
 }

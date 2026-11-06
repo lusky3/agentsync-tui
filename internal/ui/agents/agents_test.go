@@ -476,7 +476,7 @@ func TestHostileAgentNameNeverActionable(t *testing.T) {
 
 func TestScopeAwareSwapsRunner(t *testing.T) {
 	s, old := loaded(t, fixture(t, "agent-list-all.txt"))
-	var _ ui.ScopeAware = s
+	var _ ui.ScopeSetter = s
 	fresh := &fakeRunner{}
 	fresh.set(fixture(t, "agent-list.txt"), 0, nil)
 	s.SetScope(fresh, runner.ScopeProject, "")
@@ -553,5 +553,16 @@ func TestFooterKeepsScrollHintsAt80Cols(t *testing.T) {
 	s.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	if v := view(s); !strings.Contains(v, "home/end") || !strings.Contains(v, "a add") {
 		t.Fatalf("footer cut at 80 cols:\n%s", v)
+	}
+}
+
+// Before the first list arrives the screen says it is loading, with the
+// key hints still shown, rather than claiming no agents are registered.
+func TestViewBeforeLoadSaysLoading(t *testing.T) {
+	s := New(ui.Deps{})
+	s.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	v := view(s)
+	if !strings.Contains(v, "loading…") || strings.Contains(v, emptyNotice) || !strings.Contains(v, "refresh") {
+		t.Errorf("view before load:\n%s", v)
 	}
 }

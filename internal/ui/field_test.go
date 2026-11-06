@@ -10,6 +10,14 @@ func typed(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: rune(s[0]), 
 
 func TestFieldEditingRules(t *testing.T) {
 	var f Field
+	checkTypingAndBackspace(t, &f)
+	checkControlKeys(t, &f)
+}
+
+// checkTypingAndBackspace types into an empty f, inserts text that needs
+// sanitising, and deletes with backspace one rune at a time; f ends as "a".
+func checkTypingAndBackspace(t *testing.T, f *Field) {
+	t.Helper()
 	if h, c := f.Key(typed("a")); !h || !c || f.Value != "a" {
 		t.Fatalf("typed: %v %v %q", h, c, f.Value)
 	}
@@ -25,6 +33,12 @@ func TestFieldEditingRules(t *testing.T) {
 	if f.Value != "a" {
 		t.Fatalf("backspace must remove one rune: %q", f.Value)
 	}
+}
+
+// checkControlKeys checks, on f holding "a", that ctrl and alt chords and
+// enter insert nothing, ctrl+u clears, and backspace on empty is a no-op.
+func checkControlKeys(t *testing.T, f *Field) {
+	t.Helper()
 	if h, c := f.Key(tea.KeyPressMsg{Code: 'x', Text: "x", Mod: tea.ModCtrl}); h || c || f.Value != "a" {
 		t.Fatalf("ctrl+x inserted: %q", f.Value)
 	}

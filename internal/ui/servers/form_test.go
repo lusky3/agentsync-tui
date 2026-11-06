@@ -2,6 +2,7 @@ package servers
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,96 +12,106 @@ import (
 const literalWarning = "literal value will be stored in plain text in mcp/srv.toml — prefer ${env:NAME} or ${secret:NAME}"
 
 func TestAddFormBuildsAddSpec(t *testing.T) {
-	t.Run("stdio", func(t *testing.T) {
-		s := newLoaded(t, fixtureHome(t), okRunner())
-		press(s, "a")
-		if !s.CapturesKeys() {
-			t.Fatal("form open but keys not captured")
-		}
-		typeText(s, "ctx7")
-		press(s, "tab", "tab") // type stays stdio
-		typeText(s, "npx")
-		press(s, "tab")
-		typeText(s, `-y "@upstash/context7-mcp" 'a b'`)
-		press(s, "tab")
-		typeText(s, "CONTEXT7_API_KEY=${env:CTX}")
-		press(s, "enter", "tab", "tab")
-		typeText(s, "claude, kiro")
-		want := actions.AddSpec{
-			ID: "ctx7", Type: "stdio", Command: "npx",
-			Args:   []string{"-y", "@upstash/context7-mcp", "a b"},
-			Env:    map[string]string{"CONTEXT7_API_KEY": "${env:CTX}"},
-			Agents: []string{"claude", "kiro"},
-		}
-		got, err := s.form.spec()
-		if err != nil || !reflect.DeepEqual(got, want) {
-			t.Fatalf("spec %#v, %v; want %#v", got, err, want)
-		}
-		act := onlyDo(t, press(s, "enter"))
-		if !reflect.DeepEqual(act, mustAct(actions.McpAdd(want))) {
-			t.Errorf("action %#v", act)
-		}
-		if s.form != nil || s.CapturesKeys() {
-			t.Error("form still open after submit")
-		}
-	})
-	t.Run("http", func(t *testing.T) {
-		s := newLoaded(t, fixtureHome(t), okRunner())
-		press(s, "a")
-		typeText(s, "remote")
-		press(s, "tab", "space", "tab") // stdio -> http
-		typeText(s, "https://example.com/mcp")
-		press(s, "tab", "tab", "tab")
-		typeText(s, "Authorization: Bearer ${secret:TOK}")
-		press(s, "enter")
-		want := actions.AddSpec{
-			ID: "remote", Type: "http", URL: "https://example.com/mcp",
-			Headers: []string{"Authorization: Bearer ${secret:TOK}"},
-		}
-		got, err := s.form.spec()
-		if err != nil || !reflect.DeepEqual(got, want) {
-			t.Fatalf("spec %#v, %v; want %#v", got, err, want)
-		}
-		if act := onlyDo(t, press(s, "ctrl+s")); !reflect.DeepEqual(act, mustAct(actions.McpAdd(want))) {
-			t.Errorf("action %#v", act)
-		}
-	})
-	t.Run("invalid id blocks submit", func(t *testing.T) {
-		s := newLoaded(t, fixtureHome(t), okRunner())
-		press(s, "a")
-		typeText(s, "bad id!")
-		press(s, "tab", "tab")
-		typeText(s, "npx")
-		if msgs := press(s, "ctrl+s"); len(msgs) != 0 {
-			t.Fatalf("submitted: %#v", msgs)
-		}
-		if s.form == nil || !strings.Contains(view(s), "invalid server id") {
-			t.Errorf("view:\n%s", view(s))
-		}
-	})
-	t.Run("unterminated quote blocks submit", func(t *testing.T) {
-		s := newLoaded(t, fixtureHome(t), okRunner())
-		press(s, "a")
-		typeText(s, "ok")
-		press(s, "tab", "tab")
-		typeText(s, "npx")
-		press(s, "tab")
-		typeText(s, `"oops`)
-		if msgs := press(s, "ctrl+s"); len(msgs) != 0 {
-			t.Fatalf("submitted: %#v", msgs)
-		}
-		if !strings.Contains(view(s), "unterminated") {
-			t.Errorf("view:\n%s", view(s))
-		}
-	})
-	t.Run("esc cancels", func(t *testing.T) {
-		s := newLoaded(t, fixtureHome(t), okRunner())
-		press(s, "a")
-		typeText(s, "x")
-		if msgs := press(s, "esc"); len(msgs) != 0 || s.form != nil || s.CapturesKeys() {
-			t.Errorf("esc: msgs %#v form %v", msgs, s.form)
-		}
-	})
+	t.Run("stdio", testAddFormStdio)
+	t.Run("http", testAddFormHTTP)
+	t.Run("invalid id blocks submit", testAddFormInvalidIDBlocksSubmit)
+	t.Run("unterminated quote blocks submit", testAddFormUnterminatedQuoteBlocksSubmit)
+	t.Run("esc cancels", testAddFormEscCancels)
+}
+
+func testAddFormStdio(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a")
+	if !s.CapturesKeys() {
+		t.Fatal("form open but keys not captured")
+	}
+	typeText(s, "ctx7")
+	press(s, "tab", "tab") // type stays stdio
+	typeText(s, "npx")
+	press(s, "tab")
+	typeText(s, `-y "@upstash/context7-mcp" 'a b'`)
+	press(s, "tab")
+	typeText(s, "CONTEXT7_API_KEY=${env:CTX}")
+	press(s, "enter", "tab", "tab")
+	typeText(s, "claude, kiro")
+	want := actions.AddSpec{
+		ID: "ctx7", Type: "stdio", Command: "npx",
+		Args:   []string{"-y", "@upstash/context7-mcp", "a b"},
+		Env:    map[string]string{"CONTEXT7_API_KEY": "${env:CTX}"},
+		Agents: []string{"claude", "kiro"},
+	}
+	got, err := s.form.spec()
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("spec %#v, %v; want %#v", got, err, want)
+	}
+	act := onlyDo(t, press(s, "enter"))
+	if !reflect.DeepEqual(act, mustAct(actions.McpAdd(want))) {
+		t.Errorf("action %#v", act)
+	}
+	if s.form != nil || s.CapturesKeys() {
+		t.Error("form still open after submit")
+	}
+}
+
+func testAddFormHTTP(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a")
+	typeText(s, "remote")
+	press(s, "tab", "space", "tab") // stdio -> http
+	typeText(s, "https://example.com/mcp")
+	press(s, "tab", "tab", "tab")
+	typeText(s, "Authorization: Bearer ${secret:TOK}")
+	press(s, "enter")
+	want := actions.AddSpec{
+		ID: "remote", Type: "http", URL: "https://example.com/mcp",
+		Headers: []string{"Authorization: Bearer ${secret:TOK}"},
+	}
+	got, err := s.form.spec()
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("spec %#v, %v; want %#v", got, err, want)
+	}
+	if act := onlyDo(t, press(s, "ctrl+s")); !reflect.DeepEqual(act, mustAct(actions.McpAdd(want))) {
+		t.Errorf("action %#v", act)
+	}
+}
+
+func testAddFormInvalidIDBlocksSubmit(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a")
+	typeText(s, "bad id!")
+	press(s, "tab", "tab")
+	typeText(s, "npx")
+	if msgs := press(s, "ctrl+s"); len(msgs) != 0 {
+		t.Fatalf("submitted: %#v", msgs)
+	}
+	if s.form == nil || !strings.Contains(view(s), "invalid server id") {
+		t.Errorf("view:\n%s", view(s))
+	}
+}
+
+func testAddFormUnterminatedQuoteBlocksSubmit(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a")
+	typeText(s, "ok")
+	press(s, "tab", "tab")
+	typeText(s, "npx")
+	press(s, "tab")
+	typeText(s, `"oops`)
+	if msgs := press(s, "ctrl+s"); len(msgs) != 0 {
+		t.Fatalf("submitted: %#v", msgs)
+	}
+	if !strings.Contains(view(s), "unterminated") {
+		t.Errorf("view:\n%s", view(s))
+	}
+}
+
+func testAddFormEscCancels(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a")
+	typeText(s, "x")
+	if msgs := press(s, "esc"); len(msgs) != 0 || s.form != nil || s.CapturesKeys() {
+		t.Errorf("esc: msgs %#v form %v", msgs, s.form)
+	}
 }
 
 // TestAddEnvBackslashBlocksSubmit: an env value ending in a backslash would
@@ -177,6 +188,7 @@ func TestFormMasksEnvValueAndWarnsOnLiteral(t *testing.T) {
 	if n := strings.Count(v, literalWarning); n != 2 {
 		t.Errorf("want 2 literal warnings, got %d:\n%s", n, v)
 	}
+	warningsUnderLiterals(t, v, []string{"API_KEY = ", "X-Api-Key = "}, []string{"TOKEN = ", "Authorization = "})
 	// ctrl+d removes the last entry of the focused list.
 	press(s, "ctrl+d")
 	if v := view(s); strings.Contains(v, "Authorization = ") || !strings.Contains(v, "X-Api-Key = ••••") {
@@ -187,5 +199,51 @@ func TestFormMasksEnvValueAndWarnsOnLiteral(t *testing.T) {
 	act := onlyDo(t, press(s, "ctrl+s"))
 	if strings.Contains(act.Display(), "CANARY") {
 		t.Errorf("display leaks: %s", act.Display())
+	}
+}
+
+// warningsUnderLiterals checks that in the form view v the literal-value
+// warning is the line under each entry starting with one of literals, and
+// not under any entry starting with one of refs.
+func warningsUnderLiterals(t *testing.T, v string, literals, refs []string) {
+	t.Helper()
+	has := func(l string, prefixes []string) bool {
+		return slices.ContainsFunc(prefixes, func(p string) bool { return strings.Contains(l, p) })
+	}
+	lines := strings.Split(v, "\n")
+	for i, l := range lines[:len(lines)-1] {
+		warned := strings.Contains(lines[i+1], literalWarning)
+		switch {
+		case has(l, literals) && !warned:
+			t.Errorf("literal entry %q has no warning under it", l)
+		case has(l, refs) && warned:
+			t.Errorf("reference entry %q is warned about", l)
+		}
+	}
+}
+
+// left and right cycle the server type, wrapping, only while the type
+// field has focus; the target field's label ("command" or "url", padded
+// to the label column) follows the type.
+func TestAddFormTypeCyclesWithArrows(t *testing.T) {
+	s := newLoaded(t, fixtureHome(t), okRunner())
+	press(s, "a", "left") // on the id field: no effect on the type
+	if v := view(s); !strings.Contains(v, "‹stdio›") {
+		t.Fatalf("arrows off the type field changed it:\n%s", v)
+	}
+	press(s, "tab")
+	for _, want := range []string{"‹sse›", "‹http›", "‹stdio›"} {
+		press(s, "left")
+		if v := view(s); !strings.Contains(v, want) {
+			t.Fatalf("left: want %s:\n%s", want, v)
+		}
+	}
+	press(s, "left")
+	if v := view(s); !strings.Contains(v, "url      ") || strings.Contains(v, "command  ") {
+		t.Errorf("sse keeps the command label:\n%s", v)
+	}
+	press(s, "right")
+	if v := view(s); !strings.Contains(v, "‹stdio›") || !strings.Contains(v, "command  ") {
+		t.Errorf("right did not wrap back to stdio:\n%s", v)
 	}
 }

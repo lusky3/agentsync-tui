@@ -102,7 +102,7 @@ func TestReconcileReportOnlyWhenShown(t *testing.T) {
 	waitCtx(t, r, "status --json")
 	tm.Send(tea.KeyPressMsg{Code: 's', Text: "s"}) // project scope: the active screen refreshes
 	time.Sleep(200 * time.Millisecond)
-	if c := r.ctxOf("reconcile --auto-safe"); c != nil {
+	if r.ctxOf("reconcile --auto-safe") != nil {
 		t.Fatal("reconcile --auto-safe ran while the Reconcile tab was not on show")
 	}
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})

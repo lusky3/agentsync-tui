@@ -68,14 +68,7 @@ func (s *Screen) listView() []string {
 	for i, srv := range s.servers {
 		cells[i] = []string{mask.OneLine(srv.ID), mask.OneLine(srv.Type), target(srv), onOff(srv), allowlist(srv)}
 	}
-	caps := []int{28, 5, 48, 3, 20}
-	widths := make([]int, len(head))
-	for c := range head {
-		widths[c] = ansi.StringWidth(head[c])
-		for _, r := range cells {
-			widths[c] = max(widths[c], min(ansi.StringWidth(r[c]), caps[c]))
-		}
-	}
+	widths := columnWidths(head, cells, []int{28, 5, 48, 3, 20})
 	// The target column yields room so the state column stays visible.
 	stateW := 5
 	for _, srv := range s.servers {
@@ -83,11 +76,11 @@ func (s *Screen) listView() []string {
 	}
 	fixed := 2 + 2*len(head) + stateW
 	for c := range head {
-		if c != 2 {
+		if c != targetCol {
 			fixed += widths[c]
 		}
 	}
-	widths[2] = max(min(widths[2], s.width-fixed), 12)
+	widths[targetCol] = max(min(widths[targetCol], s.width-fixed), 12)
 	header = append(header, theme.Bold.Render("  "+joinCells(head, widths)+"  STATE"))
 	rows := make([]string, len(cells))
 	for i := range cells {
@@ -98,6 +91,23 @@ func (s *Screen) listView() []string {
 		rows[i] = line + "  " + s.stateCell(s.servers[i].ID)
 	}
 	return s.list.Frame(header, rows, s.footer(), s.height)
+}
+
+// targetCol is the list's TARGET column, the one that shrinks to the room
+// left by the others.
+const targetCol = 2
+
+// columnWidths sizes each column to its widest cell or title, a cell
+// counting for no more than its column's cap.
+func columnWidths(head []string, cells [][]string, caps []int) []int {
+	widths := make([]int, len(head))
+	for c := range head {
+		widths[c] = ansi.StringWidth(head[c])
+		for _, r := range cells {
+			widths[c] = max(widths[c], min(ansi.StringWidth(r[c]), caps[c]))
+		}
+	}
+	return widths
 }
 
 func joinCells(cells []string, widths []int) string {

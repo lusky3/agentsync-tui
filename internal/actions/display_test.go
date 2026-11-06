@@ -59,24 +59,7 @@ func TestMcpAddDisplayMasksLiterals(t *testing.T) {
 		{"args --note= over-masked", AddSpec{Args: []string{"--note=hello " + dCanary}}, []string{"--note="}},
 	}
 	for _, tt := range tests {
-		s := tt.spec
-		s.ID, s.Type = "srv", "stdio"
-		if s.Command == "" {
-			s.Command = "npx"
-		}
-		a, err := McpAdd(s)
-		if err != nil {
-			t.Fatalf("%s: %v", tt.name, err)
-		}
-		d := a.Display()
-		if strings.Contains(d, "CANARY") || strings.Contains(a.Title, "CANARY") {
-			t.Errorf("%s: leaked: %s", tt.name, d)
-		}
-		for _, k := range tt.keep {
-			if !strings.Contains(d, k) {
-				t.Errorf("%s: %q not visible in %s", tt.name, k, d)
-			}
-		}
+		checkAddDisplay(t, tt.name, tt.spec, tt.keep)
 	}
 	a, err := McpAdd(AddSpec{ID: "r", Type: "http", URL: "https://user:" + dCanary + "@host/mcp?token=" + dCanary2})
 	if err != nil {
@@ -84,6 +67,31 @@ func TestMcpAddDisplayMasksLiterals(t *testing.T) {
 	}
 	if d := a.Display(); strings.Contains(d, "CANARY") || !strings.Contains(d, "host/mcp") {
 		t.Errorf("url: %s", d)
+	}
+}
+
+// checkAddDisplay builds `mcp add` for spec as a stdio server "srv" (npx
+// when no command is given) and checks its Display and Title leak no
+// canary while every string in keep stays visible.
+func checkAddDisplay(t *testing.T, name string, spec AddSpec, keep []string) {
+	t.Helper()
+	s := spec
+	s.ID, s.Type = "srv", "stdio"
+	if s.Command == "" {
+		s.Command = "npx"
+	}
+	a, err := McpAdd(s)
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	d := a.Display()
+	if strings.Contains(d, "CANARY") || strings.Contains(a.Title, "CANARY") {
+		t.Errorf("%s: leaked: %s", name, d)
+	}
+	for _, k := range keep {
+		if !strings.Contains(d, k) {
+			t.Errorf("%s: %q not visible in %s", name, k, d)
+		}
 	}
 }
 

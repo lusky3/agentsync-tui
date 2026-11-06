@@ -75,13 +75,14 @@ func (g *Gate) Request(p actions.Previewed, sc runner.Scope) {
 	g.req, g.rseq, g.rreal, g.rsc = p.Preview.Key(), g.seq, p.Real.Key(), sc
 }
 
-// Allows reports whether real may be handed to the shell in scope sc.
-func (g *Gate) Allows(real actions.Action, sc runner.Scope) bool {
-	return g.ok != "" && g.ok == real.Key() && g.okSc == sc
+// Allows reports whether the real (writing) action act may be handed to the
+// shell in scope sc.
+func (g *Gate) Allows(act actions.Action, sc runner.Scope) bool {
+	return g.ok != "" && g.ok == act.Key() && g.okSc == sc
 }
 
-// Arm records real as handed to the shell.
-func (g *Gate) Arm(real actions.Action) { g.live = real.Key() }
+// Arm records the real (writing) action act as handed to the shell.
+func (g *Gate) Arm(act actions.Action) { g.live = act.Key() }
 
 // Observe applies a finished run to the gate.
 func (g *Gate) Observe(m ui.RunMsg) Outcome {

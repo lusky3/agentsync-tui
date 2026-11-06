@@ -88,7 +88,7 @@ func (s *Screen) Title() string { return "MCP servers" }
 // Init is exactly Refresh (the shell may skip Init and only Refresh later).
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware: swap the runner and the home and forget
+// SetScope implements ui.ScopeSetter: swap the runner and the home and forget
 // the loaded list so nothing from the old tree is shown or acted on.
 func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
 	s.run, s.scope, s.home = r, sc, home
@@ -125,7 +125,7 @@ func loadSource(gen int, home string) loadedMsg {
 }
 
 func readStatus(ctx context.Context, gen int, r runner.Runner, timeout time.Duration) statusMsg {
-	res, err := ui.Read(ctx, r, timeout, "status", "--json")
+	res, err := ui.Read(ctx, r, timeout, "status", ui.JSONFlag)
 	if note := ui.ReadNote("status", res, err); note != "" {
 		return statusMsg{gen: gen, note: note}
 	}

@@ -17,7 +17,7 @@
 // Scope: the shell owns the current scope and its canonical home (HomeFor:
 // Deps.AgentsyncHome in user scope, ProjectHome(Deps.ProjectDir), that is
 // <project>/.agentsync, in project scope). A scope switch hands every
-// ScopeAware screen the new runner and home, moves the edit boundary
+// ScopeSetter screen the new runner and home, moves the edit boundary
 // (EditFileMsg paths must resolve inside the current home) and the confirm
 // modal names the scope a command runs under. Every DoMsg a screen emits is
 // stamped with the scope it was built under (Do, DoOr), and the shell

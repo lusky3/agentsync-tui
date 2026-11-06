@@ -94,7 +94,7 @@ func (s *Screen) Title() string { return "Drift" }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// SetScope implements ui.ScopeAware: swap the runner and forget loaded state.
+// SetScope implements ui.ScopeSetter: swap the runner and forget loaded state.
 func (s *Screen) SetScope(r runner.Runner, _ runner.Scope, _ string) {
 	s.run = r
 	s.reads.Supersede()
@@ -123,7 +123,7 @@ func (s *Screen) Refresh() tea.Cmd {
 }
 
 func readStatus(ctx context.Context, gen int, r runner.Runner, timeout time.Duration) statusMsg {
-	res, err := ui.Read(ctx, r, timeout, "status", "--json")
+	res, err := ui.Read(ctx, r, timeout, "status", ui.JSONFlag)
 	if err != nil {
 		return statusMsg{gen: gen, note: ui.ReadNote("status", res, err)}
 	}
@@ -303,7 +303,7 @@ func (s *Screen) openDetail() tea.Cmd {
 
 func loadDiff(ctx context.Context, gen int, r runner.Runner, timeout time.Duration, it model.StatusItem) detailMsg {
 	m := detailMsg{gen: gen, kind: kindDiff}
-	res, err := ui.Read(ctx, r, timeout, "diff", it.Path, "--json")
+	res, err := ui.Read(ctx, r, timeout, "diff", it.Path, ui.JSONFlag)
 	if err != nil {
 		m.note = "diff unavailable: " + mask.FirstLine(err.Error())
 		return m
@@ -323,7 +323,7 @@ func loadDiff(ctx context.Context, gen int, r runner.Runner, timeout time.Durati
 
 func loadExplain(ctx context.Context, gen int, r runner.Runner, timeout time.Duration, it model.StatusItem) detailMsg {
 	m := detailMsg{gen: gen, kind: kindExplain}
-	res, err := ui.Read(ctx, r, timeout, "explain", it.Path+"#"+it.Pointer, "--json")
+	res, err := ui.Read(ctx, r, timeout, "explain", it.Path+"#"+it.Pointer, ui.JSONFlag)
 	if err != nil {
 		m.note = "provenance unavailable: " + mask.FirstLine(err.Error())
 		return m

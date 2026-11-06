@@ -2,7 +2,10 @@
 // predictable subset of POSIX shell quoting. It never expands anything.
 package shellwords
 
-import "errors"
+import (
+	"errors"
+	"slices"
+)
 
 // Split breaks s into words. Unquoted spaces and tabs separate words;
 // single quotes group literally; double quotes group, and inside them a
@@ -15,54 +18,61 @@ func Split(s string) ([]string, error) {
 	inWord := false
 	rs := []rune(s)
 	for i := 0; i < len(rs); i++ {
-		r := rs[i]
-		switch r {
+		var err error
+		switch rs[i] {
 		case ' ', '\t':
 			if inWord {
 				words = append(words, string(cur))
 				cur, inWord = cur[:0], false
 			}
+			continue
 		case '\\':
 			if i+1 >= len(rs) {
 				return nil, errors.New("trailing backslash")
 			}
 			i++
-			cur, inWord = append(cur, rs[i]), true
+			cur = append(cur, rs[i])
 		case '\'':
-			end := -1
-			for j := i + 1; j < len(rs); j++ {
-				if rs[j] == '\'' {
-					end = j
-					break
-				}
-			}
-			if end < 0 {
-				return nil, errors.New("unterminated single quote")
-			}
-			cur, inWord = append(cur, rs[i+1:end]...), true
-			i = end
+			cur, i, err = appendSingleQuoted(cur, rs, i)
 		case '"':
-			closed := false
-			for i++; i < len(rs); i++ {
-				if rs[i] == '"' {
-					closed = true
-					break
-				}
-				if rs[i] == '\\' && i+1 < len(rs) {
-					i++
-				}
-				cur = append(cur, rs[i])
-			}
-			if !closed {
-				return nil, errors.New("unterminated double quote")
-			}
-			inWord = true
+			cur, i, err = appendDoubleQuoted(cur, rs, i)
 		default:
-			cur, inWord = append(cur, r), true
+			cur = append(cur, rs[i])
 		}
+		if err != nil {
+			return nil, err
+		}
+		inWord = true
 	}
 	if inWord {
 		words = append(words, string(cur))
 	}
 	return words, nil
+}
+
+// appendSingleQuoted appends the literal text of the single-quoted string
+// opening at rs[open] to cur, and returns the index of its closing quote.
+func appendSingleQuoted(cur, rs []rune, open int) ([]rune, int, error) {
+	n := slices.Index(rs[open+1:], '\'')
+	if n < 0 {
+		return nil, open, errors.New("unterminated single quote")
+	}
+	end := open + 1 + n
+	return append(cur, rs[open+1:end]...), end, nil
+}
+
+// appendDoubleQuoted appends the text of the double-quoted string opening
+// at rs[open] to cur, a backslash taking the next character literally, and
+// returns the index of its closing quote.
+func appendDoubleQuoted(cur, rs []rune, open int) ([]rune, int, error) {
+	for i := open + 1; i < len(rs); i++ {
+		switch {
+		case rs[i] == '"':
+			return cur, i, nil
+		case rs[i] == '\\' && i+1 < len(rs):
+			i++
+		}
+		cur = append(cur, rs[i])
+	}
+	return nil, open, errors.New("unterminated double quote")
 }

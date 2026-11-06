@@ -35,13 +35,13 @@ type Screen interface {
 // the shell forwards all keys except ctrl+c to the screen.
 type KeyCapturer interface{ CapturesKeys() bool }
 
-// ScopeAware is implemented by screens that run their own reads: on a scope
+// ScopeSetter is implemented by screens that run their own reads: on a scope
 // switch the shell hands them the runner and the canonical home for the new
 // scope (HomeFor) before calling Refresh. A screen that reads files from the
 // home must read the new one from then on and drop what it loaded before,
 // and it stamps every DoMsg it emits with the scope it holds (Do, DoOr) so
 // the shell can refuse an action built under the other scope.
-type ScopeAware interface {
+type ScopeSetter interface {
 	SetScope(r runner.Runner, s runner.Scope, home string)
 }
 
@@ -105,13 +105,17 @@ func BaseCtx(d Deps) context.Context {
 	return context.Background()
 }
 
+// HomeDirName is the name of agentsync's canonical tree under $HOME (user
+// scope) or a project directory (project scope), as the CLI names it.
+const HomeDirName = ".agentsync"
+
 // ProjectHome is the project-scope canonical tree of dir, <dir>/.agentsync,
 // as created by `agentsync init --scope project`; "" without a project.
 func ProjectHome(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	return filepath.Join(dir, ".agentsync")
+	return filepath.Join(dir, HomeDirName)
 }
 
 // HomeFor returns the canonical tree the given scope reads: AgentsyncHome for
@@ -185,7 +189,10 @@ func NewApp(d Deps, screens ...Screen) *App {
 		d.Ctx, d.Cancel = context.WithCancel(context.Background())
 	}
 	if d.Cancel == nil {
-		d.Cancel = func() {}
+		d.Cancel = func() {
+			// No-op: the caller supplied Ctx and keeps ownership of its
+			// cancellation, so the shell has nothing of its own to cancel.
+		}
 	}
 	a := &App{
 		root:        BaseCtx(d),

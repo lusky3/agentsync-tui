@@ -23,6 +23,10 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
+// progName names the binary in flag errors, the version line and messages,
+// and is the directory of its state under $XDG_STATE_HOME.
+const progName = "agentsync-tui"
+
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
@@ -73,46 +77,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
-	fs := flag.NewFlagSet("agentsync-tui", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	showVersion := fs.Bool("version", false, "print the version and exit")
-	scopeFlag := fs.String("scope", "", "agentsync scope: user or project (default user; --project implies project)")
-	project := fs.String("project", "", "project directory (implies --scope project)")
-	readTimeout := fs.Duration("read-timeout", ui.DefaultReadTimeout,
-		"bound on network reads (import previews, plugin outdated); 0 = none. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
-	debugLog := fs.String("debug-log", "",
-		"append a masked sample (4 KiB per stream, parse error, exit code) of every read whose output could not be parsed to this file, for bug reports; off by default")
-	writeTimeout := fs.Duration("write-timeout", 0,
-		"bound on every write (apply, import, plugin upgrade, ...); 0 = none. A write cut off partway can leave agentsync's state and the destination files out of step")
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+	o, exit, ok := parseOptions(args, stderr)
+	if !ok {
+		return exit
 	}
-	if *readTimeout < 0 || *writeTimeout < 0 {
-		_, _ = fmt.Fprintln(stderr, "agentsync-tui: --read-timeout and --write-timeout must not be negative")
-		return 2
-	}
-	if *debugLog != "" {
-		abs, err := filepath.Abs(*debugLog)
-		if err == nil {
-			err = ui.SetDebugLog(abs)
-		}
-		if err != nil {
-			_, _ = fmt.Fprintln(stderr, "agentsync-tui: --debug-log:", err)
-			return 2
-		}
-	}
-
-	if *showVersion {
-		_, _ = fmt.Fprintln(stdout, "agentsync-tui "+resolveVersion(version, debug.ReadBuildInfo))
+	if o.showVersion {
+		_, _ = fmt.Fprintln(stdout, progName+" "+resolveVersion(version, debug.ReadBuildInfo))
 		return 0
 	}
 
-	scope, projectDir, err := resolveScope(*scopeFlag, *project)
+	scope, projectDir, err := resolveScope(o.scope, o.project)
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
+		_, _ = fmt.Fprintln(stderr, progName+":", err)
 		return 2
 	}
 
@@ -131,46 +107,95 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 		Scope:         scope,
 		ProjectDir:    projectDir,
 		LogPath:       logPath(),
-		Timeouts:      &ui.Timeouts{Read: *readTimeout, Write: *writeTimeout},
+		Timeouts:      &ui.Timeouts{Read: o.readTimeout, Write: o.writeTimeout},
 		WithScope:     withScope,
 	}
 	// The initial runner is the same pair a scope switch would build.
 	deps.Runner, deps.Interactive = withScope(scope)
 	a := ui.NewApp(deps, app.Screens(deps)...)
-	// Filter logs a run still in flight as abandoned when Bubble Tea ends the
-	// program on SIGTERM (QuitMsg) or an off-TTY SIGINT (InterruptMsg).
-	// SIGHUP (terminal closed) would otherwise end the process at once with
-	// no record, so it is turned into the same QuitMsg. The signal that ends
-	// the TUI is remembered and, once Run has returned, forwarded to every
-	// agentsync child still running (runner.Shutdown): a read was already
-	// cancelled with SIGINT and gets a short wait, a write abandoned to
-	// SIGTERM or SIGHUP gets the interrupt grace, then the group is killed,
-	// so nothing is orphaned.
-	// SIGINT, SIGTERM and SIGHUP are caught from before the program runs
-	// until the children are ended (h.stop below): a ctrl+c once the
-	// terminal is back in cooked mode is a real SIGINT and must escalate
-	// the shutdown, not end the process through Go's default handler. While
-	// the TUI runs in raw mode a ctrl+c is a key press that Bubble Tea
-	// handles; a real SIGINT (kill -INT) is also seen by Bubble Tea's own
-	// handler, which ends the program (InterruptMsg), so here it is only
-	// noted as the signal to forward.
+	if err := runProgram(a, h); err != nil {
+		_, _ = fmt.Fprintln(stderr, progName+":", err)
+		return 1
+	}
+	return 0
+}
+
+// options are the command-line settings runWith acts on.
+type options struct {
+	showVersion               bool
+	scope, project            string
+	readTimeout, writeTimeout time.Duration
+}
+
+// parseOptions parses and checks the flags and opens the --debug-log file.
+// When ok is false the program ends with exit: 0 after -h, 2 for a bad
+// flag or value (already reported on stderr).
+func parseOptions(args []string, stderr io.Writer) (o options, exit int, ok bool) {
+	fs := flag.NewFlagSet(progName, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.BoolVar(&o.showVersion, "version", false, "print the version and exit")
+	fs.StringVar(&o.scope, "scope", "", "agentsync scope: user or project (default user; --project implies project)")
+	fs.StringVar(&o.project, "project", "", "project directory (implies --scope project)")
+	fs.DurationVar(&o.readTimeout, "read-timeout", ui.DefaultReadTimeout,
+		"bound on network reads (import previews, plugin outdated); 0 = none. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
+	debugLog := fs.String("debug-log", "",
+		"append a masked sample (4 KiB per stream, parse error, exit code) of every read whose output could not be parsed to this file, for bug reports; off by default")
+	fs.DurationVar(&o.writeTimeout, "write-timeout", 0,
+		"bound on every write (apply, import, plugin upgrade, ...); 0 = none. A write cut off partway can leave agentsync's state and the destination files out of step")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return o, 0, false
+		}
+		return o, 2, false
+	}
+	if o.readTimeout < 0 || o.writeTimeout < 0 {
+		_, _ = fmt.Fprintln(stderr, progName+": --read-timeout and --write-timeout must not be negative")
+		return o, 2, false
+	}
+	if *debugLog != "" {
+		abs, err := filepath.Abs(*debugLog)
+		if err == nil {
+			err = ui.SetDebugLog(abs)
+		}
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, progName+": --debug-log:", err)
+			return o, 2, false
+		}
+	}
+	return o, 0, true
+}
+
+// runProgram runs the TUI until it ends, then ends the agentsync children
+// still running (endChildren) and logs their outcomes. It returns Run's
+// error.
+//
+// Filter logs a run still in flight as abandoned when Bubble Tea ends the
+// program on SIGTERM (QuitMsg) or an off-TTY SIGINT (InterruptMsg).
+// SIGHUP (terminal closed) would otherwise end the process at once with
+// no record, so it is turned into the same QuitMsg. The signal that ends
+// the TUI is remembered and, once Run has returned, forwarded to every
+// agentsync child still running (runner.Shutdown): a read was already
+// cancelled with SIGINT and gets a short wait, a write abandoned to
+// SIGTERM or SIGHUP gets the interrupt grace, then the group is killed,
+// so nothing is orphaned.
+// SIGINT, SIGTERM and SIGHUP are caught from before the program runs
+// until the children are ended (h.stop below): a ctrl+c once the
+// terminal is back in cooked mode is a real SIGINT and must escalate
+// the shutdown, not end the process through Go's default handler. While
+// the TUI runs in raw mode a ctrl+c is a key press that Bubble Tea
+// handles; a real SIGINT (kill -INT) is also seen by Bubble Tea's own
+// handler, which ends the program (InterruptMsg), so here it is only
+// noted as the signal to forward.
+func runProgram(a *ui.App, h hooks) error {
 	sigs, done := make(chan os.Signal, 4), make(chan struct{})
 	h.notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	p := h.newProgram(a)
-	var exit struct {
-		sync.Mutex
-		sig os.Signal
-	}
-	note := func(s os.Signal) {
-		exit.Lock()
-		exit.sig = s
-		exit.Unlock()
-	}
+	var exit lastSignal
 	go func() {
 		for {
 			select {
 			case s := <-sigs:
-				note(s)
+				exit.note(s)
 				if s == syscall.SIGHUP {
 					p.Send(tea.QuitMsg{})
 				}
@@ -181,25 +206,37 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	}()
 	// Run restores the terminal (alt screen, raw mode) before returning,
 	// including after a recovered panic.
-	_, err = p.Run()
+	_, err := p.Run()
 	// The forwarding goroutine stops; endChildren drains the channel, which
 	// stays registered until the children are gone.
 	close(done)
 	select { // a signal delivered as Run was returning
 	case s := <-sigs:
-		note(s)
+		exit.note(s)
 	default:
 	}
-	exit.Lock()
-	sig := exit.sig
-	exit.Unlock()
-	a.RecordShutdown(endChildren(sig, sigs, h))
+	a.RecordShutdown(endChildren(exit.get(), sigs, h))
 	h.stop(sigs)
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "agentsync-tui:", err)
-		return 1
-	}
-	return 0
+	return err
+}
+
+// lastSignal is the most recent signal noted while the program ran, shared
+// by the signal-watching goroutine and runProgram.
+type lastSignal struct {
+	mu  sync.Mutex
+	sig os.Signal
+}
+
+func (l *lastSignal) note(s os.Signal) {
+	l.mu.Lock()
+	l.sig = s
+	l.mu.Unlock()
+}
+
+func (l *lastSignal) get() os.Signal {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sig
 }
 
 // endChildren ends the agentsync children once the program has returned,
@@ -267,16 +304,16 @@ func resolveScope(scopeFlag, project string) (runner.Scope, string, error) {
 // is for the CLI's --project.
 func agentsyncHome(getenv func(string) string) string {
 	if root := getenv("AGENTSYNC_TARGET_ROOT"); root != "" {
-		return filepath.Join(root, ".agentsync")
+		return filepath.Join(root, ui.HomeDirName)
 	}
 	if h := getenv("AGENTSYNC_HOME"); h != "" {
 		return h
 	}
 	if home := getenv("HOME"); home != "" {
-		return filepath.Join(home, ".agentsync")
+		return filepath.Join(home, ui.HomeDirName)
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".agentsync")
+		return filepath.Join(home, ui.HomeDirName)
 	}
 	return ""
 }
@@ -285,10 +322,10 @@ func agentsyncHome(getenv func(string) string) string {
 // ~/.local/state; empty (file log disabled) when neither is known.
 func logPath() string {
 	if s := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(s) {
-		return filepath.Join(s, "agentsync-tui", "activity.log")
+		return filepath.Join(s, progName, "activity.log")
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".local", "state", "agentsync-tui", "activity.log")
+		return filepath.Join(home, ".local", "state", progName, "activity.log")
 	}
 	return ""
 }

@@ -119,6 +119,29 @@ func TestSecretListRealCLI(t *testing.T) {
 	if code != 1 || out != "" || strings.TrimSpace(errOut) != strings.TrimSpace(fixture(t, "secret-list-notconfigured.txt")) {
 		t.Fatalf("fresh home: exit %d out %q err %q", code, out, errOut)
 	}
+	configureAgeVault(t, e, keygen)
+	out, _, code = e.Agentsync(t, "--no-input", "--color", "never", "secret", "list")
+	if code != 0 || out != fixture(t, "secret-list-empty.txt") {
+		t.Fatalf("empty vault: exit %d out %q", code, out)
+	}
+	for _, k := range []string{"GITHUB_TOKEN", "API_KEY"} {
+		if _, errOut, code := e.Agentsync(t, "--no-input", "--color", "never", "secret", "set", k+"=FAKEVALUE"); code != 0 {
+			t.Fatalf("set %s: exit %d %s", k, code, errOut)
+		}
+	}
+	out, _, code = e.Agentsync(t, "--no-input", "--color", "never", "secret", "list")
+	if code != 0 || out != fixture(t, "secret-list.txt") {
+		t.Fatalf("configured: exit %d out %q", code, out)
+	}
+	if keys, err := ParseSecretKeys(out); err != nil || len(keys) != 2 {
+		t.Fatalf("parse real output: %q %v", keys, err)
+	}
+}
+
+// configureAgeVault generates an age key with keygen inside the hermetic
+// home and points e's agentsync.toml at an age vault using it.
+func configureAgeVault(t *testing.T, e *testenv.Env, keygen string) {
+	t.Helper()
 	keyFile := filepath.Join(e.Home, "age.key")
 	if o, err := exec.Command(keygen, "-o", keyFile).CombinedOutput(); err != nil {
 		t.Fatalf("age-keygen: %v %s", err, o)
@@ -140,22 +163,6 @@ func TestSecretListRealCLI(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatal(err)
-	}
-	out, _, code = e.Agentsync(t, "--no-input", "--color", "never", "secret", "list")
-	if code != 0 || out != fixture(t, "secret-list-empty.txt") {
-		t.Fatalf("empty vault: exit %d out %q", code, out)
-	}
-	for _, k := range []string{"GITHUB_TOKEN", "API_KEY"} {
-		if _, errOut, code := e.Agentsync(t, "--no-input", "--color", "never", "secret", "set", k+"=FAKEVALUE"); code != 0 {
-			t.Fatalf("set %s: exit %d %s", k, code, errOut)
-		}
-	}
-	out, _, code = e.Agentsync(t, "--no-input", "--color", "never", "secret", "list")
-	if code != 0 || out != fixture(t, "secret-list.txt") {
-		t.Fatalf("configured: exit %d out %q", code, out)
-	}
-	if keys, err := ParseSecretKeys(out); err != nil || len(keys) != 2 {
-		t.Fatalf("parse real output: %q %v", keys, err)
 	}
 }
 

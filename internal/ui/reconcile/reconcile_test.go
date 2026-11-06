@@ -160,32 +160,8 @@ func TestNoBulkResolveKeys(t *testing.T) {
 		h.refresh()
 		before := len(r.Calls())
 		h.press(k)
-		for _, d := range h.dos {
-			for _, arg := range d.Action.Argv {
-				if arg == "--auto-writeback" || arg == "--auto-override" {
-					t.Fatalf("key %q emitted %v", k, d.Action.Argv)
-				}
-			}
-		}
-		for _, c := range r.Calls() {
-			if strings.Contains(c, "--auto-writeback") || strings.Contains(c, "--auto-override") {
-				t.Fatalf("key %q ran %q", k, c)
-			}
-		}
-		switch k {
-		case "W", "O", "S", "w", "o":
-			if len(h.dos) != 0 || len(r.Calls()) != before {
-				t.Fatalf("key %q did something: dos=%v calls=%v", k, h.dos, r.Calls())
-			}
-		case "x":
-			if len(h.dos) != 1 || !h.dos[0].Action.Interactive {
-				t.Fatalf("x: %+v", h.dos)
-			}
-		default:
-			if len(h.dos) != 0 {
-				t.Fatalf("key %q emitted %+v", k, h.dos)
-			}
-		}
+		assertNoBulkResolve(t, k, h, r)
+		assertKeyEffect(t, k, h, r, before)
 	}
 	src, err := os.ReadFile("reconcile.go")
 	if err != nil {
@@ -194,6 +170,45 @@ func TestNoBulkResolveKeys(t *testing.T) {
 	for _, bad := range []string{`"--auto-writeback"`, `"--auto-override"`} {
 		if strings.Contains(string(src), bad) {
 			t.Fatalf("source builds %s", bad)
+		}
+	}
+}
+
+// assertNoBulkResolve fails if key k emitted or ran a bulk resolve
+// (--auto-writeback or --auto-override).
+func assertNoBulkResolve(t *testing.T, k string, h *harness, r *runnertest.Fake) {
+	t.Helper()
+	for _, d := range h.dos {
+		for _, arg := range d.Action.Argv {
+			if arg == "--auto-writeback" || arg == "--auto-override" {
+				t.Fatalf("key %q emitted %v", k, d.Action.Argv)
+			}
+		}
+	}
+	for _, c := range r.Calls() {
+		if strings.Contains(c, "--auto-writeback") || strings.Contains(c, "--auto-override") {
+			t.Fatalf("key %q ran %q", k, c)
+		}
+	}
+}
+
+// assertKeyEffect checks what key k did: the bulk-resolve letters nothing
+// at all (before is the call count ahead of the key), x the interactive
+// handover, every other key no DoMsg.
+func assertKeyEffect(t *testing.T, k string, h *harness, r *runnertest.Fake, before int) {
+	t.Helper()
+	switch k {
+	case "W", "O", "S", "w", "o":
+		if len(h.dos) != 0 || len(r.Calls()) != before {
+			t.Fatalf("key %q did something: dos=%v calls=%v", k, h.dos, r.Calls())
+		}
+	case "x":
+		if len(h.dos) != 1 || !h.dos[0].Action.Interactive {
+			t.Fatalf("x: %+v", h.dos)
+		}
+	default:
+		if len(h.dos) != 0 {
+			t.Fatalf("key %q emitted %+v", k, h.dos)
 		}
 	}
 }
@@ -249,6 +264,11 @@ const canaryReport = "skipped (needs manual review): /x#/a (drift) password: CAN
 	"token=CANARYx1\nAuthorization: Bearer CANARYx1\n\x1b[31mred\x1b[0m \u202eevil\n"
 
 func TestReconcileOutputStoredMasked(t *testing.T) {
+	t.Run("masked", testReconcileOutputMasked)
+	t.Run("capped and scrollable", testReconcileOutputCappedAndScrollable)
+}
+
+func testReconcileOutputMasked(t *testing.T) {
 	h := newHarness(t, okRunner(canaryReport))
 	h.refresh()
 	for _, bad := range []string{"CANARYx1", "\x1b", "\u202e"} {
@@ -265,8 +285,10 @@ func TestReconcileOutputStoredMasked(t *testing.T) {
 	if !strings.Contains(h.s.report, "password: ••••") || !strings.Contains(h.s.report, "red") {
 		t.Fatalf("stored = %q", h.s.report)
 	}
-	// capped
-	h = newHarness(t, okRunner(strings.Repeat("skipped (needs manual review): /x#/a (drift)\n", 5000)))
+}
+
+func testReconcileOutputCappedAndScrollable(t *testing.T) {
+	h := newHarness(t, okRunner(strings.Repeat("skipped (needs manual review): /x#/a (drift)\n", 5000)))
 	h.refresh()
 	if len(h.s.report) > 64<<10 || !h.s.trunc {
 		t.Fatalf("len=%d trunc=%v", len(h.s.report), h.s.trunc)
@@ -295,7 +317,7 @@ func TestReconcileOutputStoredMasked(t *testing.T) {
 func TestReconcileScopeAwareSwapsRunner(t *testing.T) {
 	r1, r2 := okRunner("a"), okRunner("nothing to reconcile\n")
 	h := newHarness(t, r1)
-	var _ ui.ScopeAware = h.s
+	var _ ui.ScopeSetter = h.s
 	var _ ui.KeyCapturer = h.s
 	var _ ui.Screen = h.s
 	h.s.SetScope(r2, runner.ScopeProject, "")

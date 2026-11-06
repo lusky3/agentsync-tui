@@ -8,7 +8,10 @@ import (
 )
 
 // setProcessGroup: no process groups here; signals reach agentsync only.
-func setProcessGroup(*exec.Cmd) {}
+func setProcessGroup(*exec.Cmd) {
+	// Intentionally empty: this platform has no POSIX process groups, so the
+	// child keeps the default attributes and signalGroup signals it alone.
+}
 
 // signalGroup signals the child itself (os.Kill when sig is not
 // deliverable, as on Windows).

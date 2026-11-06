@@ -159,6 +159,10 @@ func key(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
 		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
 	case "space":
 		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	case "ctrl+s":
@@ -305,22 +309,27 @@ args = ['-e', 'DB_PASS=correct horse `+canary+`', '--header=X-Api-Key: `+canary+
 		if !strings.Contains(v, "••••") {
 			t.Errorf("detail of %s shows no mask:\n%s", id, v)
 		}
-		if id == "leaky" {
-			for _, want := range []string{"REF = ${env:TOKEN}", "Authorization = Bearer ${secret:GH}", "API_KEY = ••••", "-y", "nested", "list"} {
-				if !strings.Contains(v, want) {
-					t.Errorf("detail missing %q:\n%s", want, v)
-				}
+		switch id {
+		case "leaky":
+			detailHas(t, v, "REF = ${env:TOKEN}", "Authorization = Bearer ${secret:GH}", "API_KEY = ••••", "-y", "nested", "list")
+		case "spaced":
+			detailHas(t, v, "DB_PASS=••••", "--password=••••", "--header=••••", "--header=Authorization: Bearer ${env:T}", "mytool")
+		default:
+			if !strings.Contains(v, "example.com/mcp") {
+				t.Errorf("detail missing url host:\n%s", v)
 			}
-		} else if id == "spaced" {
-			for _, want := range []string{"DB_PASS=••••", "--password=••••", "--header=••••", "--header=Authorization: Bearer ${env:T}", "mytool"} {
-				if !strings.Contains(v, want) {
-					t.Errorf("detail missing %q:\n%s", want, v)
-				}
-			}
-		} else if !strings.Contains(v, "example.com/mcp") {
-			t.Errorf("detail missing url host:\n%s", v)
 		}
 		press(s, "esc")
+	}
+}
+
+// detailHas fails for each of wants that the detail view v does not show.
+func detailHas(t *testing.T, v string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(v, want) {
+			t.Errorf("detail missing %q:\n%s", want, v)
+		}
 	}
 }
 
@@ -358,38 +367,42 @@ func TestEditOpensEditorThenRunsCheck(t *testing.T) {
 }
 
 func TestStaleListRefreshesBeforeMutation(t *testing.T) {
-	t.Run("removed", func(t *testing.T) {
-		for _, k := range []string{"e", "x"} {
-			home := fixtureHome(t)
-			s := newLoaded(t, home, okRunner())
-			selectID(t, s, "stdio-srv")
-			if err := os.Remove(filepath.Join(home, "mcp", "stdio-srv.toml")); err != nil {
-				t.Fatal(err)
-			}
-			if msgs := press(s, k); len(msgs) != 0 {
-				t.Fatalf("%s: action emitted for a removed server: %#v", k, msgs)
-			}
-			v := view(s)
-			if !strings.Contains(v, "server list changed — refreshed") || strings.Contains(v, "stdio-srv") {
-				t.Errorf("%s: view:\n%s", k, v)
-			}
-		}
-	})
-	t.Run("toggled elsewhere", func(t *testing.T) {
+	t.Run("removed", testStaleListRemoved)
+	t.Run("toggled elsewhere", testStaleListToggledElsewhere)
+}
+
+func testStaleListRemoved(t *testing.T) {
+	for _, k := range []string{"e", "x"} {
 		home := fixtureHome(t)
 		s := newLoaded(t, home, okRunner())
-		selectID(t, s, "http-srv")
-		writeServer(t, home, "http-srv", strings.Replace(httpTOML, "agents = ['*']", "agents = ['*']\nenabled = false", 1))
-		if msgs := press(s, "e"); len(msgs) != 0 {
-			t.Fatalf("toggle emitted against a stale state: %#v", msgs)
+		selectID(t, s, "stdio-srv")
+		if err := os.Remove(filepath.Join(home, "mcp", "stdio-srv.toml")); err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(view(s), "server list changed — refreshed") {
-			t.Errorf("view:\n%s", view(s))
+		if msgs := press(s, k); len(msgs) != 0 {
+			t.Fatalf("%s: action emitted for a removed server: %#v", k, msgs)
 		}
-		if got := onlyDo(t, press(s, "e")); !reflect.DeepEqual(got, mustAct(actions.McpEnable("http-srv"))) {
-			t.Errorf("after refresh -> %#v", got)
+		v := view(s)
+		if !strings.Contains(v, "server list changed — refreshed") || strings.Contains(v, "stdio-srv") {
+			t.Errorf("%s: view:\n%s", k, v)
 		}
-	})
+	}
+}
+
+func testStaleListToggledElsewhere(t *testing.T) {
+	home := fixtureHome(t)
+	s := newLoaded(t, home, okRunner())
+	selectID(t, s, "http-srv")
+	writeServer(t, home, "http-srv", strings.Replace(httpTOML, "agents = ['*']", "agents = ['*']\nenabled = false", 1))
+	if msgs := press(s, "e"); len(msgs) != 0 {
+		t.Fatalf("toggle emitted against a stale state: %#v", msgs)
+	}
+	if !strings.Contains(view(s), "server list changed — refreshed") {
+		t.Errorf("view:\n%s", view(s))
+	}
+	if got := onlyDo(t, press(s, "e")); !reflect.DeepEqual(got, mustAct(actions.McpEnable("http-srv"))) {
+		t.Errorf("after refresh -> %#v", got)
+	}
 }
 
 func TestEmptyState(t *testing.T) {
@@ -446,7 +459,7 @@ func TestStatusFailureStillListsServers(t *testing.T) {
 }
 
 func TestScopeAwareSwapsRunner(t *testing.T) {
-	var _ ui.ScopeAware = (*Screen)(nil)
+	var _ ui.ScopeSetter = (*Screen)(nil)
 	var _ ui.KeyCapturer = (*Screen)(nil)
 	var _ ui.Screen = (*Screen)(nil)
 	fr1, fr2 := okRunner(), okRunner()

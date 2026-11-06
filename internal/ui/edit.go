@@ -52,6 +52,10 @@ func (a *App) editOutcome(m EditOutcomeMsg) tea.Cmd {
 	return tea.Batch(a.broadcast(m)...)
 }
 
+// editRefused prefixes the reasons a file cannot be opened for editing
+// (outside the agentsync home, no usable editor).
+const editRefused = "edit refused: "
+
 // refuseEdit reports a refused edit on the status line and to the screens.
 func (a *App) refuseEdit(path, reason string) tea.Cmd {
 	a.setStatus(statusFail, reason)
@@ -129,12 +133,12 @@ func (a *App) editFile(m EditFileMsg) tea.Cmd {
 	}
 	path, err := resolveInside(a.home, m.Path)
 	if err != nil {
-		a.setStatus(statusFail, "edit refused: "+base+": "+err.Error())
-		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: "edit refused: " + err.Error()})
+		a.setStatus(statusFail, editRefused+base+": "+err.Error())
+		return a.editOutcome(EditOutcomeMsg{Path: m.Path, Err: editRefused + err.Error()})
 	}
 	argv, err := editorArgv(os.Getenv)
 	if err != nil {
-		return a.refuseEdit(m.Path, "edit refused: "+logSafe(mask.Text(err.Error())))
+		return a.refuseEdit(m.Path, editRefused+logSafe(mask.Text(err.Error())))
 	}
 	start := time.Now()
 	a.running = &running{act: actions.Action{Title: "Edit " + base}, start: start}
