@@ -408,7 +408,12 @@ func startShell(t *testing.T, home, logPath string) *shell {
 	t.Helper()
 	d := deps(home, runnertest.New(), gittest.NewGit(t), nil)
 	d.LogPath = logPath
-	s := New(d)
+	return newShell(t, d, New(d))
+}
+
+// newShell runs the shell over d with s as its only screen, once s loaded.
+func newShell(t *testing.T, d ui.Deps, s *Screen) *shell {
+	t.Helper()
 	sh := &shell{t: t, s: s, p: probe{App: ui.NewApp(d, s), seen: make(chan tea.Msg, 4096)}}
 	sh.tm = teatest.NewTestModel(t, sh.p, teatest.WithInitialTermSize(160, 60))
 	sh.wait("load", func(m tea.Msg) bool { _, ok := m.(loadMsg); return ok })
@@ -678,4 +683,29 @@ func TestStaleGuardIgnoredAfterEscAndScopeSwitch(t *testing.T) {
 	if f.s.loaded {
 		t.Error("an old-scope load was applied")
 	}
+}
+
+func TestRenameSourceNowDirectoryNoteShown(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "skill", map[string]string{"skills/old.md": "# s\n"})
+	gittest.Git(t, home, "mv", "skills/old.md", "skills/new.md")
+	write(t, home, "skills/old.md/x.md", "# x\n")
+	f := open(t, home)
+	wantView(t, f.s, "old path is now a directory; its removal stays staged",
+		"git -C "+f.s.repo.Top+" commit -- skills/old.md")
+	selectRow(t, f.s, "skills/old.md/x.md")
+	if f.s.sel["skills/old.md/x.md"] {
+		selectRow(t, f.s, "skills/old.md/x.md")
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	wantChain(t, f.s, d, []string{"skills/new.md"}, []string{"skills/new.md"})
+}
+
+func TestRenameSourceSensitiveNameNoteShown(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "pem", map[string]string{"skills/k.pem": "x\n"})
+	gittest.Git(t, home, "mv", "skills/k.pem", "skills/k.txt")
+	f := open(t, home)
+	wantView(t, f.s, "old path is a sensitive path; its removal stays staged",
+		"git -C "+f.s.repo.Top+" commit -- skills/k.pem")
 }

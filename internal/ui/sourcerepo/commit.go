@@ -3,6 +3,7 @@ package sourcerepo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ const (
 	shownPaths = 10
 	refused    = "refused: "
 	keyEsc     = "esc"
+	gitC       = "git -C "
 )
 
 // binaryRe is the line git prints for a binary change (binary content, or
@@ -73,6 +75,7 @@ type guardMsg struct {
 	refusal  string // display-safe; "" when every guard passed
 	changed  bool   // a selected file is no longer listed; status is fresh
 	status   gitrepo.Status
+	kept     map[string]keptNote
 	findings []gitrepo.Finding
 	add      []string // paths that exist in the worktree
 	commit   []string // every selected path, plus in-home rename sources
@@ -144,7 +147,7 @@ func runGuards(ctx context.Context, gen int, in guardInput) guardMsg {
 	}
 	files, ok := pick(st.Files, in.selected)
 	if !ok {
-		m.changed, m.status = true, st
+		m.changed, m.status, m.kept = true, st, keptSources(in.repo, st.Files)
 		return m
 	}
 	if m.refusal = preflight(ctx, in, st.Branch); m.refusal != "" {
@@ -183,16 +186,30 @@ func preflight(ctx context.Context, in guardInput, b gitrepo.Branch) string {
 	if note := ui.ReadNote("agentsync check", res, err); note != "" {
 		return refused + note
 	}
-	gd := gitrepo.InspectGitDir(in.repo.GitDir)
+	switch why := gitDirRefusal(in.repo.GitDir); {
+	case why != "":
+		return why
+	case b.Detached:
+		return msgDetached
+	case in.repo.Refusal != "":
+		return refused + mask.Sanitize(in.repo.Refusal)
+	}
+	return ""
+}
+
+// msgDetached refuses a commit, pull or push on a detached HEAD.
+const msgDetached = refused + "HEAD is detached: check out a branch outside the TUI"
+
+// gitDirRefusal refuses while index.lock is present or a merge, rebase,
+// cherry-pick, revert or bisect is in progress; "" otherwise. The lock is
+// never deleted.
+func gitDirRefusal(gitDir string) string {
+	gd := gitrepo.InspectGitDir(gitDir)
 	switch {
 	case gd.Locked:
 		return refused + "index.lock is present: another git may be running. The TUI never deletes the lock; remove it yourself only if no git is running"
 	case gd.InProgress != "":
 		return refused + "a " + gd.InProgress + " is in progress: finish or abort it outside the TUI"
-	case b.Detached:
-		return refused + "HEAD is detached: check out a branch outside the TUI"
-	case in.repo.Refusal != "":
-		return refused + mask.Sanitize(in.repo.Refusal)
 	}
 	return ""
 }
@@ -288,21 +305,84 @@ func commitPaths(repo gitrepo.Repo, files []gitrepo.File) (add, commit []string)
 
 // commitSource reports whether a rename's source may join the commit
 // paths. `git commit -- <path>` records the worktree's current content at
-// the path, so a source that exists again (recreated after the move) would
-// be committed unselected and unscanned: it is left out, its staged
-// removal stays staged, and the rename's new side commits on its own. A
-// source outside the home, one git cannot be given, or one whose name is a
-// state, sensitive or unusual path is never included either.
+// the path, so a source that exists again (recreated after the move, as a
+// file or a directory) would be committed unselected and unscanned: it is
+// left out, its staged removal stays staged, and the rename's new side
+// commits on its own. A source outside the home, one git cannot be given,
+// or one whose name is a state, sensitive or unusual path is never
+// included either (keptReason says which).
 func commitSource(repo gitrepo.Repo, orig string) bool {
-	if !inHome(repo.Pathspec, orig) || actions.ValidGitPath(orig) != nil {
-		return false
+	return inHome(repo.Pathspec, orig) && keptReason(repo, orig).text == ""
+}
+
+// keptNote is why a rename's in-home source stays out of a commit, for
+// its row; cmd is set when committing the staged removal by hand is safe
+// to suggest (the old path is gone or is now a directory).
+type keptNote struct {
+	text string
+	cmd  bool
+}
+
+// The row notes of a rename source a commit leaves out (Ruling 29).
+const (
+	keptDir     = "old path is now a directory; its removal stays staged (command above)"
+	keptName    = "old path is a %s path; its removal stays staged (command above)"
+	keptUnknown = "old path cannot be inspected; its removal is not part of this commit"
+)
+
+// keptSources maps each listed rename whose in-home source a commit leaves
+// out to the reason. It runs in a background round (it stats the worktree).
+func keptSources(repo gitrepo.Repo, files []gitrepo.File) map[string]keptNote {
+	out := map[string]keptNote{}
+	for _, f := range files {
+		if f.Kind != gitrepo.Renamed || !inHome(repo.Pathspec, f.Orig) {
+			continue
+		}
+		if k := keptReason(repo, f.Orig); k.text != "" {
+			out[f.Path] = k
+		}
 	}
-	switch class, _ := gitrepo.Classify(homeRel(repo.Pathspec, orig), nil, false); class {
-	case gitrepo.StateDir, gitrepo.Sensitive, gitrepo.Unusual:
-		return false
+	return out
+}
+
+// keptReason is why the in-home rename source orig stays out of a commit,
+// or the zero keptNote when it joins it.
+func keptReason(repo gitrepo.Repo, orig string) keptNote {
+	fi, err := os.Lstat(filepath.Join(repo.Top, filepath.FromSlash(orig)))
+	switch {
+	case err == nil && fi.IsDir():
+		return keptNote{text: keptDir, cmd: true}
+	case err == nil:
+		return keptNote{text: sourceBack}
+	case !errors.Is(err, fs.ErrNotExist):
+		return keptNote{text: keptUnknown}
 	}
-	_, err := os.Lstat(filepath.Join(repo.Top, filepath.FromSlash(orig)))
-	return errors.Is(err, fs.ErrNotExist)
+	if class := sourceClass(repo, orig); class != "" {
+		return keptNote{text: fmt.Sprintf(keptName, class), cmd: true}
+	}
+	return keptNote{}
+}
+
+// sourceClass names the class of a rename source whose name keeps it out
+// of a commit (state, sensitive, unusual), or "".
+func sourceClass(repo gitrepo.Repo, orig string) string {
+	switch class, _ := gitrepo.Classify(homeRel(repo.Pathspec, orig), nil, false); {
+	case class == gitrepo.StateDir, class == gitrepo.Sensitive, class == gitrepo.Unusual:
+		return class.String()
+	case actions.ValidGitPath(orig) != nil:
+		return gitrepo.Unusual.String()
+	}
+	return ""
+}
+
+// removalCommand is the command that commits a kept source's staged
+// removal, as text for the user: the TUI never runs it.
+func removalCommand(top, orig string) string {
+	old := gitrepo.DisplayName(orig)
+	if !actions.HasControl(orig) {
+		old = shellQuote(mask.Text(orig))
+	}
+	return gitC + shellQuote(top) + " commit -- " + old
 }
 
 // homeRel is the toplevel-relative p relative to the home.
@@ -324,6 +404,7 @@ func (s *Screen) onGuard(m guardMsg) tea.Cmd {
 	s.commit.busy = false
 	switch {
 	case m.changed:
+		s.kept = m.kept
 		s.applyStatus(m.status)
 		s.mode, s.note = modeList, "changed since listed: refreshed"
 		return nil

@@ -1,11 +1,14 @@
 // Package sourcerepo is the Source repo tab: how the agentsync home is
 // versioned, what changed in it under the home pathspec, a masked per-file
-// diff, and a guarded commit of explicitly selected files (D2-D4, D8).
+// diff, a guarded commit of explicitly selected files (D2-D4, D8), fetch,
+// fast-forward pull and a guarded push (D5-D7, R7), and the bootstrap of a
+// missing home from a URL (D10).
 //
 // Every git call here is a local read run in a background round bounded by
-// Timeouts.Local (status, diff, the pre-commit scan), or an Action handed to
-// the shell (add, then commit). Nothing touches the network on refresh or
-// focus. Diff and file bytes reach only this screen's own diff message,
+// Timeouts.Local (status, upstream, diff, the pre-commit and pre-push scans),
+// or an Action handed to the shell (add, then commit; fetch, pull, push;
+// agentsync init). Only the keys f, p, P and the bootstrap's enter emit an
+// action that touches the network; nothing does on refresh or focus. Diff and file bytes reach only this screen's own diff message,
 // already masked; they never reach a note, the status line or the log.
 package sourcerepo
 
@@ -32,6 +35,7 @@ const (
 	modeList mode = iota
 	modeDiff
 	modeCommit
+	modeURL
 )
 
 // The reasons a key is disabled.
@@ -55,31 +59,41 @@ type Screen struct {
 	scope runner.Scope
 	home  string
 
-	reads, diffs, guards ui.Rounds
+	reads, diffs, guards, nets ui.Rounds
 
 	loaded   bool
 	repo     gitrepo.Repo
 	status   gitrepo.Status
-	loadNote string          // why the last load failed, display-safe
-	sel      map[string]bool // selected file paths (File.Path)
-	listed   map[string]bool // every listed File.Path
+	remote   remoteInfo          // the branch's upstream, read with status
+	kept     map[string]keptNote // rename path -> why its source stays out of a commit
+	loadNote string              // why the last load failed, display-safe
+	sel      map[string]bool     // selected file paths (File.Path)
 	list     ui.List
 
 	mode    mode
 	diff    diffPane
 	commit  commitState
 	pending *pendingCommit
-	note    string // last screen message, display-safe (may hold line breaks)
+	netState
+	note string // last screen message, display-safe (may hold line breaks)
 
 	width, height int
 }
 
 // loadMsg carries one detect-and-status round.
 type loadMsg struct {
-	gen    int
-	repo   gitrepo.Repo
+	gen  int
+	repo gitrepo.Repo
+	snap snapshot
+	note string
+}
+
+// snapshot is what one status read learns: the status, the branch's
+// upstream and why each in-home rename source stays out of a commit.
+type snapshot struct {
 	status gitrepo.Status
-	note   string
+	remote remoteInfo
+	kept   map[string]keptNote
 }
 
 // New returns the Source repo screen.
@@ -87,7 +101,7 @@ func New(d ui.Deps) *Screen {
 	return &Screen{
 		base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, git: d.Git, cz: d.Chezmoi,
 		scope: d.Scope, home: ui.HomeFor(d, d.Scope), sel: map[string]bool{}, commit: newCommitState(),
-		width: 80, height: 24,
+		netState: newNetState(), width: 80, height: 24,
 	}
 }
 
@@ -97,8 +111,9 @@ func (s *Screen) Title() string { return Title }
 // Init is exactly Refresh.
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
 
-// CapturesKeys implements ui.KeyCapturer: while the message field has focus.
-func (s *Screen) CapturesKeys() bool { return s.mode == modeCommit }
+// CapturesKeys implements ui.KeyCapturer: while the message or URL field
+// has focus.
+func (s *Screen) CapturesKeys() bool { return s.mode == modeCommit || s.mode == modeURL }
 
 // SetScope implements ui.ScopeSetter: the new home is detected afresh and
 // everything loaded for the old one is dropped.
@@ -107,7 +122,9 @@ func (s *Screen) SetScope(r runner.Runner, scope runner.Scope, home string) {
 	s.reads.Supersede()
 	s.diffs.Supersede()
 	s.guards.Supersede()
+	s.nets.Supersede()
 	s.loaded, s.repo, s.status, s.loadNote = false, gitrepo.Repo{}, gitrepo.Status{}, ""
+	s.remote, s.kept, s.netState = remoteInfo{}, nil, newNetState()
 	s.sel, s.list, s.mode, s.diff = map[string]bool{}, ui.List{}, modeList, diffPane{}
 	s.commit, s.pending, s.note = newCommitState(), nil, ""
 }
@@ -117,6 +134,7 @@ func (s *Screen) Shutdown() {
 	s.reads.Cancel()
 	s.diffs.Cancel()
 	s.guards.Cancel()
+	s.nets.Cancel()
 }
 
 // Refresh re-detects the repository and re-reads its status in the
@@ -128,7 +146,7 @@ func (s *Screen) Refresh() tea.Cmd {
 }
 
 // load is one refresh round: Detect, then, for a git repository with a
-// toplevel, its status.
+// toplevel, its status and upstream.
 func load(ctx context.Context, gen int, git, cz runner.Runner, home string, limit time.Duration) loadMsg {
 	repo, err := gitrepo.Detect(ctx, git, cz, home, limit)
 	m := loadMsg{gen: gen, repo: repo}
@@ -137,9 +155,22 @@ func load(ctx context.Context, gen int, git, cz runner.Runner, home string, limi
 		return m
 	}
 	if repo.Manager == gitrepo.Git && repo.Top != "" {
-		m.status, m.note = readStatus(ctx, git, repo, limit)
+		m.snap, m.note = readSnapshot(ctx, git, repo, limit)
 	}
 	return m
+}
+
+// readSnapshot reads the status, then the upstream of its branch, and
+// works out which rename sources a commit leaves out. note is display-safe
+// and empty on success.
+func readSnapshot(ctx context.Context, git runner.Runner, repo gitrepo.Repo, limit time.Duration) (snapshot, string) {
+	st, note := readStatus(ctx, git, repo, limit)
+	if note != "" {
+		return snapshot{}, note
+	}
+	sn := snapshot{status: st, kept: keptSources(repo, st.Files)}
+	sn.remote, note = readRemote(ctx, git, repo.Top, st.Branch, limit)
+	return sn, note
 }
 
 // readStatus runs the status read and parses it, both bounded by limit
@@ -202,8 +233,13 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s.guards.Current(msg.gen) {
 			return s, s.onGuard(msg)
 		}
+	case netMsg:
+		if s.nets.Current(msg.gen) {
+			return s, s.onNet(msg)
+		}
 	case ui.RunMsg:
 		s.onRun(msg)
+		return s, s.onNetRun(msg)
 	case tea.KeyPressMsg:
 		return s, s.keyPress(msg)
 	}
@@ -214,12 +250,18 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (s *Screen) apply(m loadMsg) {
 	s.loaded, s.repo, s.loadNote = true, m.repo, m.note
 	if m.repo.Manager != gitrepo.Git || m.repo.Top == "" {
-		s.applyStatus(gitrepo.Status{})
+		s.applySnapshot(snapshot{})
 		return
 	}
 	if m.note == "" {
-		s.applyStatus(m.status)
+		s.applySnapshot(m.snap)
 	}
+}
+
+// applySnapshot takes a fresh status with what was read alongside it.
+func (s *Screen) applySnapshot(sn snapshot) {
+	s.remote, s.kept = sn.remote, sn.kept
+	s.applyStatus(sn.status)
 }
 
 // applyStatus replaces the listed files. A file listed before keeps its
@@ -239,11 +281,7 @@ func (s *Screen) applyStatus(st gitrepo.Status) {
 			sel[f.Path] = f.Default
 		}
 	}
-	listed := make(map[string]bool, len(st.Files))
-	for _, f := range st.Files {
-		listed[f.Path] = true
-	}
-	s.status, s.sel, s.listed = st, sel, listed
+	s.status, s.sel = st, sel
 	s.list.Clamp(len(st.Files))
 }
 
@@ -282,6 +320,8 @@ func (s *Screen) keyPress(k tea.KeyPressMsg) tea.Cmd {
 		return s.diffKey(k.String())
 	case modeCommit:
 		return s.commitKey(k)
+	case modeURL:
+		return s.urlKey(k)
 	}
 	return s.listKey(k.String())
 }
@@ -304,6 +344,9 @@ func (s *Screen) listKey(k string) tea.Cmd {
 		s.openCommit()
 	case keyEsc:
 		s.note = ""
+		s.cancelNet()
+	default:
+		return s.remoteKey(k)
 	}
 	return nil
 }

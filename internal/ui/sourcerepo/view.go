@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	listKeys    = "space select • a select all • enter/d diff • c commit • r refresh • " + ui.ScrollKeys
+	listKeys    = "space select • a select all • enter/d diff • c commit • f fetch • p pull • P push • r refresh • " + ui.ScrollKeys
+	pulledKeys  = "D drift • A apply • "
 	refreshKeys = "r refresh"
+	initKeys    = "i clone from a URL • r refresh"
 	diffKeys    = "esc back • " + ui.ScrollKeys
 	commitKeys  = "enter check and commit • esc back • ctrl+u clear"
 	// maxFindings is how many findings the pane lists.
@@ -46,6 +48,8 @@ func (s *Screen) View() tea.View {
 		lines = s.diffView()
 	case modeCommit:
 		lines = s.commitView()
+	case modeURL:
+		lines = s.urlView()
 	default:
 		lines = s.listView()
 	}
@@ -64,11 +68,21 @@ func (s *Screen) listView() []string {
 	header := s.header()
 	var rows []string
 	keys := refreshKeys
-	if s.isGit() {
+	switch {
+	case s.isGit():
 		header = append(header, s.warnings()...)
 		rows, keys = s.rows(), listKeys
+		if s.pulled {
+			keys = pulledKeys + keys
+		}
+	case s.initBlocked() == "":
+		keys = initKeys
 	}
-	footer := append(s.findingLines(), s.noteLines()...)
+	footer := s.findingLines()
+	if s.netBusy {
+		footer = append(footer, theme.Dim.Render(checkingNet))
+	}
+	footer = append(footer, s.noteLines()...)
 	footer = append(footer, ui.KeyLines(keys, s.width)...)
 	return s.list.Frame(header, rows, footer, s.height)
 }
@@ -99,11 +113,11 @@ func (s *Screen) header() []string {
 		return []string{
 			theme.Bold.Render(whyNone) + ": " + home,
 			"To version the home, run these outside the TUI (it runs neither):",
-			"  git -C " + home + " init",
-			"  git -C " + home + " remote add origin <url>",
+			"  " + gitC + home + " init",
+			"  " + gitC + home + " remote add origin <url>",
 		}
 	case gitrepo.Missing:
-		return []string{"No agentsync home at " + home + "."}
+		return s.missingHeader(home)
 	}
 	return s.gitHeader()
 }
@@ -157,6 +171,12 @@ func (s *Screen) warnings() []string {
 	if n := s.status.Note(); n != "" {
 		out = append(out, theme.Dim.Render(n))
 	}
+	for _, f := range s.status.Files {
+		if s.kept[f.Path].cmd {
+			out = append(out, theme.Dim.Render("to commit the staged removal of "+gitrepo.DisplayName(f.Orig)+
+				", run outside the TUI: "+removalCommand(s.repo.Top, f.Orig)))
+		}
+	}
 	if len(s.status.Files) == 0 && s.loadNote == "" {
 		out = append(out, theme.Dim.Render("no changes under the home"))
 	}
@@ -191,8 +211,8 @@ func (s *Screen) row(f gitrepo.File) string {
 	}
 	line := fmt.Sprintf("%s %-12s %s  [%s]", box, f.Kind, name, f.Class)
 	note := f.Note
-	if f.Kind == gitrepo.Renamed && inHome(s.repo.Pathspec, f.Orig) && s.listed[f.Orig] {
-		note = joinNote(note, sourceBack)
+	if k, ok := s.kept[f.Path]; ok {
+		note = joinNote(note, k.text)
 	}
 	if note != "" {
 		line += "  " + theme.Dim.Render(mask.Sanitize(note))
@@ -212,9 +232,13 @@ func (s *Screen) noteLines() []string {
 	return out
 }
 
-// findingLines lists the last scan's findings (masked by the scan).
+// findingLines lists the last scan's findings (masked by the scan): the
+// pre-push scan's when it found any, else the pre-commit scan's.
 func (s *Screen) findingLines() []string {
 	fs := s.commit.findings
+	if len(s.pushFindings) > 0 {
+		fs = s.pushFindings
+	}
 	if len(fs) == 0 {
 		return nil
 	}

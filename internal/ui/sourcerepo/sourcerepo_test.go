@@ -350,7 +350,7 @@ func TestChezmoiNoticeAndNoGitKeys(t *testing.T) {
 		}
 	}
 	before := len(git.all())
-	for _, k := range []string{"space", "a", "c", "d", "enter"} {
+	for _, k := range []string{"space", "a", "c", "d", "enter", "f", "p", "P", "i"} {
 		if out := press(s, k); len(out) != 0 {
 			t.Errorf("%s emitted %v", k, out)
 		}
@@ -408,7 +408,7 @@ func TestUnknownManagerDisablesKeys(t *testing.T) {
 		t.Errorf("view:\n%s", v)
 	}
 	n := len(git.Calls())
-	for _, k := range []string{"space", "a", "c", "d", "enter"} {
+	for _, k := range []string{"space", "a", "c", "d", "enter", "f", "p", "P", "i"} {
 		if out := press(s, k); len(out) != 0 || s.mode != modeList {
 			t.Errorf("%s: emitted %v mode %v", k, out, s.mode)
 		}
