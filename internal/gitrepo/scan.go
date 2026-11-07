@@ -263,20 +263,49 @@ func classify(text string, config bool) (kind string, hard, found bool) {
 // mask.Credential reads API_KEY = ”'x”' as API_KEY = 'x'.
 var tripleQuotes = strings.NewReplacer(`"""`, `"`, "'''", "'")
 
-// allPairs is the line's key/value pair and, when its value is an inline
-// table, the pairs inside it (nested tables included).
+// allPairs is the line's key/value pair and every pair inside its value
+// at any depth. The value is cut at each bracket and comma outside quoted
+// strings (looseFragments) rather than parsed, so half-edited TOML with a
+// stray or missing brace still has each of its pairs checked.
 func allPairs(text string) []kv {
 	p, ok := parseKV(text)
 	if !ok {
 		return nil
 	}
 	out := []kv{p}
-	if v := strings.TrimSpace(p.value); len(v) >= 2 && v[0] == '{' && v[len(v)-1] == '}' {
-		for _, e := range splitElems(v[1 : len(v)-1]) {
-			out = append(out, allPairs(e)...)
+	if !strings.ContainsAny(p.value, "{[") {
+		return out
+	}
+	for _, f := range looseFragments(p.value) {
+		if q, ok := parseKV(f); ok {
+			out = append(out, q)
 		}
 	}
 	return out
+}
+
+// looseFragments cuts s at every bracket, brace and comma outside quoted
+// strings.
+func looseFragments(s string) []string {
+	var out []string
+	start := 0
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			quote = quoteState(quote, c)
+			if c == '\\' && quote == '"' {
+				i++
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case strings.IndexByte("{}[],", c) >= 0:
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
 }
 
 // authKeyRe names an Authorization-style header: Authorization,

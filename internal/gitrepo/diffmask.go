@@ -179,15 +179,30 @@ func maskVisible(v string, nested bool) string {
 
 func maskVisibleTrimmed(t string, nested bool) string {
 	switch {
-	case len(t) >= 2 && t[0] == '{' && t[len(t)-1] == '}':
+	case container(t, '{', '}'):
 		return "{" + mapElems(t[1:len(t)-1], maskVisiblePair) + "}"
-	case len(t) >= 2 && t[0] == '[' && t[len(t)-1] == ']':
+	case container(t, '[', ']'):
 		return "[" + mapElems(t[1:len(t)-1], func(e string) string { return maskVisible(e, nested) }) + "]"
-	}
-	if credential(t) || nested && hasTokenWord(exemptRe.ReplaceAllString(t, " ")) {
+	case !plainScalar(t), credential(t), nested && hasTokenWord(exemptRe.ReplaceAllString(t, " ")):
 		return maskTrimmed(t)
 	}
 	return t
+}
+
+// plainScalar reports a value shown as is under a visible key: one quoted
+// string, or a bare word (a number, a boolean) with no quote, bracket,
+// '=', ',' or '#'. Half-edited TOML with stray braces or more than one
+// value is neither, and is masked.
+func plainScalar(t string) bool {
+	return quotedString(t) || !strings.ContainsAny(t, "'\"=,{}[]#")
+}
+
+// container reports whether t is one array or inline table: it opens with
+// open, closes with close, and its brackets and quotes balance (topScan).
+// Unbalanced, half-edited TOML is never walked as a table, so a stray
+// closer cannot end it early and leave a later pair unmasked.
+func container(t string, open, close byte) bool {
+	return len(t) >= 2 && t[0] == open && t[len(t)-1] == close && topScan(t, nil)
 }
 
 // credential reports what mask.Credential finds in s, TOML triple quotes
@@ -224,7 +239,7 @@ func maskArgs(v string) string {
 	if t == "[" {
 		return v
 	}
-	if len(t) < 2 || t[0] != '[' || t[len(t)-1] != ']' {
+	if !container(t, '[', ']') {
 		return maskValue(v)
 	}
 	elems := splitElems(t[1 : len(t)-1])
@@ -277,9 +292,9 @@ func maskTrimmed(t string) string {
 	switch {
 	case quotedString(t):
 		return t[:1] + mask.Value(t[1:len(t)-1]) + t[:1]
-	case len(t) >= 2 && t[0] == '[' && t[len(t)-1] == ']':
+	case container(t, '[', ']'):
 		return "[" + mapElems(t[1:len(t)-1], maskValue) + "]"
-	case len(t) >= 2 && t[0] == '{' && t[len(t)-1] == '}':
+	case container(t, '{', '}'):
 		return "{" + mapElems(t[1:len(t)-1], maskPair) + "}"
 	}
 	return mask.Value(t)
@@ -312,11 +327,24 @@ func mapElems(s string, f func(string) string) string {
 }
 
 // splitElems splits the inside of an array or inline table at its
-// top-level commas: outside quotes and nested brackets. Unbalanced input
-// is one element. Joining the result with "," gives s back.
+// top-level commas: outside quotes and nested brackets. Joining the result
+// with "," gives s back. Callers pass the inside of a container, so the
+// brackets balance.
 func splitElems(s string) []string {
 	var out []string
-	start, depth := 0, 0
+	start := 0
+	topScan(s, func(i int) {
+		out = append(out, s[start:i])
+		start = i + 1
+	})
+	return append(out, s[start:])
+}
+
+// topScan walks s outside quoted strings, calling comma (when not nil) at
+// each comma outside every bracket. ok is false when a closer has no
+// opener, or a bracket or quote is left open.
+func topScan(s string, comma func(i int)) (ok bool) {
+	depth := 0
 	var quote byte
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -332,12 +360,14 @@ func splitElems(s string) []string {
 			depth++
 		case c == ']' || c == '}':
 			depth--
-		case c == ',' && depth == 0:
-			out = append(out, s[start:i])
-			start = i + 1
+			if depth < 0 {
+				return false
+			}
+		case c == ',' && depth == 0 && comma != nil:
+			comma(i)
 		}
 	}
-	return append(out, s[start:])
+	return depth == 0 && quote == 0
 }
 
 // quoteState is the open quote after byte c inside a string opened by q.

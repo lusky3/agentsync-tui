@@ -135,6 +135,7 @@ func FuzzMaskPatchLine(f *testing.F) {
 	f.Add(scanMCP, "+Authorization = 'Bearer '", uint(25))
 	f.Add(scanMCP, "+args = ['\x1b[31m', '']", uint(11))
 	f.Add("agentsync.toml", " K = \"${secret:", uint(15))
+	f.Add(scanMCP, "+name = { a = 'x' }}, Authorization = '"+hunter+"' }", uint(0))
 	f.Fuzz(func(t *testing.T, path, line string, at uint) {
 		pos := int(at % uint(len(line)+1))
 		planted := line[:pos] + ghpTok + line[pos:]
@@ -146,6 +147,13 @@ func FuzzMaskPatchLine(f *testing.F) {
 		}
 		if got := MaskPatchLine(path, planted); strings.Contains(got, ghpTok) {
 			t.Fatalf("token survived: MaskPatchLine(%q, %q) = %q", path, planted, got)
+		}
+		// The seeded header literal never survives a line that holds it as
+		// an Authorization value, balanced or not.
+		if strings.Contains(line, "Authorization = '"+hunter+"'") && IsConfigFile(path) && len(line) > 0 && strings.ContainsRune("+- ", rune(line[0])) {
+			if got := MaskPatchLine(path, line); strings.Contains(got, hunter) {
+				t.Fatalf("seeded secret survived: MaskPatchLine(%q, %q) = %q", path, line, got)
+			}
 		}
 	})
 }
@@ -233,6 +241,34 @@ func TestMaskPatchLineVisibleKeyTables(t *testing.T) {
 		"+root_markers = ['go.mod', '.git']",
 		"+Authorization = 'Bearer $GH_TOKEN'",
 		"+headers = { Authorization = 'Bearer `${GH_TOKEN}`' }",
+	} {
+		if got := MaskPatchLine(scanMCP, l); got != l {
+			t.Errorf("%q -> %q, want unchanged", l, got)
+		}
+	}
+}
+
+// Half-edited TOML with unbalanced braces or brackets is never shown as a
+// table: the whole value is masked.
+func TestMaskPatchLineUnbalancedTables(t *testing.T) {
+	for _, l := range []string{
+		"+name = { a = 'x' }}, Authorization = '" + hunter + "' }",
+		"+name = { a = 'x' , Authorization = '" + hunter + "'",
+		"+name = ] Authorization = '" + hunter + "'",
+		"+name = [{ a = 'x' }]], { Authorization = '" + hunter + "' }]",
+		"+env = { a = 'x' }}, B = '" + hunter + "' }",
+		"+args = ['a'], '" + hunter + "']",
+		"+args = ['a', '" + hunter + "]",
+		"+initialization_options = { a = '}', b = '" + hunter + "' ",
+	} {
+		if got := MaskPatchLine(scanMCP, l); strings.Contains(got, hunter) {
+			t.Errorf("%q -> %q", l, got)
+		}
+	}
+	for _, l := range []string{
+		"+initialization_options = { a = '}{', b = ']' }",
+		"+root_markers = ['[', ']']",
+		"+args = ['run', '{x}']",
 	} {
 		if got := MaskPatchLine(scanMCP, l); got != l {
 			t.Errorf("%q -> %q, want unchanged", l, got)
