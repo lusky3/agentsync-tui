@@ -183,7 +183,7 @@ func TestUUIDElsewhereNotAFinding(t *testing.T) {
 func TestImageDigestInArgsNotAFinding(t *testing.T) {
 	wantNone(t, scanBrave, "args = ['run','-i','--rm','mcp/brave-search@sha256:"+hex64+"']")
 	wantNone(t, scanBrave, "  'docker.io/mcp/brave-search@sha256:"+hex64+"',")
-	wantNone(t, scanBrave, "integrity = 'sha512-"+opaqueTok+opaqueTok+"'")
+	wantNone(t, scanBrave, "integrity = '"+sri512+"'")
 }
 
 func TestCommitShaInArgsNotAFinding(t *testing.T) {

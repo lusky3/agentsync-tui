@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -24,6 +25,11 @@ const (
 	// KindNotScannedPatch: a patch the runner cut short (for callers that
 	// scan a truncated diff).
 	KindNotScannedPatch = "not scanned: patch over 4 MiB"
+	// KindLineTooLong: a line over 64 KiB, not scanned word by word.
+	KindLineTooLong = "line over 64 KiB not scanned"
+	// KindMultiLineSecret: a secret-named key or header whose value opens
+	// a multi-line string, which the line scan cannot follow.
+	KindMultiLineSecret = "multi-line secret value"
 )
 
 const (
@@ -31,6 +37,8 @@ const (
 	ShownColumns = 120
 	// maxScanBytes and binarySniff bound ScanNewFile.
 	maxScanBytes = 1 << 20
+	// maxLineBytes: a longer line is not scanned or shown word by word.
+	maxLineBytes = 64 << 10
 	binarySniff  = 8 << 10
 )
 
@@ -159,22 +167,32 @@ type Finding struct {
 }
 
 // ScanLines scans added lines of the home-relative file homeRel (R5).
-// Everywhere, a known token shape, an Authorization-style header value,
-// URL userinfo, a PEM private key or an age identity is hard. In a config
-// file (IsConfigFile) a secret-named key assigned a literal is hard, and so
-// is a token-shaped word that is an env or header value (the value of any
-// key but type, command, url, enabled, description and args) or a URL query
-// value; another token-shaped word is soft, and an OCI digest, a
-// sha256/384/512 integrity value, a 40-hex commit pinned with '@' and a
-// UUID are not findings. Elsewhere a secret-named assignment and a
-// token-shaped word are soft. References (${NAME}, ${env:NAME},
-// ${secret:NAME}) are never findings, unless their name is a token shape.
-// A line gives at most one finding, hard when any of its findings is.
+// Everywhere, a known token shape, an Authorization-style header value
+// (as "Name: value", or as a TOML or JSON pair named Authorization,
+// Proxy-Authorization, Cookie, Set-Cookie or *-Api-Key, inline tables
+// included), URL userinfo, a PEM private key or an age identity is hard.
+// In a config file (IsConfigFile) a secret-named key assigned a literal is
+// hard (TOML triple quotes included), as is a secret-named key or header
+// whose value opens a multi-line string (fail closed: its lines cannot be
+// told apart), and a token-shaped word that is an env or header value
+// (the value of a key outside visibleKeys) or a URL query value; another
+// token-shaped word is soft, and an exact OCI digest or integrity value, a
+// 40-hex commit pinned with '@' and a UUID are not findings. Elsewhere a
+// secret-named assignment (or multi-line opener) and a token-shaped word
+// are soft. References (${NAME}, ${env:NAME}, ${secret:NAME}, and in
+// header values an upper-case $NAME) are never findings, unless their name
+// is a token shape. A line over 64 KiB is not scanned: it gives one soft
+// finding with no Shown. A line gives at most one finding, hard when any
+// of its findings is.
 func ScanLines(homeRel string, lines []Line) []Finding {
 	config := IsConfigFile(homeRel)
 	shownPath := mask.OneLine(mask.Text(homeRel))
 	var out []Finding
 	for _, l := range lines {
+		if len(l.Text) > maxLineBytes {
+			out = append(out, Finding{Path: shownPath, Line: l.N, Kind: KindLineTooLong})
+			continue
+		}
 		kind, hard, found := classify(l.Text, config)
 		if found {
 			out = append(out, Finding{Path: shownPath, Line: l.N, Shown: shown(l.Text), Hard: hard, Kind: kind})
@@ -219,10 +237,19 @@ func IsConfigFile(homeRel string) bool {
 
 // classify decides one line's finding.
 func classify(text string, config bool) (kind string, hard, found bool) {
-	if kind, ok := mask.Credential(text); ok {
-		return kind, kind != mask.KindSecretAssignment || config, true
-	}
-	if !config {
+	pairs := allPairs(text)
+	credKind, cred := mask.Credential(tripleQuotes.Replace(text))
+	opener, authOpener := multiLineOpener(pairs)
+	switch {
+	case cred && credKind != mask.KindSecretAssignment:
+		return credKind, true, true
+	case slices.ContainsFunc(pairs, authLiteral):
+		return mask.KindAuthHeader, true, true
+	case opener:
+		return KindMultiLineSecret, config || authOpener, true
+	case cred:
+		return credKind, config, true
+	case !config:
 		return KindTokenShapedWord, false, hasTokenWord(text)
 	}
 	text = exemptRe.ReplaceAllString(mask.Sanitize(text), " ")
@@ -232,13 +259,101 @@ func classify(text string, config bool) (kind string, hard, found bool) {
 	return KindTokenShapedWord, false, hasTokenWord(text)
 }
 
+// tripleQuotes folds TOML's multi-line string quotes into ordinary ones, so
+// mask.Credential reads API_KEY = ”'x”' as API_KEY = 'x'.
+var tripleQuotes = strings.NewReplacer(`"""`, `"`, "'''", "'")
+
+// allPairs is the line's key/value pair and, when its value is an inline
+// table, the pairs inside it (nested tables included).
+func allPairs(text string) []kv {
+	p, ok := parseKV(text)
+	if !ok {
+		return nil
+	}
+	out := []kv{p}
+	if v := strings.TrimSpace(p.value); len(v) >= 2 && v[0] == '{' && v[len(v)-1] == '}' {
+		for _, e := range splitElems(v[1 : len(v)-1]) {
+			out = append(out, allPairs(e)...)
+		}
+	}
+	return out
+}
+
+// authKeyRe names an Authorization-style header: Authorization,
+// Proxy-Authorization, Cookie, Set-Cookie, X-Api-Key and any *-Api-Key.
+var authKeyRe = regexp.MustCompile(`^(?:(?:proxy-)?authorization|(?:set-)?cookie|(?:[a-z0-9]+-)*api-key)$`)
+
+func authKey(p kv) bool { return authKeyRe.MatchString(strings.ToLower(p.lastKey())) }
+
+// authLiteral reports a header pair (TOML or JSON form, which mask's
+// "Name: value" rules do not read) whose value, after an optional scheme
+// word, is not only references: it is checked as the header line
+// "Authorization: <value>" would be.
+func authLiteral(p kv) bool {
+	if !authKey(p) {
+		return false
+	}
+	v := unquote(p.value)
+	if v == "" {
+		return false
+	}
+	_, found := mask.Credential("Authorization: " + v)
+	return found
+}
+
+// unquote strips a TOML or JSON value's quotes (triple quotes included)
+// and a JSON trailing comma.
+func unquote(v string) string {
+	v = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(v), ","))
+	for _, q := range []string{`"""`, "'''", `"`, "'"} {
+		if strings.HasPrefix(v, q) {
+			return strings.TrimSuffix(strings.TrimPrefix(v, q), q)
+		}
+	}
+	return v
+}
+
+// multiLineOpener reports a pair whose key is secret-named or a header and
+// whose value opens a multi-line string it does not close on this line: the
+// value's lines cannot be told apart from others, so the opener is the
+// finding (fail closed). auth is true when the key is a header, which is
+// hard everywhere.
+func multiLineOpener(pairs []kv) (found, auth bool) {
+	for _, p := range pairs {
+		if !opensMultiLine(p.value) {
+			continue
+		}
+		if authKey(p) {
+			return true, true
+		}
+		if _, ok := mask.Credential(p.lastKey() + " = x"); ok {
+			found = true
+		}
+	}
+	return found, false
+}
+
+func opensMultiLine(v string) bool {
+	v = strings.TrimSpace(v)
+	for _, q := range []string{`"""`, "'''"} {
+		if strings.HasPrefix(v, q) && strings.Count(v, q) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	// wordRe splits a line into words: a ${reference} is one word.
 	wordRe = regexp.MustCompile("\\$\\{[^}\\s]*\\}|[^\\s\"'`=,;&?#|*\\[\\](){}<>]+")
 	// exemptRe: what is never a finding in a config file: an OCI digest or
-	// a sha256/384/512 integrity value, a 40-hex commit pinned with '@'
-	// (go install x@<sha>, git+https://...@<sha>), a UUID.
-	exemptRe = regexp.MustCompile(`(?i)\bsha(?:256|384|512)[:-][A-Za-z0-9+/=]+|@[0-9a-f]{40}\b|\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b`)
+	// an integrity value of the exact length (sha256:/384:/512: hex, or
+	// SRI sha256-/384-/512- base64), a 40-hex commit pinned with '@'
+	// (go install x@<sha>, git+https://...@<sha>), a UUID. Each must end
+	// where its body ends, so a secret cannot hide behind a digest prefix.
+	exemptRe = regexp.MustCompile(`(?i)(?:\bsha256:[0-9a-f]{64}|\bsha384:[0-9a-f]{96}|\bsha512:[0-9a-f]{128}` +
+		`|\bsha256-[a-z0-9+/]{43}=|\bsha384-[a-z0-9+/]{64}|\bsha512-[a-z0-9+/]{86}==` +
+		`|@[0-9a-f]{40}|\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})(?:[^a-z0-9+/=]|$)`)
 	// urlRe finds a URL, for its query values.
 	urlRe = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.\-]*://[^\s"'<>]+`)
 )
@@ -260,9 +375,9 @@ func hasTokenWord(s string) bool {
 }
 
 // softKey reports a config key whose value is not an env or header value
-// (the keys MaskPatchLine shows, and args): a token-shaped word there is
-// soft.
-func softKey(k string) bool { return visibleKeys[k] || k == "args" }
+// (the keys MaskPatchLine shows, args among them): a token-shaped word
+// there is soft.
+func softKey(k string) bool { return visibleKeys[k] }
 
 // hardTokenWord reports a config line's hard token-shaped word: in the
 // value of a key that is not a softKey (an env or header value), or a URL query

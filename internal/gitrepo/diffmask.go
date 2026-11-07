@@ -2,32 +2,47 @@ package gitrepo
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
 // visibleKeys are the config keys whose values MaskPatchLine shows through
-// mask.Text rather than mask.Value: they name what runs, not what it is
-// given.
-var visibleKeys = map[string]bool{"type": true, "command": true, "url": true, "enabled": true, "description": true}
+// mask.Text (args through mask.Args) rather than mask.Value: they name what
+// runs and where, not what it is given. The scan treats a token-shaped word
+// in their values as soft.
+var visibleKeys = map[string]bool{
+	"type": true, "command": true, "url": true, "enabled": true, "description": true, "args": true,
+	"path": true, "cwd": true, "version": true, "rev": true, "sha": true, "checksum": true,
+	"root_markers": true, "initialization_options": true, "name": true, "matcher": true,
+	"model": true, "author_email": true,
+}
 
 // diffHeaders start the lines of a patch that are not file content.
 var diffHeaders = []string{"diff ", "index ", "--- ", "+++ ", "@@"}
 
 // MaskPatchLine returns one line of a unified diff of the home-relative
-// file homeRel, safe to display. Header lines (diff, index, ---, +++, @@)
+// file homeRel, safe to display. A line over 64 KiB is shown as its first
+// byte, mask.Mask and its length. Header lines (diff, index, ---, +++, @@)
 // go through mask.Text whole, so a token in a file name is masked; an added
 // line "++ x" inside a hunk looks like a header here and is masked the
 // same way. A content line keeps its first byte ('+', '-' or ' '). In a
-// config file (IsConfigFile) a TOML "key = value" line whose key is not
-// type, command, url, enabled or description shows its value through
-// mask.Value (a quoted string, each element of an array and each value of
-// an inline table on its own), so references stay visible and literals do
-// not. Everything else goes through mask.Text. The result is sanitised and
-// passes mask.Text last, so a token shape cannot survive anywhere, the name
-// of a reference included.
+// config file (IsConfigFile) a TOML "key = value" or JSON "key": value
+// pair whose key is not a visible one (visibleKeys) shows its value
+// through mask.Value (a quoted string, each element of an array and each
+// value of an inline table on its own), so references stay visible and
+// literals do not; args go through mask.Args with token-shaped elements
+// masked. A config line that is not a pair, a [table] header or blank (a
+// multi-line string's content, an array element on its own line) shows
+// every word through mask.Value, and a comment masks its token-shaped
+// words. Other lines go through mask.Text. The result is sanitised and
+// passes mask.Text last, so a token shape cannot survive anywhere, the
+// name of a reference included.
 func MaskPatchLine(homeRel, line string) string {
+	if len(line) > maxLineBytes {
+		return longLine(line)
+	}
 	line = mask.Sanitize(line)
 	for _, h := range diffHeaders {
 		if strings.HasPrefix(line, h) {
@@ -39,18 +54,46 @@ func MaskPatchLine(homeRel, line string) string {
 	}
 	body := line[1:]
 	if IsConfigFile(homeRel) {
-		body = maskTOMLLine(body)
+		body = maskConfigLine(body)
 	}
 	return line[:1] + mask.Text(body)
 }
 
-// maskTOMLLine masks the value of a "key = value" line.
-func maskTOMLLine(s string) string {
-	kv, ok := parseKV(s)
-	if !ok {
-		return s
+// longLine is a line too long to show: its diff marker, the mask, its size.
+func longLine(line string) string {
+	marker := ""
+	if strings.ContainsRune("+- ", rune(line[0])) {
+		marker = line[:1]
 	}
-	return kv.masked()
+	return marker + mask.Mask + " (line of " + strconv.Itoa(len(line)) + " bytes not shown)"
+}
+
+// tableRe is a TOML [table] or [[array]] header line.
+var tableRe = regexp.MustCompile(`^\s*\[\[?[^\[\]=]*\]\]?\s*(?:#.*)?$`)
+
+// maskConfigLine masks one content line of a config file.
+func maskConfigLine(s string) string {
+	if p, ok := parseKV(s); ok {
+		return p.masked()
+	}
+	t := strings.TrimSpace(s)
+	switch {
+	case t == "" || tableRe.MatchString(t):
+		return s
+	case strings.HasPrefix(t, "#"):
+		return maskWords(s, tokenWord)
+	}
+	return maskWords(s, func(w string) bool { return mask.Value(w) != w })
+}
+
+// maskWords replaces each word (wordRe) for which hide is true by mask.Mask.
+func maskWords(s string, hide func(string) bool) string {
+	return wordRe.ReplaceAllStringFunc(s, func(w string) string {
+		if hide(w) {
+			return mask.Mask
+		}
+		return w
+	})
 }
 
 const (
@@ -59,19 +102,28 @@ const (
 	tomlKeyPart   = `(?:` + tomlBareKey + `|` + tomlQuotedKey + `)`
 )
 
-// kvRe is a TOML key/value pair: indent, a (dotted) key, " = ", the rest.
-var kvRe = regexp.MustCompile(`^(\s*)(` + tomlKeyPart + `(?:\s*\.\s*` + tomlKeyPart + `)*)(\s*=\s*)(.*?)(\s*)$`)
-
-// keyPartRe finds the parts of a dotted key.
-var keyPartRe = regexp.MustCompile(tomlKeyPart)
+var (
+	// kvRe is a TOML key/value pair: indent, a (dotted) key, " = ", the rest.
+	kvRe = regexp.MustCompile(`^(\s*)(` + tomlKeyPart + `(?:\s*\.\s*` + tomlKeyPart + `)*)(\s*=\s*)(.*?)(\s*)$`)
+	// jsonKVRe is a JSON member on one line: indent, a quoted key, ": ",
+	// the value, and a trailing comma.
+	jsonKVRe = regexp.MustCompile(`^(\s*)("(?:[^"\\]|\\.)*")(\s*:\s*)(.*?)(\s*,?\s*)$`)
+	// keyPartRe finds the parts of a dotted key.
+	keyPartRe = regexp.MustCompile(tomlKeyPart)
+)
 
 // kv is one parsed pair; indent+key+eq+value+trail is the original text.
 type kv struct {
 	indent, key, eq, value, trail string
 }
 
+// parseKV reads a TOML pair or, failing that, a JSON member (mcp/ may hold
+// JSON files).
 func parseKV(s string) (kv, bool) {
 	m := kvRe.FindStringSubmatch(s)
+	if m == nil {
+		m = jsonKVRe.FindStringSubmatch(s)
+	}
 	if m == nil {
 		return kv{}, false
 	}
@@ -98,12 +150,63 @@ func (p kv) lastKey() string {
 }
 
 // masked rebuilds the pair with its key through mask.Text and its value
-// through maskValue, unless the key is a visible one.
+// through maskValue; a visible key keeps its value (args through maskArgs).
 func (p kv) masked() string {
-	if visibleKeys[p.lastKey()] {
+	key := p.lastKey()
+	switch {
+	case key == "args":
+		return p.indent + p.key + p.eq + maskArgs(p.value) + p.trail
+	case visibleKeys[key]:
 		return p.indent + p.key + p.eq + p.value + p.trail
 	}
 	return p.indent + mask.Text(p.key) + p.eq + maskValue(p.value) + p.trail
+}
+
+// maskArgs masks a one-line args array as a command line (mask.Args, so a
+// flag's secret value is masked and references stay), and masks any
+// element holding a token-shaped word outside the exempt digests and
+// commits. A value that is not a whole array is masked as any value; a
+// lone "[" (a multi-line array's opener) stays.
+func maskArgs(v string) string {
+	t := strings.TrimSpace(v)
+	if t == "[" {
+		return v
+	}
+	if len(t) < 2 || t[0] != '[' || t[len(t)-1] != ']' {
+		return maskValue(v)
+	}
+	elems := splitElems(t[1 : len(t)-1])
+	contents := make([]string, len(elems))
+	for i, e := range elems {
+		_, contents[i], _, _ = splitQuoted(e)
+	}
+	masked := mask.Args(contents)
+	for i, e := range elems {
+		lead, content, q, trail := splitQuoted(e)
+		if hasTokenWord(exemptRe.ReplaceAllString(content, " ")) {
+			masked[i] = mask.Mask
+		}
+		elems[i] = lead + q + masked[i] + q + trail
+	}
+	lead := v[:strings.Index(v, t)]
+	return lead + "[" + strings.Join(elems, ",") + "]" + v[len(lead)+len(t):]
+}
+
+// splitQuoted splits an array element into its surrounding whitespace, its
+// content and its quote (empty for a bare value).
+func splitQuoted(e string) (lead, content, quote, trail string) {
+	t := strings.TrimSpace(e)
+	lead = e[:strings.Index(e, t)]
+	trail = e[len(lead)+len(t):]
+	if quotedString(t) {
+		return lead, t[1 : len(t)-1], t[:1], trail
+	}
+	return lead, t, "", trail
+}
+
+// quotedString reports a one-line quoted string, its quotes at both ends.
+func quotedString(t string) bool {
+	return len(t) >= 2 && (t[0] == '\'' || t[0] == '"') && t[len(t)-1] == t[0] && closesAtEnd(t)
 }
 
 // maskValue masks a TOML value: a one-line quoted string keeps its quotes
@@ -120,7 +223,7 @@ func maskValue(v string) string {
 
 func maskTrimmed(t string) string {
 	switch {
-	case len(t) >= 2 && (t[0] == '\'' || t[0] == '"') && t[len(t)-1] == t[0] && closesAtEnd(t):
+	case quotedString(t):
 		return t[:1] + mask.Value(t[1:len(t)-1]) + t[:1]
 	case len(t) >= 2 && t[0] == '[' && t[len(t)-1] == ']':
 		return "[" + mapElems(t[1:len(t)-1], maskValue) + "]"
@@ -146,12 +249,21 @@ func closesAtEnd(t string) bool {
 	return true
 }
 
-// mapElems applies f to each comma-separated element of s (an array's or
-// inline table's inside), splitting only outside quotes and nested
-// brackets, and joins them back with the same commas. Unbalanced input is
-// one element.
+// mapElems applies f to each element of s (splitElems) and joins them back
+// with the same commas.
 func mapElems(s string, f func(string) string) string {
-	var out strings.Builder
+	elems := splitElems(s)
+	for i, e := range elems {
+		elems[i] = f(e)
+	}
+	return strings.Join(elems, ",")
+}
+
+// splitElems splits the inside of an array or inline table at its
+// top-level commas: outside quotes and nested brackets. Unbalanced input
+// is one element. Joining the result with "," gives s back.
+func splitElems(s string) []string {
+	var out []string
 	start, depth := 0, 0
 	var quote byte
 	for i := 0; i < len(s); i++ {
@@ -169,12 +281,11 @@ func mapElems(s string, f func(string) string) string {
 		case c == ']' || c == '}':
 			depth--
 		case c == ',' && depth == 0:
-			out.WriteString(f(s[start:i]) + ",")
+			out = append(out, s[start:i])
 			start = i + 1
 		}
 	}
-	out.WriteString(f(s[start:]))
-	return out.String()
+	return append(out, s[start:])
 }
 
 // quoteState is the open quote after byte c inside a string opened by q.

@@ -17,6 +17,7 @@ func TestMaskPatchLineConfigValues(t *testing.T) {
 		"+enabled = true",
 		"+description = 'GitHub tools'",
 		"+[github.env]",
+		"+name = 'notsecret'",
 		"+",
 		" ",
 	}
@@ -35,7 +36,6 @@ func TestMaskPatchLineConfigValues(t *testing.T) {
 		"+headers.Cookie = 'sid=abcdef'":                 "abcdef",
 		"+'quoted key' = 'value'":                        "value",
 		"+API_KEY = 'abc' # trailing comment":            "abc",
-		"+name = 'notsecret'":                            "notsecret",
 		"+PASSWORD =  'abc'":                             "abc",
 		"+env.GH = '" + ghpTok + "'":                     ghpTok,
 		"+X = '${" + ghpTok + "}'":                       ghpTok,
@@ -148,4 +148,62 @@ func FuzzMaskPatchLine(f *testing.F) {
 			t.Fatalf("token survived: MaskPatchLine(%q, %q) = %q", path, planted, got)
 		}
 	})
+}
+
+// A config line that is not a pair (a multi-line string's content, an
+// array element on its own line) masks every literal word; a comment masks
+// its token-shaped words.
+func TestMaskPatchLineMultiLineValue(t *testing.T) {
+	masked := map[string]string{
+		"+" + hunter:                            hunter,
+		"+  'run',":                             "run",
+		"-  \"" + opaqueTok + "\",":             opaqueTok,
+		"+# id " + opaqueTok:                    opaqueTok,
+		" password hunter3 \"\"\"":              "hunter3",
+		"+    \"API_KEY\": \"" + hunter + "\",": hunter,
+	}
+	for _, path := range []string{scanMCP, scanJSON} {
+		for l, raw := range masked {
+			if got := MaskPatchLine(path, l); strings.Contains(got, raw) || !strings.Contains(got, mask.Mask) || got[0] != l[0] {
+				t.Errorf("%s %q -> %q", path, l, got)
+			}
+		}
+		for _, l := range []string{"+# a plain comment", "+[table.sub]", "+[[arr]]", "+}", "+  ],", "+  '${X}',", "+", `+"""`, `+  "command": "npx",`, `+  "env": { "T": "${T}" },`} {
+			if got := MaskPatchLine(path, l); got != l {
+				t.Errorf("%s %q -> %q, want unchanged", path, l, got)
+			}
+		}
+	}
+	if got := MaskPatchLine(scanJSON, `+    "API_KEY": "`+hunter+`",`); got != `+    "API_KEY": "`+mask.Mask+`",` {
+		t.Errorf("json pair: %q", got)
+	}
+}
+
+// args go through mask.Args (only secret-bearing and token-shaped elements
+// are masked, an exempt digest stays) and structural keys are shown.
+func TestMaskPatchLineArgsReadable(t *testing.T) {
+	for _, l := range []string{
+		"+args = ['run','-i','--rm','mcp/brave-search@sha256:" + hex64 + "']",
+		"+args = ['-e', 'GH=${GH}', '-y', '@scope/server']",
+		`+  "args": ["run", "-i"],`,
+		"+args = [ 'a' , 8080, true ]",
+		"+path = '" + nixPath + "'",
+		"+checksum = '" + hex64 + "'",
+		"+version = '" + pseudoV + "'",
+		"+rev = '" + hex40 + "'",
+	} {
+		if got := MaskPatchLine(scanMCP, l); got != l {
+			t.Errorf("%q -> %q, want unchanged", l, got)
+		}
+	}
+	for l, raw := range map[string]string{
+		"+args = ['--id', '" + opaqueTok + "']": opaqueTok,
+		"+args = ['--token', 'abc123']":         "abc123",
+		"+args = ['--api-key=lit3ral']":         "lit3ral",
+	} {
+		got := MaskPatchLine(scanMCP, l)
+		if strings.Contains(got, raw) || !strings.Contains(got, "args = ['--") {
+			t.Errorf("%q -> %q", l, got)
+		}
+	}
 }
