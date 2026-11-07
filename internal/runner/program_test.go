@@ -198,6 +198,17 @@ func TestBatchModeAddedOnlyWhenNoUserSSH(t *testing.T) {
 			t.Errorf("GIT_SSH_COMMAND = %q added over the repo's core.sshCommand", got)
 		}
 	})
+	t.Run("core.sshCommand from the caller's -c (real git)", func(t *testing.T) {
+		gitBin, env := hermeticGit(t)
+		repo := t.TempDir()
+		gitIn(t, gitBin, env, "init", "-q", repo)
+		p := NewGit(fakeGit(t))
+		p.Env = append(env, "FAKE_REAL_GIT="+gitBin)
+		args := []string{"-C", repo, "-c", "core.sshCommand=ssh -i /caller", "fetch", "origin"}
+		if got, ok := runFake(t, context.Background(), p, args...).env["GIT_SSH_COMMAND"]; ok {
+			t.Errorf("GIT_SSH_COMMAND = %q added over the caller's -c core.sshCommand", got)
+		}
+	})
 }
 
 func TestMissingBinaryIsMissingError(t *testing.T) {

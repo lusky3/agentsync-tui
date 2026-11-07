@@ -131,16 +131,15 @@ func wantsBatchSSH(args, env []string) bool {
 	return true
 }
 
-// repoSetsSSHCommand reports whether the target repository (the value
-// after the first -C in args) configures core.sshCommand. Only exit 1 of
+// repoSetsSSHCommand reports whether the command configures
+// core.sshCommand: in the target repository, or through a `-c` of the
+// caller's. The probe runs with the same leading -C and -c options as args,
+// so it sees exactly the configuration the command will. Only exit 1 of
 // `git config --get` means unset; anything else, including a probe that
 // could not run, counts as set, so a command the user chose that could not
 // be read is never overridden.
 func (p *Program) repoSetsSSHCommand(ctx context.Context, args, env []string) bool {
-	probe := []string{"config", "--get", "core.sshCommand"}
-	if dir, ok := gitDir(args); ok {
-		probe = append([]string{"-C", dir}, probe...)
-	}
+	probe := append(globalOpts(args), "config", "--get", "core.sshCommand")
 	pctx, cancel := context.WithTimeout(ctx, sshProbeBound)
 	defer cancel()
 	res, err := p.run(pctx, env, probe)
@@ -162,14 +161,14 @@ func gitSubcommand(args []string) string {
 	return ""
 }
 
-// gitDir is the value after the first -C in args.
-func gitDir(args []string) (string, bool) {
-	for i, a := range args {
-		if a == "-C" && i+1 < len(args) {
-			return args[i+1], true
-		}
+// globalOpts is the leading -C and -c option pairs of args, in order (the
+// git builders put only these before the subcommand).
+func globalOpts(args []string) []string {
+	var out []string
+	for i := 0; i+1 < len(args) && (args[i] == "-C" || args[i] == "-c"); i += 2 {
+		out = append(out, args[i], args[i+1])
 	}
-	return "", false
+	return out
 }
 
 var _ Runner = (*Program)(nil)
