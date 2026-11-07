@@ -38,6 +38,9 @@ const whyTooManyChanges = refused + "too many changes to scan; review and push o
 // own bound: the default network bound, ui.DefaultReadTimeout.
 var outgoingScanBound = ui.DefaultReadTimeout
 
+// gitLog names the outgoing log reads in a refusal.
+const gitLog = "git log"
+
 // whyBadRange refuses a push whose outgoing range is not two object ids.
 const whyBadRange = refused + "the outgoing range is not a pair of object ids"
 
@@ -123,7 +126,7 @@ func scanOutgoingRange(ctx context.Context, in netInput, base, tip string) ([]gi
 		return nil, []string{whyBadRange}
 	}
 	res, err := ui.Read(ctx, in.git, in.limit, names...)
-	if note := ui.ReadNote("git log", res, err); note != "" {
+	if note := ui.ReadNote(gitLog, res, err); note != "" {
 		return nil, []string{refused + note}
 	}
 	list, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
@@ -135,7 +138,7 @@ func scanOutgoingRange(ctx context.Context, in netInput, base, tip string) ([]gi
 		return nil, r
 	}
 	res, err = ui.Read(ctx, in.git, in.limit, patchArgv...)
-	if note := ui.ReadNote("git log", res, err); note != "" {
+	if note := ui.ReadNote(gitLog, res, err); note != "" {
 		return nil, []string{refused + note}
 	}
 	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
@@ -163,7 +166,7 @@ func scanMessages(ctx context.Context, in netInput, base, tip string) ([]gitrepo
 		return nil, []string{whyBadRange}
 	}
 	res, err := ui.Read(ctx, in.git, in.limit, argv...)
-	if note := ui.ReadNote("git log", res, err); note != "" {
+	if note := ui.ReadNote(gitLog, res, err); note != "" {
 		return nil, []string{refused + note}
 	}
 	out, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
