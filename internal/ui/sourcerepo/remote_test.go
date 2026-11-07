@@ -914,3 +914,13 @@ func TestPushSoftFindingInCommitMessageNeedsTypedPush(t *testing.T) {
 		t.Errorf("push action typed=%v warning=%q", d.Action.TypedConfirm, d.Action.Warning)
 	}
 }
+
+// An outgoing path that starts with a newline keeps it: the unusual-name
+// refusal sees the bytes git listed, not a trimmed, ordinary-looking name.
+func TestPushRefusesOutgoingPathWithLeadingNewline(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "odd", map[string]string{"\nnotes.md": ""}) // no added line: no post-image read
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: an outgoing commit touches", "unusual name")
+}

@@ -54,12 +54,13 @@ var publicHosts = map[string]bool{
 // errPatchPath is a patch section whose path cannot be read back.
 var errPatchPath = errors.New("cannot read a path in the outgoing patch")
 
-// outgoingPaths is the distinct paths of a NUL-separated name list.
+// outgoingPaths is the distinct paths of a NUL-separated name list, each
+// exactly as git listed it (with an empty --format, git puts nothing
+// between commits, so a leading newline belongs to the name).
 func outgoingPaths(names string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range strings.Split(names, "\x00") {
-		p = strings.TrimLeft(p, "\n")
 		if p != "" && !seen[p] {
 			seen[p] = true
 			out = append(out, p)
