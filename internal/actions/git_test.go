@@ -174,7 +174,7 @@ func TestBadTopRefused(t *testing.T) {
 		_, checks["commit"] = GitCommit(r, "m", []string{"a"})
 		_, checks["fetch"] = GitFetch(r, "origin")
 		_, checks["pull"] = GitPull(r)
-		_, checks["push"] = GitPush(r)
+		_, checks["push"] = GitPush(r, "origin", "main")
 		for name, err := range checks {
 			if err == nil {
 				t.Errorf("%s accepted top %q", name, top)
@@ -217,8 +217,9 @@ func TestPullAndPushArgvPinned(t *testing.T) {
 	if !pull.Network || pull.ReadOnly {
 		t.Errorf("pull flags = %+v", pull)
 	}
-	push := mustAction(t)(GitPush(testRepo))
-	if want := []string{"-C", testTop, "-c", "push.default=simple", "push"}; !slices.Equal(push.Argv, want) {
+	push := mustAction(t)(GitPush(testRepo, "origin", "main"))
+	want := []string{"-C", testTop, "push", "--no-follow-tags", "origin", "refs/heads/main:refs/heads/main"}
+	if !slices.Equal(push.Argv, want) {
 		t.Errorf("push argv = %q, want %q", push.Argv, want)
 	}
 	if !push.Network || push.ReadOnly {
@@ -308,7 +309,7 @@ func TestGitDisplayStartsWithGitAndIsMasked(t *testing.T) {
 			t.Errorf("argv path changed: %q", a.Argv)
 		}
 	}
-	for _, a := range []Action{mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo)), mustAction(t)(GitFetch(testRepo, "origin"))} {
+	for _, a := range []Action{mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo, "origin", "main")), mustAction(t)(GitFetch(testRepo, "origin"))} {
 		if !strings.HasPrefix(a.Display(), "git -C "+testTop+" ") {
 			t.Errorf("Display = %q", a.Display())
 		}
@@ -347,7 +348,7 @@ func TestConfirmVerbForGit(t *testing.T) {
 		want string
 	}{
 		{mustAction(t)(GitCommit(testRepo, "m", []string{"a"})), "commit"},
-		{mustAction(t)(GitPush(testRepo)), "push"},
+		{mustAction(t)(GitPush(testRepo, "origin", "main")), "push"},
 		{mustAction(t)(GitPull(testRepo)), "pull"},
 		{mustAction(t)(GitAdd(testRepo, []string{"a"})), "add"},
 		{mustAction(t)(GitFetch(testRepo, "origin")), "fetch"},
@@ -371,6 +372,9 @@ func TestGitBuildersNeverEmitForbidden(t *testing.T) {
 		"--force", "-f", "--force-with-lease", "--no-verify", "-n", "-a", "--all", "-A", "--amend",
 		"--mirror", "--tags", "--delete", "-d", "--upload-pack=x", "--receive-pack=x", "--exec=x",
 		"-rf", "--output=/tmp/x", "origin", "x --no-verify", "a b", "ext::sh -c x", "-uX",
+		// Refspec shapes a remote or branch argument must never smuggle in:
+		// a forced update, a wildcard, a deletion and a src:dst pair.
+		"+main", "+refs/heads/*:refs/heads/*", "refs/heads/*", ":main", "main:other", "@{u}", "main..x",
 	}
 	// Paths no path-taking builder may accept: the ignored .state/ (pre-apply
 	// backups holding live secrets) at any depth, and git pathspec magic.
@@ -385,7 +389,7 @@ func TestGitBuildersNeverEmitForbidden(t *testing.T) {
 	for _, h := range hostile {
 		built = append(built, buildHostile(h)...)
 	}
-	built = append(built, mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo)))
+	built = append(built, mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo, "origin", "main")))
 	if len(built) < 50 {
 		t.Fatalf("only %d hostile actions built; the table is not exercising the builders", len(built))
 	}
@@ -425,7 +429,9 @@ func buildHostile(h string) []Action {
 		func() (Action, error) { return GitCommit(testRepo, h, []string{h}) },
 		func() (Action, error) { return GitFetch(testRepo, h) },
 		func() (Action, error) { return GitPull(GitRepo{Top: h}) },
-		func() (Action, error) { return GitPush(GitRepo{Top: h}) },
+		func() (Action, error) { return GitPush(GitRepo{Top: h}, "origin", "main") },
+		func() (Action, error) { return GitPush(testRepo, h, "main") },
+		func() (Action, error) { return GitPush(testRepo, "origin", h) },
 		func() (Action, error) { return GitAdd(GitRepo{Top: h}, []string{"a"}) },
 		func() (Action, error) { return InitFromURL(h) },
 	} {
@@ -458,10 +464,24 @@ func checkGitArgvSafe(t *testing.T, a Action) {
 		t.Errorf("subcommand %q outside %q: %q", v, allowed, a.Argv)
 	}
 	for _, el := range optionRegion(a.Argv) {
-		for _, f := range forbidden {
-			if el == f || strings.HasPrefix(el, f) && !strings.HasPrefix(el, "--message=") {
-				t.Errorf("forbidden %q in option region of %q", f, a.Argv)
-			}
+		checkOptionElement(t, el, a.Argv)
+	}
+}
+
+// checkOptionElement checks one element of a git argv's option region: no
+// forced refspec and no forbidden option. A leading '+' forces a refspec;
+// one anywhere in a refspec is refused too, so no forced update can be
+// built (D6). The commit message is one --message= element, never a
+// refspec or an option.
+func checkOptionElement(t *testing.T, el string, argv []string) {
+	t.Helper()
+	isMessage := strings.HasPrefix(el, "--message=")
+	if strings.HasPrefix(el, "+") || !isMessage && strings.Contains(el, "refs/") && strings.Contains(el, "+") {
+		t.Errorf("forced refspec %q in %q", el, argv)
+	}
+	for _, f := range forbidden {
+		if el == f || strings.HasPrefix(el, f) && !isMessage {
+			t.Errorf("forbidden %q in option region of %q", f, argv)
 		}
 	}
 }

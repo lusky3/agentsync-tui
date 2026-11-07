@@ -29,7 +29,7 @@
 - **D3 Commit = explicit files.** The default selection is every changed file under the agentsync-owned set (`agentsync.toml`, `.gitignore`, `mcp/ memory/ skills/ subagents/ commands/ hooks/ lsp/ plugins/ marketplaces/`). Other files are listed unselected with a note. Argv: `git -C <top> add -- <paths>` then `git -C <top> commit --message=<msg> -- <paths>`. Never `add -A`/`.`, never `commit -a`. *Tasks 3, 6, 8.*
 - **D4 Guards before commit.** Each refusal states its reason: `agentsync check` fails; a selected path is under `.state/` or sensitive (R6); the added-line scan finds a hard finding (R5); HEAD is detached; a merge, rebase, cherry-pick, revert or bisect is in progress; `index.lock` is present; the repo is agentsync's destination-backup history. *Tasks 5, 7, 8.*
 - **D5 Pull = `git pull --ff-only --no-rebase --no-autostash`.** It is a Network action with the read bound (R3). On a non-fast-forward it explains and shows the commands to run outside the TUI; there is no terminal hand-off. After a successful pull the screen says the changes reach agents only after an apply, and offers jumps to Drift and Apply. *Tasks 4, 9.*
-- **D6 Push = `git -C <top> -c push.default=simple push`.** No `--force*`, no refspec, no `--tags/--all/--mirror/--delete`. With no upstream it refuses and shows the commands to add one. The TUI never creates remotes or GitHub repos. It warns, without refusing, when the remote host is a public hosting service, since it cannot see the repository's visibility. *Tasks 3, 9.*
+- **D6 Push = `git -C <top> push --no-follow-tags <remote> refs/heads/<branch>:refs/heads/<branch>`.** One explicit, non-forced, single-branch refspec: the current branch to the same name on its upstream's remote. No `--force*`, no `+` in any refspec, no wildcard, no `--tags/--all/--mirror/--delete`. *Amended 2026-11-07 after the PR A bot review (ledger Ruling 9):* the earlier `-c push.default=simple push` with no refspec was steerable by repository config, because `remote.<name>.push` refspecs take precedence over `push.default` (with `+refs/heads/*:refs/heads/*` it force-pushed every branch; verified with git 2.43) and `push.followTags` added tags. An explicit refspec on the command line overrides `remote.<name>.push` and `push.default`, `--no-follow-tags` overrides `push.followTags`, and git rejects a non-fast-forward instead of forcing it. With `remote.<name>.mirror=true` git refuses the push (`--mirror can't be combined with refspecs`) and changes nothing; Task 9 refuses a mirror remote up front so the user never sees that confusing error. With no upstream it refuses and shows the commands to add one. The TUI never creates remotes or GitHub repos. It warns, without refusing, when the remote host is a public hosting service, since it cannot see the repository's visibility. *Tasks 3, 9.*
 - **D7 Fetch = `f`.** `git -C <top> fetch <remote>` is ReadOnly and Network (no modal, logged) and updates ahead/behind. *Tasks 3, 9.*
 - **D8 Chezmoi-managed home.** The tab shows a read-only notice plus the chezmoi commands to use, and offers no git action. *Tasks 5, 8.*
 - **D9 Symlinked home.** Repo detection uses `filepath.EvalSymlinks`. The edit inside-home check is pinned by tests (Task 1). *Tasks 1, 5.*
@@ -158,10 +158,10 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `func GitAdd(r GitRepo, paths []string) (Action, error)` → `-C top add -- p…`.
   - `func GitCommit(r GitRepo, msg string, paths []string) (Action, error)` → `-C top commit --message=<msg> -- p…`.
   - `func GitFetch(r GitRepo, remote string) (Action, error)` → `-C top fetch <remote>`; `ReadOnly, Network`.
-  - `func GitPull(r GitRepo) Action` → `-C top pull --ff-only --no-rebase --no-autostash`; `Network`.
-  - `func GitPush(r GitRepo) Action` → `-C top -c push.default=simple push`; `Network`.
+  - `func GitPull(r GitRepo) (Action, error)` → `-C top pull --ff-only --no-rebase --no-autostash`; `Network`.
+  - `func GitPush(r GitRepo, remote, branch string) (Action, error)` → `-C top push --no-follow-tags <remote> refs/heads/<branch>:refs/heads/<branch>`; `Network`. `remote` must pass `ValidRemoteName` and `branch` `ValidBranchName`; a bad one is refused, never escaped (D6).
   - `func InitFromURL(url string) (Action, error)` → `init <url>`; `Network`, title `"Clone agentsync home"`.
-  - `func ValidGitPath(p string) error`; `func ValidCommitMessage(m string) error`; `func ValidRemoteName(n string) error`; `func ValidCloneURL(u string) error`.
+  - `func ValidGitPath(p string) error`; `func ValidCommitMessage(m string) error`; `func ValidRemoteName(n string) error`; `func ValidBranchName(b string) error` (git check-ref-format rules for `refs/heads/<b>`, plus no leading `-`, no `+`, not `@`/`HEAD`, ≤ 255 bytes); `func ValidCloneURL(u string) error`.
 - Rules (pinned):
   - Paths: 1 to 5000, each `ValidGitPath`: non-empty, `filepath.IsLocal`, valid UTF-8, `mask.Sanitize(p)==p`, no NUL, ≤ 4096 bytes.
   - Message: trimmed and non-empty, ≤ 200 runes, single line, no control or format characters, `mask.Credential(m)` false, no `TokenShaped` word.
@@ -177,11 +177,12 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `TestGlobCharsAllowedInPaths` (`a*b?[c]` accepted; literal semantics come from Task 2's pre-args).
   - `TestFetchRemoteRefusals` (`--receive-pack=x`, `-x`, `a b`, `../r`).
   - `TestPullAndPushArgvPinned` (exact argv slices).
+  - `TestValidBranchName` (table; every accepted name also passes real `git check-ref-format refs/heads/<b>`), and real-git push tests against a bare remote: `TestGitPushIgnoresConfiguredRefspecsAndTags` (with `remote.origin.push=+refs/heads/*:refs/heads/*` and `push.followTags=true`, only the current branch moves; a diverged second branch and an annotated tag are untouched), `TestGitPushNonFastForwardRejected`, `TestGitPushToMirrorRemoteChangesNothing`.
   - `TestCloneURLTable` accepts `https://github.com/o/r.git`, `ssh://git@github.com/o/r.git`, `git@github.com:o/r.git`, `host:r.git`. It refuses `ext::sh -c x`, `fd::0`, `file:///x`, `http://h/r`, `-uX`, `https://tok@github.com/o/r`, `https://u:p@h/r`, `git@host:-x`, `a b`, `x --upload-pack=y`.
   - `TestGitDisplayStartsWithGitAndIsMasked`: a commit whose message would be token-shaped never builds. A path `skills/ghp_x/SKILL.md` shows masked in `Display` but unchanged in `Argv`.
   - `TestDisplayAbbreviatesManyPaths`.
   - `TestConfirmVerbForGit` (`commit`, `push`).
-  - `TestGitBuildersNeverEmitForbidden`: over a table of every builder × hostile inputs, no argv element equals or starts with `--force`, `-f`, `--force-with-lease`, `--no-verify`, `-n`, `-a`, `--all`, `-A`, `--amend`, `--mirror`, `--tags`, `--delete`, `-d`, `--upload-pack`, `--receive-pack`, `--exec`. No subcommand outside `{add, commit, fetch, pull, push}`; for `init` only `init`.
+  - `TestGitBuildersNeverEmitForbidden`: over a table of every builder × hostile inputs, no argv element equals or starts with `--force`, `-f`, `--force-with-lease`, `--no-verify`, `-n`, `-a`, `--all`, `-A`, `--amend`, `--mirror`, `--tags`, `--delete`, `-d`, `--upload-pack`, `--receive-pack`, `--exec`. No argv element before `--` starts with `+`, and no refspec contains `+`; the hostile table includes `+main`, `+refs/heads/*:refs/heads/*`, `:main` and `main:other` as remote and branch arguments. No subcommand outside `{add, commit, fetch, pull, push}`; for `init` only `init`.
   - `TestAgentsyncDisplayUnchanged` (existing display tests pass).
 - [ ] **Step 2: Run** `go test ./internal/actions/... -v`. Expected: FAIL.
 - [ ] **Step 3: Implement.** Add `mask.Credential` here (Create `internal/mask/credential.go`, test `credential_test.go` with `TestCredentialHardKinds` for every R5 hard kind and `TestCredentialIgnoresReferences` (`Bearer ${secret:x}`, `${env:T}`) and plain URLs with query strings). It reuses the existing `textRules`/`shapeRes` minus the URL-structure pass and returns a kind name (`"token-shape"`, `"auth-header"`, `"url-userinfo"`, `"private-key"`, `"age-identity"`, `"secret-assignment"`).
@@ -434,7 +435,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
 - Produces (keys):
   - `f` fetch: needs an upstream; `remote` comes from `git -C top for-each-ref --format=%(upstream:remotename) refs/heads/<head>`, read once per refresh.
   - `p` pull: `AtRoot` only, upstream set, not detached, no lock or in-progress state.
-  - `P` push, under the same preconditions plus the outgoing guard.
+  - `P` push, under the same preconditions plus the outgoing guard. It emits `GitPush(GitRepo{Top}, remote, Branch.Head)` with the same `remote` as `f`. Refused when the upstream's branch (`%(upstream:remoteref)`) is not `refs/heads/<head>` (the explicit refspec would otherwise create a new remote branch; this is the rule `push.default=simple` applied) and when `git -C top config --get --type=bool remote.<remote>.mirror` prints `true` ("the remote is configured as a mirror; push outside the TUI").
   - `D`/`A` after a successful pull emit `GotoMsg{"Drift"}` / `GotoMsg{"Apply"}`.
   - `i` bootstrap (user scope, `Missing`).
 - Rules (pinned):
@@ -460,7 +461,8 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `TestPullFastForwardsAndOffersApply` (`A` emits `GotoMsg{"Apply"}`).
   - `TestPullDivergedExplainsAndChangesNothing` (HEAD unchanged).
   - `TestPushRoundTripToBare`.
-  - `TestPushNeverForce` (argv check).
+  - `TestPushNeverForce` (argv check: the argv equals `GitPush(…, remote, head)`).
+  - `TestPushRefusedMirrorRemote`, `TestPushRefusedWhenUpstreamNameDiffers` (local `main` tracking `origin/master`).
   - `TestPushRefusedNoUpstreamShowsGuidance`.
   - `TestPushRefusedWhenBehind`.
   - `TestPushRefusedOutgoingHardFinding` (a commit made outside the TUI with `ghp_…` in `mcp/x.toml`).
@@ -515,7 +517,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
 ## Self-review
 
 - **Spec coverage:** D1 → Tasks 2-4; D2 → 5-8; D3 → 3, 6, 8; D4 → 5, 7, 8; D5 → 4, 9; D6 → 3, 9; D7 → 3, 9; D8 → 5, 8; D9 → 1, 5, e2e in 10; D10 → 3, 9; D11 → 3 (`TestGitBuildersNeverEmitForbidden`); tests with temp repos, a bare remote and the real-agentsync e2e → gittest (5), Tasks 8-10. The brief's "first-run path" did not exist, so D10 places it on this tab (stated in Facts).
-- **Brief deviations, each argued:** commit flag `--message=` instead of `-m` (one argv element, no ambiguity); push gets `-c push.default=simple` (a user's `matching` default would otherwise push every branch); pull adds `--no-rebase --no-autostash` (user config could otherwise rebase or stash); scan is split hard/soft (R5); push/pull refused below root (R7); chezmoi detection uses `chezmoi source-path` instead of the `managed` list (one call answers "is this path a target").
+- **Brief deviations, each argued:** commit flag `--message=` instead of `-m` (one argv element, no ambiguity); push names one explicit non-forced refspec and `--no-follow-tags` (a `matching` default, a forced `remote.<name>.push` refspec or `push.followTags` would otherwise push other branches or tags; D6); pull adds `--no-rebase --no-autostash` (user config could otherwise rebase or stash); scan is split hard/soft (R5); push/pull refused below root (R7); chezmoi detection uses `chezmoi source-path` instead of the `managed` list (one call answers "is this path a target").
 - **Type consistency:** `actions.GitRepo{Top}` is built from `gitrepo.Repo.Top` (Tasks 8, 9). `Action.Program`/`TypedConfirm` are defined in 3 and used in 4, 8, 9. `DoChain`, `GotoMsg`, `Deps.Git/Chezmoi` are defined in 4. `mask.Credential` is defined in 3 and used in 3 and 7. `Finding` is defined in 7 and used in 8 and 9. `Ended.Program` is defined in 2 and used in 4.
 - **Review Focus mapping:** 1 → Tasks 3, 8; 2 → 6, 8; 3 → 3, 4, 7, 8, 9; 4 → 5, 6, 9; 5 → 2, 4, 5, 9; 6 → 2.
 - **Controller review (2026-11-07) fixed:** R5 would have hard-refused every digest-pinned Docker image from the discover plan (exemptions and five tests added); Task 10's local check used `cp -a` on the real home, which would have copied a live API key from the ignored `.state/` backups into a temp dir (now `git clone`, tracked files only); and the two plans had no stated order or shared-file policy (new section above).

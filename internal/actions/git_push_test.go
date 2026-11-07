@@ -1,0 +1,216 @@
+package actions
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Branch names git itself accepts that ValidBranchName must accept too.
+var goodBranches = []string{"main", "master", "feat/source-repo", "release-1.2", "a_b", "x.y", "v1", "üñí", "user/a.b/c"}
+
+// Branch names ValidBranchName refuses: git check-ref-format rules for
+// refs/heads/<name>, plus a leading '-' (an option), "@" and "HEAD".
+var badBranches = []string{
+	"", "-x", "--force", "@", "HEAD", "a..b", "a@{u}", "@{-1}", "a b", "a\tb", "a\nb", "a\x7fb",
+	"a~1", "a^", "a:b", ":main", "a?", "a*", "a[b", `a\b`, "a/", "/a", "a//b", "a.", "a.lock",
+	"a.lock/b", "a/.b", ".a", "+main", "a‮b", "\xff", strings.Repeat("a", 256),
+}
+
+func TestValidBranchName(t *testing.T) {
+	for _, b := range goodBranches {
+		if err := ValidBranchName(b); err != nil {
+			t.Errorf("ValidBranchName(%q) = %v", b, err)
+		}
+	}
+	for _, b := range badBranches {
+		if err := ValidBranchName(b); err == nil {
+			t.Errorf("ValidBranchName(%q) accepted", b)
+		}
+		if a, err := GitPush(testRepo, "origin", b); err == nil {
+			t.Errorf("GitPush accepted branch %q: %q", b, a.Argv)
+		}
+	}
+}
+
+func TestGitPushRefusesBadRemote(t *testing.T) {
+	for _, r := range []string{"", "-x", "--receive-pack=x", "a b", "../r", "+origin", "https://h/r"} {
+		if a, err := GitPush(testRepo, r, "main"); err == nil {
+			t.Errorf("GitPush accepted remote %q: %q", r, a.Argv)
+		}
+	}
+}
+
+// Every name ValidBranchName accepts is a branch name real git accepts.
+func TestValidBranchNamesAgreeWithGit(t *testing.T) {
+	g := newHermeticGit(t)
+	for _, b := range goodBranches {
+		if out, err := g.run("", "check-ref-format", "refs/heads/"+b); err != nil {
+			t.Errorf("git check-ref-format refuses %q: %v %s", b, err, out)
+		}
+	}
+}
+
+// hermeticGit runs real git with no user or system configuration.
+type hermeticGit struct {
+	t   *testing.T
+	bin string
+	env []string
+}
+
+// newHermeticGit returns a hermetic git, or skips the test when git is
+// not installed.
+func newHermeticGit(t *testing.T) hermeticGit {
+	t.Helper()
+	bin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not on PATH")
+	}
+	home := t.TempDir()
+	cfg := filepath.Join(home, "gitconfig")
+	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_GLOBAL=" + cfg, "GIT_CONFIG_NOSYSTEM=1", "LC_ALL=C"}
+	return hermeticGit{t: t, bin: bin, env: env}
+}
+
+// run runs git with args in dir ("" = the test's directory).
+func (g hermeticGit) run(dir string, args ...string) (string, error) {
+	cmd := exec.Command(g.bin, args...)
+	cmd.Dir, cmd.Env = dir, g.env
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// must runs git and fails the test on error, returning trimmed output.
+func (g hermeticGit) must(dir string, args ...string) string {
+	g.t.Helper()
+	out, err := g.run(dir, args...)
+	if err != nil {
+		g.t.Fatalf("git %q: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(out)
+}
+
+// commit writes name with content in dir and commits it.
+func (g hermeticGit) commit(dir, name, content string) {
+	g.t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		g.t.Fatal(err)
+	}
+	g.must(dir, "add", "--", name)
+	g.must(dir, "commit", "-q", "-m", name+" "+content)
+}
+
+// pushFixture is a work repo on main with a bare origin that holds main
+// and a branch "other" that the work repo has since rewritten (so a
+// forced push of it would replace the remote's history).
+type pushFixture struct {
+	g            hermeticGit
+	work, remote string
+}
+
+func newPushFixture(t *testing.T) pushFixture {
+	g := newHermeticGit(t)
+	dir := t.TempDir()
+	f := pushFixture{g: g, work: filepath.Join(dir, "work"), remote: filepath.Join(dir, "remote.git")}
+	g.must("", "init", "-q", "--bare", "-b", "main", f.remote)
+	g.must("", "init", "-q", "-b", "main", f.work)
+	g.must(f.work, "config", "user.name", "t")
+	g.must(f.work, "config", "user.email", "t@example.invalid")
+	g.must(f.work, "config", "commit.gpgSign", "false")
+	g.commit(f.work, "f", "1")
+	g.must(f.work, "remote", "add", "origin", f.remote)
+	g.must(f.work, "push", "-q", "origin", "main")
+	g.must(f.work, "checkout", "-q", "-b", "other")
+	g.commit(f.work, "o", "1")
+	g.must(f.work, "push", "-q", "origin", "other")
+	g.must(f.work, "reset", "-q", "--hard", "main")
+	g.commit(f.work, "o", "2") // other has diverged from origin/other
+	g.must(f.work, "checkout", "-q", "main")
+	return f
+}
+
+// remoteRef is the remote's value of ref ("" when absent).
+func (f pushFixture) remoteRef(ref string) string {
+	out, err := f.g.run("", "--git-dir="+f.remote, "rev-parse", "--verify", "-q", ref)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// push runs GitPush's argv with real git and returns its output and error.
+func (f pushFixture) push(t *testing.T) (string, error) {
+	t.Helper()
+	top, err := filepath.EvalSymlinks(f.work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := mustAction(t)(GitPush(GitRepo{Top: top}, "origin", "main"))
+	return f.g.run("", a.Argv...)
+}
+
+// D6 with Ruling 9: a remote.<name>.push refspec that forces every branch,
+// and push.followTags, cannot widen GitPush: only main moves, by fast
+// forward, and no other branch or tag is touched.
+func TestGitPushIgnoresConfiguredRefspecsAndTags(t *testing.T) {
+	f := newPushFixture(t)
+	f.g.must(f.work, "config", "remote.origin.push", "+refs/heads/*:refs/heads/*")
+	f.g.must(f.work, "config", "push.followTags", "true")
+	f.g.must(f.work, "tag", "-a", "v1", "-m", "v1")
+	f.g.commit(f.work, "f", "2")
+	otherBefore := f.remoteRef("refs/heads/other")
+	if out, err := f.push(t); err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	if got, want := f.remoteRef("refs/heads/main"), f.g.must(f.work, "rev-parse", "main"); got != want {
+		t.Errorf("remote main = %q, want %q", got, want)
+	}
+	if got := f.remoteRef("refs/heads/other"); got != otherBefore {
+		t.Errorf("remote other moved from %s to %s: a configured forced refspec widened the push", otherBefore, got)
+	}
+	if got := f.remoteRef("refs/tags/v1"); got != "" {
+		t.Errorf("tag v1 pushed (%s) despite --no-follow-tags", got)
+	}
+}
+
+// A non-fast-forward is rejected, never forced, even when the configured
+// refspec would force it.
+func TestGitPushNonFastForwardRejected(t *testing.T) {
+	f := newPushFixture(t)
+	f.g.must(f.work, "config", "remote.origin.push", "+refs/heads/*:refs/heads/*")
+	f.g.must(f.work, "commit", "-q", "--amend", "-m", "rewritten")
+	before := f.remoteRef("refs/heads/main")
+	out, err := f.push(t)
+	if err == nil {
+		t.Fatalf("a non-fast-forward push succeeded:\n%s", out)
+	}
+	if !strings.Contains(out, "non-fast-forward") {
+		t.Errorf("output does not report a non-fast-forward:\n%s", out)
+	}
+	if got := f.remoteRef("refs/heads/main"); got != before {
+		t.Errorf("remote main moved from %s to %s", before, got)
+	}
+}
+
+// remote.<name>.mirror=true cannot turn GitPush into a mirror push: git
+// refuses the explicit refspec and changes nothing. (The error names
+// --mirror, which the user never typed, so the Source repo tab refuses a
+// mirror remote up front; plan Task 9.)
+func TestGitPushToMirrorRemoteChangesNothing(t *testing.T) {
+	f := newPushFixture(t)
+	f.g.must(f.work, "config", "remote.origin.mirror", "true")
+	f.g.commit(f.work, "f", "2")
+	main, other := f.remoteRef("refs/heads/main"), f.remoteRef("refs/heads/other")
+	out, err := f.push(t)
+	if err == nil {
+		t.Fatalf("push to a mirror remote succeeded:\n%s", out)
+	}
+	if f.remoteRef("refs/heads/main") != main || f.remoteRef("refs/heads/other") != other {
+		t.Errorf("a mirror remote's refs changed:\n%s", out)
+	}
+}

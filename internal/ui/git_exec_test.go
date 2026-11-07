@@ -56,7 +56,7 @@ func gitCommit(t *testing.T, paths ...string) actions.Action {
 
 func gitPush(t *testing.T) actions.Action {
 	t.Helper()
-	return mustAct(actions.GitPush(testRepo))
+	return mustAct(actions.GitPush(testRepo, "origin", "main"))
 }
 
 func gitFetch(t *testing.T) actions.Action {
@@ -86,7 +86,7 @@ func TestGitActionRunsOnGitRunner(t *testing.T) {
 		t.Fatalf("push: %v", m.Err)
 	}
 	h.final()
-	want := []string{"-C /tmp/repo fetch origin", "-C /tmp/repo -c push.default=simple push"}
+	want := []string{"-C /tmp/repo fetch origin", "-C /tmp/repo push --no-follow-tags origin refs/heads/main:refs/heads/main"}
 	if got := git.Calls(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("git calls = %q, want %q", got, want)
 	}

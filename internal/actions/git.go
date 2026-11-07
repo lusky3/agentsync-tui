@@ -20,8 +20,9 @@ import (
 // (--no-pager, --literal-pathspecs, ...), which Argv and Display never hold.
 // Paths always follow "--", a commit message is one --message= element, and
 // remote names and clone URLs are refused before an Action exists. None of
-// these builders can emit --force, --no-verify, -a, --amend, refspecs or a
-// subcommand outside add, commit, fetch, pull and push (D6, D11).
+// these builders can emit --force, --no-verify, -a, --amend, a forced or
+// wildcard refspec or a subcommand outside add, commit, fetch, pull and
+// push (D6, D11); push's only refspec is refs/heads/<b>:refs/heads/<b>.
 
 // Limits on what the git builders accept.
 const (
@@ -29,6 +30,7 @@ const (
 	maxGitPathBytes = 4096
 	maxCommitRunes  = 200
 	maxCloneURL     = 2048
+	maxBranchBytes  = 255
 	// displayPaths is how many paths Display lists before "… (+N more)".
 	displayPaths = 10
 )
@@ -148,6 +150,34 @@ func wordSep(r rune) bool {
 func ValidRemoteName(n string) error {
 	if !remoteNameRe.MatchString(n) || strings.Contains(n, "..") {
 		return errors.New("invalid remote name")
+	}
+	return nil
+}
+
+// ValidBranchName reports whether b is a branch short name GitPush may
+// put in a refspec. It applies git check-ref-format's rules for
+// refs/heads/<b> (no "..", "@{", "//", control characters, space or any of
+// ~ ^ : ? * [ \; no component starting with '.' or ending in ".lock"; no
+// leading or trailing '/'; no trailing '.'), and also refuses a leading
+// '-' (an option), "@", "HEAD", '+' anywhere (a leading '+' forces a
+// refspec), format characters, invalid UTF-8 and more than 255 bytes. A
+// bad name is refused, never escaped.
+func ValidBranchName(b string) error {
+	bad := errors.New("invalid branch name")
+	switch {
+	case b == "", len(b) > maxBranchBytes, b == "@", b == "HEAD":
+		return bad
+	case strings.HasPrefix(b, "-"), strings.HasPrefix(b, "/"), strings.HasSuffix(b, "/"), strings.HasSuffix(b, "."):
+		return bad
+	case strings.Contains(b, ".."), strings.Contains(b, "@{"), strings.Contains(b, "//"):
+		return bad
+	case strings.ContainsAny(b, " ~^:?*[\\+\x7f"), hasControl(b):
+		return bad
+	}
+	for _, c := range strings.Split(b, "/") {
+		if strings.HasPrefix(c, ".") || strings.HasSuffix(c, ".lock") {
+			return bad
+		}
 	}
 	return nil
 }
@@ -322,13 +352,25 @@ func GitPull(r GitRepo) (Action, error) {
 	return a, nil
 }
 
-// GitPush builds `-C <top> -c push.default=simple push` (D6): no refspec,
-// no force, no tags.
-func GitPush(r GitRepo) (Action, error) {
+// GitPush builds `-C <top> push --no-follow-tags <remote>
+// refs/heads/<branch>:refs/heads/<branch>` (D6): one explicit, non-forced,
+// single-branch refspec. An explicit refspec overrides the repository's
+// remote.<remote>.push refspecs (which take precedence over push.default
+// and can force every branch) and push.default itself; --no-follow-tags
+// overrides push.followTags. A non-fast-forward is rejected by git, never
+// forced. remote.<remote>.mirror makes git refuse the push outright.
+func GitPush(r GitRepo, remote, branch string) (Action, error) {
 	if err := r.check(); err != nil {
 		return Action{}, err
 	}
-	a := gitAction("Push", r.head("-c", "push.default=simple", "push"))
+	if err := ValidRemoteName(remote); err != nil {
+		return Action{}, err
+	}
+	if err := ValidBranchName(branch); err != nil {
+		return Action{}, err
+	}
+	ref := "refs/heads/" + branch
+	a := gitAction("Push", r.head("push", "--no-follow-tags", remote, ref+":"+ref))
 	a.Network = true
 	return a, nil
 }
