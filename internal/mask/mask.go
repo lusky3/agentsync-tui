@@ -126,19 +126,21 @@ func onlyRefs(s string) bool {
 	return strings.Trim(rest, " \t:") == ""
 }
 
-// Value returns a configuration value for display. References pass through,
-// literal text containing a reference stays visible apart from token-shaped
-// secrets, and everything else becomes Mask. The decision never depends on
+// Value returns a configuration value for display. References pass through
+// (by the Text rule: ${...}, an upper-case $NAME, backtick-quoted), a value
+// that is only an auth scheme and references stays visible apart from
+// token-shaped secrets, and everything else becomes Mask. The decision never depends on
 // the key the value belongs to, so an unrecognised key cannot leak a value.
 func Value(val string) string {
 	if strings.TrimSpace(val) == "" {
 		return Sanitize(val)
 	}
 	val = Sanitize(val)
-	if onlyRefs(val) {
+	if textRefsOnly(val) {
 		return val
 	}
-	if refRe.MatchString(val) && schemeOnlyRe.MatchString(refRe.ReplaceAllString(val, "")) {
+	rest := strings.ReplaceAll(textRefRe.ReplaceAllString(val, ""), "`", "")
+	if textRefRe.MatchString(val) && schemeOnlyRe.MatchString(rest) {
 		return Text(val)
 	}
 	return Mask

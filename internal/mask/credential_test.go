@@ -101,3 +101,18 @@ func TestShellAndTemplateRefsAreRefs(t *testing.T) {
 		}
 	}
 }
+
+// TestValueKeepsShellRefs: Value uses the same reference rule as Text, so
+// a header value that is only a shell variable or a template stays visible.
+func TestValueKeepsShellRefs(t *testing.T) {
+	for _, in := range []string{"Bearer $GH_TOKEN", "$GH_TOKEN", "`${GH_TOKEN}`", "Bearer `${X}`"} {
+		if got := Value(in); got != in {
+			t.Errorf("Value(%q) = %q, want unchanged", in, got)
+		}
+	}
+	for _, in := range []string{"Bearer $GH_TOKEN-lit", "$lower", "x $GH_TOKEN"} {
+		if got := Value(in); got != Mask {
+			t.Errorf("Value(%q) = %q, want masked", in, got)
+		}
+	}
+}

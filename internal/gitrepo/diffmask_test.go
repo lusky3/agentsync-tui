@@ -207,3 +207,35 @@ func TestMaskPatchLineArgsReadable(t *testing.T) {
 		}
 	}
 }
+
+// A visible key's inline table or array is masked pair by pair: only a
+// plain value the scan would not flag is shown as is.
+func TestMaskPatchLineVisibleKeyTables(t *testing.T) {
+	for l, raw := range map[string]string{
+		"+initialization_options = { headers = { Authorization = '" + hunter + "' } }": hunter,
+		"+name = { Authorization = '" + hunter + "' }":                                 hunter,
+		"+initialization_options = { secret_value = '" + opaqueTok + "' }":             opaqueTok,
+		"+initialization_options = { x = '" + opaqueTok + "' }":                        opaqueTok,
+		"+description = { token = '" + ghpTok + "' }":                                  ghpTok,
+		"+description = { token = 'plainlit' }":                                        "plainlit",
+		"+root_markers = [{ Authorization = '" + hunter + "' }]":                       hunter,
+		"+model = '-----BEGIN RSA PRIVATE KEY-----'":                                   "BEGIN",
+	} {
+		got := MaskPatchLine(scanMCP, l)
+		if strings.Contains(got, raw) || !strings.Contains(got, mask.Mask) {
+			t.Errorf("%q -> %q", l, got)
+		}
+	}
+	for _, l := range []string{
+		"+name = 'my-server'",
+		"+initialization_options = { foo = 'bar' }",
+		"+initialization_options = { settings = { gopls = { staticcheck = true } } }",
+		"+root_markers = ['go.mod', '.git']",
+		"+Authorization = 'Bearer $GH_TOKEN'",
+		"+headers = { Authorization = 'Bearer `${GH_TOKEN}`' }",
+	} {
+		if got := MaskPatchLine(scanMCP, l); got != l {
+			t.Errorf("%q -> %q, want unchanged", l, got)
+		}
+	}
+}

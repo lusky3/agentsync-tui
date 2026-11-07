@@ -150,16 +150,68 @@ func (p kv) lastKey() string {
 }
 
 // masked rebuilds the pair with its key through mask.Text and its value
-// through maskValue; a visible key keeps its value (args through maskArgs).
+// through maskValue; a visible key's value goes through maskVisible (args
+// through maskArgs).
 func (p kv) masked() string {
 	key := p.lastKey()
 	switch {
 	case key == "args":
 		return p.indent + p.key + p.eq + maskArgs(p.value) + p.trail
 	case visibleKeys[key]:
-		return p.indent + p.key + p.eq + p.value + p.trail
+		return p.indent + p.key + p.eq + maskVisible(p.value, false) + p.trail
 	}
 	return p.indent + mask.Text(p.key) + p.eq + maskValue(p.value) + p.trail
+}
+
+// maskVisible shows the value of a visible key. An inline table is shown
+// pair by pair (maskVisiblePair) and an array element by element, at any
+// depth; a scalar is shown as is unless mask.Credential finds a credential
+// in it or, nested in a table (nested), it holds a token-shaped word, and
+// then it is masked as any value. Top-level scalars keep their
+// token-shaped words: a checksum, rev or store path is what these keys
+// hold.
+func maskVisible(v string, nested bool) string {
+	t := strings.TrimSpace(v)
+	lead := v[:strings.Index(v, t)]
+	trail := v[len(lead)+len(t):]
+	return lead + maskVisibleTrimmed(t, nested) + trail
+}
+
+func maskVisibleTrimmed(t string, nested bool) string {
+	switch {
+	case len(t) >= 2 && t[0] == '{' && t[len(t)-1] == '}':
+		return "{" + mapElems(t[1:len(t)-1], maskVisiblePair) + "}"
+	case len(t) >= 2 && t[0] == '[' && t[len(t)-1] == ']':
+		return "[" + mapElems(t[1:len(t)-1], func(e string) string { return maskVisible(e, nested) }) + "]"
+	}
+	if credential(t) || nested && hasTokenWord(exemptRe.ReplaceAllString(t, " ")) {
+		return maskTrimmed(t)
+	}
+	return t
+}
+
+// credential reports what mask.Credential finds in s, TOML triple quotes
+// read as ordinary ones.
+func credential(s string) bool {
+	_, found := mask.Credential(tripleQuotes.Replace(s))
+	return found
+}
+
+// maskVisiblePair masks one pair of an inline table under a visible key:
+// a pair the scan would flag (a credential, a header, a token-shaped
+// value) is masked as maskPair would, any other is shown, its tables and
+// arrays recursively.
+func maskVisiblePair(e string) string {
+	p, ok := parseKV(e)
+	switch {
+	case !ok:
+		return maskVisible(e, true)
+	case p.lastKey() == "args":
+		return p.masked()
+	case authKey(p), credential(e):
+		return p.indent + mask.Text(p.key) + p.eq + maskValue(p.value) + p.trail
+	}
+	return p.indent + mask.Text(p.key) + p.eq + maskVisible(p.value, true) + p.trail
 }
 
 // maskArgs masks a one-line args array as a command line (mask.Args, so a
