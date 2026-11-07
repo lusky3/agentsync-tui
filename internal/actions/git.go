@@ -22,7 +22,7 @@ import (
 // remote names and clone URLs are refused before an Action exists. None of
 // these builders can emit --force, --no-verify, -a, --amend, a forced or
 // wildcard refspec or a subcommand outside add, commit, fetch, pull and
-// push (D6, D11); push's only refspec is refs/heads/<b>:refs/heads/<b>.
+// push (D6, D11); push's only refspec is <object id>:refs/heads/<b>.
 
 // Limits on what the git builders accept.
 const (
@@ -362,17 +362,35 @@ func GitPull(r GitRepo) (Action, error) {
 	return a, nil
 }
 
+// ValidObjectID reports whether s is a full git object id: exactly 40
+// (sha1) or 64 (sha256) lowercase hex digits. Nothing else (a ref name, an
+// abbreviation, a revision expression) is accepted.
+func ValidObjectID(s string) error {
+	if len(s) != 40 && len(s) != 64 {
+		return errors.New("invalid object id: not 40 or 64 hex digits")
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return errors.New("invalid object id: not lowercase hex")
+		}
+	}
+	return nil
+}
+
 // GitPush builds `-C <top> push --no-follow-tags --no-recurse-submodules
-// <remote> refs/heads/<branch>:refs/heads/<branch>` (D6): one explicit,
-// non-forced, single-branch refspec. An explicit refspec overrides the
-// repository's remote.<remote>.push refspecs (which take precedence over
-// push.default and can force every branch) and push.default itself;
+// <remote> <sha>:refs/heads/<branch>` (D6, Ruling 32): one explicit,
+// non-forced, single-branch refspec whose source is the commit the caller
+// scanned, so a commit made on the branch after the scan is never sent.
+// git still updates the remote-tracking ref through the fetch refspec. An
+// explicit refspec overrides the repository's remote.<remote>.push
+// refspecs (which take precedence over push.default and can force every
+// branch) and push.default itself;
 // --no-follow-tags overrides push.followTags, and --no-recurse-submodules
 // overrides push.recurseSubmodules (on-demand would push submodule commits
 // to other repositories, check would gate on them). A non-fast-forward is
 // rejected by git, never forced. remote.<remote>.mirror makes git refuse
 // the push outright.
-func GitPush(r GitRepo, remote, branch string) (Action, error) {
+func GitPush(r GitRepo, remote, branch, sha string) (Action, error) {
 	if err := r.check(); err != nil {
 		return Action{}, err
 	}
@@ -382,8 +400,10 @@ func GitPush(r GitRepo, remote, branch string) (Action, error) {
 	if err := ValidBranchName(branch); err != nil {
 		return Action{}, err
 	}
-	ref := "refs/heads/" + branch
-	a := gitAction("Push", r.head("push", "--no-follow-tags", "--no-recurse-submodules", remote, ref+":"+ref))
+	if err := ValidObjectID(sha); err != nil {
+		return Action{}, err
+	}
+	a := gitAction("Push", r.head("push", "--no-follow-tags", "--no-recurse-submodules", remote, sha+":refs/heads/"+branch))
 	a.Network = true
 	return a, nil
 }

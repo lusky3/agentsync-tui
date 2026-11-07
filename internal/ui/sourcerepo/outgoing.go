@@ -32,12 +32,13 @@ var publicHosts = map[string]bool{
 // errPatchPath is a patch section whose path cannot be read back.
 var errPatchPath = errors.New("cannot read a path in the outgoing patch")
 
-// outgoingNamesArgv lists every path any outgoing commit touches (not only
-// the net diff), merges against their first parent. Renames are split into
-// a deletion and an addition, so both names are listed.
-func outgoingNamesArgv(r gitrepo.Repo) []string {
+// outgoingNamesArgv lists every path any outgoing commit (base..tip)
+// touches, not only the net diff; merges against their first parent.
+// Renames are split into a deletion and an addition, so both names are
+// listed.
+func outgoingNamesArgv(r gitrepo.Repo, base, tip string) []string {
 	return []string{"-C", r.Top, "log", "--format=", "--name-only", "-z", "--no-renames",
-		"--diff-merges=first-parent", outgoingRange, "--", r.Pathspec}
+		"--diff-merges=first-parent", base + ".." + tip, "--", r.Pathspec}
 }
 
 // outgoingPatchArgv is every outgoing commit's own patch with no context,
@@ -45,18 +46,18 @@ func outgoingNamesArgv(r gitrepo.Repo) []string {
 // prefixes and no rename sections, so each file section's header names
 // one path twice. Merges diff against their first parent: never a
 // combined diff, which AddedLines does not parse.
-func outgoingPatchArgv(r gitrepo.Repo) []string {
+func outgoingPatchArgv(r gitrepo.Repo, base, tip string) []string {
 	return []string{"-C", r.Top, "log", "-p", "--no-ext-diff", "--no-textconv", "--no-color", "-U0",
 		"--no-renames", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
-		"--format=%H", outgoingRange, "--", r.Pathspec}
+		"--format=%H", base + ".." + tip, "--", r.Pathspec}
 }
 
 // scanOutgoing is the outgoing guard (R5 for a push): every path the
 // outgoing commits touch is listed and a state or sensitive one refused,
 // then every commit's patch is scanned file by file, so a credential added
 // in one commit and removed in a later one is still found.
-func scanOutgoing(ctx context.Context, in netInput) ([]gitrepo.Finding, []string) {
-	res, err := ui.Read(ctx, in.git, in.limit, outgoingNamesArgv(in.repo)...)
+func scanOutgoing(ctx context.Context, in netInput, base, tip string) ([]gitrepo.Finding, []string) {
+	res, err := ui.Read(ctx, in.git, in.limit, outgoingNamesArgv(in.repo, base, tip)...)
 	if note := ui.ReadNote("git log", res, err); note != "" {
 		return nil, []string{refused + note}
 	}
@@ -68,7 +69,7 @@ func scanOutgoing(ctx context.Context, in netInput) ([]gitrepo.Finding, []string
 	if r := outgoingPathRefusal(in.repo, paths); r != nil {
 		return nil, r
 	}
-	res, err = ui.Read(ctx, in.git, in.limit, outgoingPatchArgv(in.repo)...)
+	res, err = ui.Read(ctx, in.git, in.limit, outgoingPatchArgv(in.repo, base, tip)...)
 	if note := ui.ReadNote("git log", res, err); note != "" {
 		return nil, []string{refused + note}
 	}

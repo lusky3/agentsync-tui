@@ -204,9 +204,17 @@ type netMsg struct {
 	gen          int
 	op           netOp
 	refusal      []string // display-safe lines; nil when every guard passed
-	findings     []gitrepo.Finding
-	urls         []string // the push URLs, unmasked
+	push         pushPlan
 	remote, head string
+}
+
+// pushPlan is what the push guard found: the commit it scanned (the push
+// sends exactly that commit, Ruling 32), the push URLs (unmasked) and the
+// scan's findings.
+type pushPlan struct {
+	sha      string
+	urls     []string
+	findings []gitrepo.Finding
 }
 
 // startNet checks what the last refresh read, then starts the guard round
@@ -250,35 +258,77 @@ func runNet(ctx context.Context, gen int, in netInput) netMsg {
 	}
 	m.remote, m.head = sn.remote.name, b.Head
 	if in.op == opPush {
-		m.refusal, m.findings, m.urls = pushGuard(ctx, in, b, sn.remote)
+		m.push, m.refusal = pushGuard(ctx, in, b, sn.remote)
 	}
 	return m
 }
 
 // pushGuard is the pre-push guard: ahead of a fetched upstream and not
 // behind it, the upstream is the same-named branch on a remote that is
-// not a mirror, and the outgoing commits pass the scan.
-func pushGuard(ctx context.Context, in netInput, b gitrepo.Branch, r remoteInfo) ([]string, []gitrepo.Finding, []string) {
-	switch {
-	case !b.ABKnown:
-		return []string{refused + "the upstream has not been fetched: fetch (f) first"}, nil, nil
-	case b.Behind > 0:
-		return []string{refused + "behind " + strconv.Itoa(b.Behind) + ": pull first"}, nil, nil
-	case b.Ahead == 0:
-		return []string{"nothing to push: the branch is not ahead of its upstream"}, nil, nil
-	case r.ref != headsPrefix+b.Head:
-		return []string{refused + "the upstream is " + mask.Sanitize(r.ref) + " on " + mask.Sanitize(r.name) + ", not " +
-			headsPrefix + mask.Sanitize(b.Head) + "; a push from the TUI would create a new remote branch: push outside the TUI"}, nil, nil
+// not a mirror, and the outgoing commits pass the scan. HEAD and the
+// upstream are pinned to object ids first, so the scan and the push cover
+// the same commits.
+func pushGuard(ctx context.Context, in netInput, b gitrepo.Branch, r remoteInfo) (pushPlan, []string) {
+	if why := pushBranchRefusal(b, r); why != "" {
+		return pushPlan{}, []string{why}
 	}
 	if why := mirrorRefusal(ctx, in, r.name); why != "" {
-		return []string{why}, nil, nil
+		return pushPlan{}, []string{why}
 	}
 	urls, why := pushURLs(ctx, in, r.name)
 	if why != "" {
-		return []string{why}, nil, nil
+		return pushPlan{}, []string{why}
 	}
-	fs, refusal := scanOutgoing(ctx, in)
-	return refusal, fs, urls
+	base, tip, why := pinRange(ctx, in)
+	if why != "" {
+		return pushPlan{}, []string{why}
+	}
+	fs, refusal := scanOutgoing(ctx, in, base, tip)
+	return pushPlan{sha: tip, urls: urls, findings: fs}, refusal
+}
+
+// pushBranchRefusal is why the branch's state forbids a push, or "".
+func pushBranchRefusal(b gitrepo.Branch, r remoteInfo) string {
+	switch {
+	case !b.ABKnown:
+		return refused + "the upstream has not been fetched: fetch (f) first"
+	case b.Behind > 0:
+		return refused + "behind " + strconv.Itoa(b.Behind) + ": pull first"
+	case b.Ahead == 0:
+		return "nothing to push: the branch is not ahead of its upstream"
+	case r.ref != headsPrefix+b.Head:
+		return refused + "the upstream is " + mask.Sanitize(r.ref) + " on " + mask.Sanitize(r.name) + ", not " +
+			headsPrefix + mask.Sanitize(b.Head) + "; a push from the TUI would create a new remote branch: push outside the TUI"
+	}
+	return ""
+}
+
+// pinRange reads the object ids of the upstream and HEAD: the outgoing
+// commits are base..tip, and the push sends tip.
+func pinRange(ctx context.Context, in netInput) (base, tip, why string) {
+	if base, why = revParse(ctx, in, upstreamCommit); why != "" {
+		return "", "", why
+	}
+	tip, why = revParse(ctx, in, headCommit)
+	return base, tip, why
+}
+
+const (
+	headCommit     = "HEAD^{commit}"
+	upstreamCommit = "@{u}^{commit}"
+)
+
+// revParse reads the object id rev names; why is a refusal.
+func revParse(ctx context.Context, in netInput, rev string) (string, string) {
+	res, err := ui.Read(ctx, in.git, in.limit, "-C", in.repo.Top, "rev-parse", "--verify", rev)
+	if note := ui.ReadNote("git rev-parse", res, err); note != "" {
+		return "", refused + note
+	}
+	id := strings.TrimSpace(res.Stdout)
+	if actions.ValidObjectID(id) != nil {
+		return "", refused + "git rev-parse did not print an object id"
+	}
+	return id, ""
 }
 
 // mirrorRefusal refuses a remote configured as a mirror: git would refuse
@@ -319,7 +369,7 @@ func pushURLs(ctx context.Context, in netInput, remote string) ([]string, string
 // onNet takes a finished guard round: a refusal is shown, a clean round
 // emits the pull or push.
 func (s *Screen) onNet(m netMsg) tea.Cmd {
-	s.netBusy, s.pushFindings = false, m.findings
+	s.netBusy, s.pushFindings = false, m.push.findings
 	if len(m.refusal) > 0 {
 		s.note = strings.Join(m.refusal, "\n")
 		return nil
@@ -329,17 +379,17 @@ func (s *Screen) onNet(m netMsg) tea.Cmd {
 		act, err := actions.GitPull(actions.GitRepo{Top: s.repo.Top})
 		return s.emitNet(act, err, p)
 	}
-	act, err := actions.GitPush(actions.GitRepo{Top: s.repo.Top}, m.remote, m.head)
+	act, err := actions.GitPush(actions.GitRepo{Top: s.repo.Top}, m.remote, m.head, m.push.sha)
 	if err != nil {
 		return s.emitNet(act, err, p)
 	}
-	c := countFindings(m.findings)
+	c := countFindings(m.push.findings)
 	if c.hard > 0 {
 		s.note = strings.Join(pushHardRefusal(c.hard, s.repo.Top), "\n")
 		return nil
 	}
-	warn := pushWarnings(m.urls)
-	if len(m.findings) > 0 {
+	warn := pushWarnings(m.push.urls)
+	if len(m.push.findings) > 0 {
 		act.TypedConfirm = true
 		warn = append(warn, c.soft()+" in the outgoing commits, listed on the Source repo tab; type push to proceed")
 	}

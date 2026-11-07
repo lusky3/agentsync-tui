@@ -200,7 +200,7 @@ func TestPushNeverForce(t *testing.T) {
 	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
 	f := open(t, home)
 	d := onlyDo(t, press(f.s, "P"))
-	want := mustAct(actions.GitPush(actions.GitRepo{Top: f.s.repo.Top}, "origin", "main"))
+	want := mustAct(actions.GitPush(actions.GitRepo{Top: f.s.repo.Top}, "origin", "main", head(t, home)))
 	if !slices.Equal(d.Action.Argv, want.Argv) || len(d.Then) != 0 {
 		t.Fatalf("argv %q, want %q", d.Action.Argv, want.Argv)
 	}
@@ -601,4 +601,26 @@ func TestPushScansMergeCommits(t *testing.T) {
 	f := open(t, home)
 	wantNothing(t, press(f.s, "P"))
 	wantView(t, f.s, "refused: 2 hard findings", "mcp/x.toml:3")
+}
+
+// Ruling 32: a commit made on the branch after the guard scanned (while
+// the confirm modal is open) never reaches the remote.
+func TestPushSendsOnlyTheScannedCommit(t *testing.T) {
+	home, bare := newTracked(t)
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	scanned := head(t, home)
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "P"))
+	gittest.Commit(t, home, "late", map[string]string{tomlX: baseTOML + "env = { API_KEY = \"" + ghpToken + "\" }\n"})
+	late := head(t, home)
+	if r := f.exec(d); r[0].Result.ExitCode != 0 {
+		t.Fatalf("push failed: %+v", r[0])
+	}
+	if got := strings.TrimSpace(gittest.Git(t, bare, "rev-parse", "main")); got != scanned {
+		t.Errorf("remote main %s, want the scanned %s", got, scanned)
+	}
+	if strings.Contains(gittest.Git(t, bare, "rev-list", "--all"), late) {
+		t.Error("the unscanned commit reached the remote")
+	}
+	wantView(t, f.s, "↑1 ↓0")
 }

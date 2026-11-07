@@ -29,7 +29,7 @@ func TestValidBranchName(t *testing.T) {
 		if err := ValidBranchName(b); err == nil {
 			t.Errorf("ValidBranchName(%q) accepted", b)
 		}
-		if a, err := GitPush(testRepo, "origin", b); err == nil {
+		if a, err := GitPush(testRepo, "origin", b, testSHA); err == nil {
 			t.Errorf("GitPush accepted branch %q: %q", b, a.Argv)
 		}
 	}
@@ -37,7 +37,7 @@ func TestValidBranchName(t *testing.T) {
 
 func TestGitPushRefusesBadRemote(t *testing.T) {
 	for _, r := range []string{"", "-x", "--receive-pack=x", "a b", "../r", "+origin", "https://h/r"} {
-		if a, err := GitPush(testRepo, r, "main"); err == nil {
+		if a, err := GitPush(testRepo, r, "main", testSHA); err == nil {
 			t.Errorf("GitPush accepted remote %q: %q", r, a.Argv)
 		}
 	}
@@ -150,7 +150,8 @@ func (f pushFixture) push(t *testing.T) (string, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := mustAction(t)(GitPush(GitRepo{Top: top}, "origin", "main"))
+	sha := f.g.must(f.work, "rev-parse", "--verify", "main^{commit}")
+	a := mustAction(t)(GitPush(GitRepo{Top: top}, "origin", "main", sha))
 	return f.g.run("", a.Argv...)
 }
 
@@ -250,7 +251,7 @@ func TestGitPushNeverRecursesIntoSubmodules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			a := mustAction(t)(GitPush(GitRepo{Top: top}, "origin", "main"))
+			a := mustAction(t)(GitPush(GitRepo{Top: top}, "origin", "main", g.must(work, "rev-parse", "main")))
 			if out, err := g.run("", a.Argv...); err != nil {
 				t.Fatalf("push: %v\n%s", err, out)
 			}
@@ -261,5 +262,48 @@ func TestGitPushNeverRecursesIntoSubmodules(t *testing.T) {
 				t.Errorf("superproject remote main = %s, want %s", got, want)
 			}
 		})
+	}
+}
+
+func TestValidObjectID(t *testing.T) {
+	for _, s := range []string{testSHA, strings.Repeat("f", 40), strings.Repeat("0", 64)} {
+		if err := ValidObjectID(s); err != nil {
+			t.Errorf("ValidObjectID(%q) = %v", s, err)
+		}
+	}
+	for _, s := range []string{"", "HEAD", "main", strings.ToUpper(testSHA), testSHA[:39], testSHA + "0",
+		strings.Repeat("a", 63), strings.Repeat("a", 65), "+" + testSHA[1:], "-" + testSHA[1:], testSHA[:39] + "g",
+		"HEAD^{commit}", "@{u}", testSHA[:20] + ":" + testSHA[:19]} {
+		if err := ValidObjectID(s); err == nil {
+			t.Errorf("ValidObjectID(%q) accepted", s)
+		}
+		if a, err := GitPush(testRepo, "origin", "main", s); err == nil {
+			t.Errorf("GitPush accepted object id %q: %q", s, a.Argv)
+		}
+	}
+}
+
+// The push sends exactly the commit it was given, whatever the branch
+// points at by the time it runs: a commit made after the guard scanned
+// never reaches the remote.
+func TestGitPushSendsTheGivenCommitOnly(t *testing.T) {
+	f := newPushFixture(t)
+	f.g.commit(f.work, "f", "2")
+	scanned := f.g.must(f.work, "rev-parse", "main")
+	top, err := filepath.EvalSymlinks(f.work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := mustAction(t)(GitPush(GitRepo{Top: top}, "origin", "main", scanned))
+	f.g.commit(f.work, "f", "3") // made after the action was built
+	if out, err := f.g.run("", a.Argv...); err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	if got := f.remoteRef("refs/heads/main"); got != scanned {
+		t.Errorf("remote main = %s, want the scanned %s", got, scanned)
+	}
+	// git updates the remote-tracking ref through the fetch refspec.
+	if got := f.g.must(f.work, "rev-parse", "origin/main"); got != scanned {
+		t.Errorf("origin/main = %s, want %s", got, scanned)
 	}
 }

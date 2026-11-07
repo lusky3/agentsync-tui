@@ -11,6 +11,9 @@ const testTop = "/home/u/.agentsync"
 
 var testRepo = GitRepo{Top: testTop}
 
+// testSHA is a commit id the push builder accepts.
+const testSHA = "0123456789abcdef0123456789abcdef01234567"
+
 // optionRegion is the part of a git argv that git parses as options and
 // subcommand: everything before the "--" separator.
 func optionRegion(argv []string) []string {
@@ -174,7 +177,7 @@ func TestBadTopRefused(t *testing.T) {
 		_, checks["commit"] = GitCommit(r, "m", []string{"a"})
 		_, checks["fetch"] = GitFetch(r, "origin")
 		_, checks["pull"] = GitPull(r)
-		_, checks["push"] = GitPush(r, "origin", "main")
+		_, checks["push"] = GitPush(r, "origin", "main", testSHA)
 		for name, err := range checks {
 			if err == nil {
 				t.Errorf("%s accepted top %q", name, top)
@@ -217,8 +220,8 @@ func TestPullAndPushArgvPinned(t *testing.T) {
 	if !pull.Network || pull.ReadOnly {
 		t.Errorf("pull flags = %+v", pull)
 	}
-	push := mustAction(t)(GitPush(testRepo, "origin", "main"))
-	want := []string{"-C", testTop, "push", "--no-follow-tags", "--no-recurse-submodules", "origin", "refs/heads/main:refs/heads/main"}
+	push := mustAction(t)(GitPush(testRepo, "origin", "main", testSHA))
+	want := []string{"-C", testTop, "push", "--no-follow-tags", "--no-recurse-submodules", "origin", testSHA + ":refs/heads/main"}
 	if !slices.Equal(push.Argv, want) {
 		t.Errorf("push argv = %q, want %q", push.Argv, want)
 	}
@@ -309,7 +312,7 @@ func TestGitDisplayStartsWithGitAndIsMasked(t *testing.T) {
 			t.Errorf("argv path changed: %q", a.Argv)
 		}
 	}
-	for _, a := range []Action{mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo, "origin", "main")), mustAction(t)(GitFetch(testRepo, "origin"))} {
+	for _, a := range []Action{mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo, "origin", "main", testSHA)), mustAction(t)(GitFetch(testRepo, "origin"))} {
 		if !strings.HasPrefix(a.Display(), "git -C "+testTop+" ") {
 			t.Errorf("Display = %q", a.Display())
 		}
@@ -348,7 +351,7 @@ func TestConfirmVerbForGit(t *testing.T) {
 		want string
 	}{
 		{mustAction(t)(GitCommit(testRepo, "m", []string{"a"})), "commit"},
-		{mustAction(t)(GitPush(testRepo, "origin", "main")), "push"},
+		{mustAction(t)(GitPush(testRepo, "origin", "main", testSHA)), "push"},
 		{mustAction(t)(GitPull(testRepo)), "pull"},
 		{mustAction(t)(GitAdd(testRepo, []string{"a"})), "add"},
 		{mustAction(t)(GitFetch(testRepo, "origin")), "fetch"},
@@ -389,7 +392,7 @@ func TestGitBuildersNeverEmitForbidden(t *testing.T) {
 	for _, h := range hostile {
 		built = append(built, buildHostile(h)...)
 	}
-	built = append(built, mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo, "origin", "main")))
+	built = append(built, mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo, "origin", "main", testSHA)))
 	if len(built) < 50 {
 		t.Fatalf("only %d hostile actions built; the table is not exercising the builders", len(built))
 	}
@@ -429,9 +432,10 @@ func buildHostile(h string) []Action {
 		func() (Action, error) { return GitCommit(testRepo, h, []string{h}) },
 		func() (Action, error) { return GitFetch(testRepo, h) },
 		func() (Action, error) { return GitPull(GitRepo{Top: h}) },
-		func() (Action, error) { return GitPush(GitRepo{Top: h}, "origin", "main") },
-		func() (Action, error) { return GitPush(testRepo, h, "main") },
-		func() (Action, error) { return GitPush(testRepo, "origin", h) },
+		func() (Action, error) { return GitPush(GitRepo{Top: h}, "origin", "main", testSHA) },
+		func() (Action, error) { return GitPush(testRepo, h, "main", testSHA) },
+		func() (Action, error) { return GitPush(testRepo, "origin", h, testSHA) },
+		func() (Action, error) { return GitPush(testRepo, "origin", "main", h) },
 		func() (Action, error) { return GitAdd(GitRepo{Top: h}, []string{"a"}) },
 		func() (Action, error) { return InitFromURL(h) },
 	} {
