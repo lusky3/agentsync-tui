@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -36,7 +37,8 @@ func TestRunHelpExitsZero(t *testing.T) {
 		if !strings.Contains(errb.String(), "-version") {
 			t.Fatalf("%s: usage not printed: %q", a, errb.String())
 		}
-		for _, want := range []string{"-read-timeout", "(default 2m0s)", "-write-timeout", "0 = none", "-debug-log"} {
+		for _, want := range []string{"-read-timeout", "(default 2m0s)", "-write-timeout", "0 = none", "-debug-log",
+			"except network git (fetch, pull, push), which keeps the 2m default", "except git add and commit, which keep a 2m bound"} {
 			if !strings.Contains(errb.String(), want) {
 				t.Errorf("%s: usage lacks %q: %q", a, want, errb.String())
 			}
@@ -308,5 +310,55 @@ func TestSignalsCaughtUntilChildrenEnded(t *testing.T) {
 	}
 	if killed != 1 || stoppedBeforeShutdownEnded || !src.stopped {
 		t.Errorf("killAll %d, stopped before the shutdown ended %v, stopped at exit %v", killed, stoppedBeforeShutdownEnded, src.stopped)
+	}
+}
+
+// fakeBin writes an executable shell script named name into dir that
+// prints its name and arguments.
+func fakeBin(t *testing.T, dir, name string) {
+	t.Helper()
+	script := "#!/bin/sh\necho " + name + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// main always wires the hardened git Program (runner.NewGit: its pre-args
+// carry --literal-pathspecs, Ruling 7) and wires chezmoi only when it is on
+// PATH, at the path found there.
+func TestMainWiresGitAndOptionalChezmoi(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	for _, withChezmoi := range []bool{false, true} {
+		hermetic(t)
+		bin := t.TempDir()
+		t.Setenv("PATH", bin)
+		fakeBin(t, bin, "git")
+		if withChezmoi {
+			fakeBin(t, bin, "chezmoi")
+		}
+		d := buildDeps(context.Background(), func() {}, options{}, runner.ScopeUser, "")
+		wantProgram(t, d.Git, "git", []string{"status"}, "--literal-pathspecs")
+		switch {
+		case withChezmoi:
+			wantProgram(t, d.Chezmoi, "chezmoi", []string{"source-path"}, "chezmoi source-path")
+		case d.Chezmoi != nil:
+			t.Errorf("Deps.Chezmoi = %#v without chezmoi on PATH, want nil", d.Chezmoi)
+		}
+	}
+}
+
+// wantProgram asserts r is the runner.Program named name and that running
+// args reaches the fake binary with an argv containing want.
+func wantProgram(t *testing.T, r runner.Runner, name string, args []string, want string) {
+	t.Helper()
+	p, ok := r.(*runner.Program)
+	if !ok || p.Name() != name {
+		t.Fatalf("runner = %#v, want the %s Program", r, name)
+	}
+	res, err := p.Run(context.Background(), args...)
+	if err != nil || !strings.HasPrefix(res.Stdout, name+" ") || !strings.Contains(res.Stdout, want) {
+		t.Errorf("%s ran %q (%v), want an argv with %q", name, res.Stdout, err, want)
 	}
 }

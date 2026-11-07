@@ -3,8 +3,10 @@
 A terminal UI over the [agentsync](https://github.com/spxrogers/agentsync) CLI.
 It lists MCP servers, drift, agents, plugins, secrets (names only), skills,
 hooks and more. Every change the TUI makes itself is a real `agentsync`
-command that you see and confirm. The one exception is edit (`E`), which opens
-the file in your editor (see the safety model).
+command that you see and confirm. There are two exceptions: edit (`E`), which
+opens the file in your editor, and the Source repo tab, which runs `git` on
+the repository that holds your agentsync home, again shown and confirmed (see
+the safety model).
 
 ## Install
 
@@ -18,7 +20,13 @@ Release binaries (linux and darwin, amd64 and arm64) are on the
 [releases page](https://github.com/lusky3/agentsync-tui/releases) as
 `agentsync-tui_<version>_<os>_<arch>.tar.gz`.
 
-You also need the `agentsync` CLI on your `PATH`.
+You also need the `agentsync` CLI on your `PATH`. The Source repo tab needs
+`git` 2.25 or newer on `PATH` (it says so when git is missing), and pushing
+from it needs git 2.31 or newer: the pre-push scan reads the outgoing commits
+with `--diff-merges=first-parent`, which older git rejects, so the push is
+refused rather than sent unscanned. `chezmoi` is optional: when it is on
+`PATH`, the tab uses `chezmoi source-path` (read-only) to recognise a home
+that chezmoi manages.
 
 **Supported agentsync version:** tested with v0.17.0. agentsync is pre-1.0 and
 its text output is not a stable interface, so other versions may show parse
@@ -41,8 +49,14 @@ lists, status, diff, explain, doctor and check a screen or the header chip
 runs, and the dry-run previews) are bounded at `min(30s, --read-timeout)`: the flag can lower that
 bound but not lift it. `--write-timeout` bounds every write (apply, revert,
 import, `plugin upgrade`, ...). Both take a Go duration such as `90s` or
-`10m`; `0` means no bound (for the network reads or the writes). While a
-command runs, the status line shows how long it has been running.
+`10m`; `0` means no bound (for the network reads or the writes) for
+agentsync commands. Git commands are always bounded, because stopping git
+never corrupts the repository (its ref updates are atomic and its index
+writes use a lock file): `fetch`, `pull` and `push` use `--read-timeout`
+and keep the 2m default when it is `0` (raise it for a very slow remote
+instead of disabling it), and `add` and `commit` use `--write-timeout`, or
+2m when it is `0`, which covers a slow commit hook. While a command runs,
+the status line shows how long it has been running.
 
 agentsync's text output is not a stable interface, so a screen may report
 `<command> output unreadable` after an agentsync upgrade. `--debug-log
@@ -67,8 +81,9 @@ next shown; `r` refreshes it on demand. A refresh, a scope switch and quitting
 cancel the reads they supersede. The Reconcile tab's `reconcile --auto-safe`
 takes agentsync's write lock, so it runs only while that tab is on show.
 
-Stopping a command sends SIGINT to agentsync's process group (so a helper it
-spawned, such as git, is interrupted too) and, if anything is still running
+Stopping a command sends SIGINT to its process group (agentsync's, so a helper
+it spawned, such as git, is interrupted too; the TUI's own git and chezmoi
+children lead a group of their own) and, if anything is still running
 10 seconds later, SIGKILL. `ctrl+c` cancels a running read at once. A running write needs
 `ctrl+c` twice within 3 seconds; `q` during a write quits once the write has
 finished (or, after a `ctrl+c`, once it has stopped). agentsync v0.17.0 does
@@ -89,14 +104,23 @@ outlives it. Because agentsync runs in its
 own process group behind the TUI, its children get `GIT_TERMINAL_PROMPT=0`
 and `SSH_ASKPASS_REQUIRE=never` (and no `GIT_ASKPASS`), so a git clone that
 would ask for credentials on the terminal fails with an error instead of
-hanging the run.
+hanging the run. The git and chezmoi commands the Source repo tab runs go
+further: each runs in its own session, with no controlling terminal, so ssh,
+a credential helper, gpg's pinentry or a hook that wants to prompt fails at
+once instead of stopping behind the TUI's screen. `fetch`, `pull` and `push`
+also get `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` unless you set
+`GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` yourself, in which case
+yours is used. Variables that would point git at another repository
+(`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the like) are removed
+from their environment, so a TUI started from a git hook still acts on the
+home's repository.
 
 ### Navigation
 
 | Key | Action |
 | --- | --- |
 | `tab` / `shift+tab` | next / previous screen (wraps) |
-| `1`-`9` | jump to the first nine screens; Skills and later (10-15) are reached with `tab` / `shift+tab` |
+| `1`-`9` | jump to the first nine screens; tabs 10 and up are reached with `tab` / `shift+tab` (Source repo, the last tab, is one `shift+tab` from the first) |
 | `s` | toggle user / project scope |
 | `l` | toggle the activity log |
 | `?` | help |
@@ -126,6 +150,7 @@ actions ask you to type a word instead (see the safety model).
 | 9 | Skills | canonical skills | `E`/`enter` edit, then `check` runs |
 | 10-14 | Subagents, Commands, Hooks, LSP, Memory | same as Skills | `E`/`enter` edit, then `check` runs |
 | 15 | Health | `doctor` and `check` results | `r` re-run |
+| 16 | Source repo | git status of the home, masked diff, commit, fetch, pull, push | `space` select, `a` all, `enter`/`d` diff, `c` commit, `f` fetch, `p` pull, `P` push, `i` clone a home (when missing), `r` refresh |
 
 Long views (command output, diffs, the plugin detail) scroll with the same keys as the lists.
 
@@ -138,7 +163,12 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   `doctor`, `check`, `version`, `status --legend`, `plugin outdated`,
   `reconcile --auto-safe` and similar read-only calls. Quitting, a refresh and
   a scope switch cancel any of these still in flight (the child gets SIGINT,
-  then SIGKILL). The TUI writes no agentsync files directly.
+  then SIGKILL). The TUI writes no agentsync files directly. The exceptions,
+  each described below: `E` hands a canonical file to your editor, which
+  writes it; and on the Source repo tab a confirmed `git commit` records
+  files of the home in its repository's history (and `git add` stages them
+  in its index), and a confirmed `git pull` changes files and history inside
+  the home.
 - The one exception is `E` (edit) on MCP servers and on Skills, Subagents,
   Commands, Hooks, LSP and Memory: it opens the canonical file in `$VISUAL`,
   then `$EDITOR`, falling back to `vi`, immediately and with no confirm dialog.
@@ -147,6 +177,33 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   current scope's agentsync home (the user tree, or `<project>/.agentsync` in
   project scope). (Secrets `E` runs `agentsync secret edit`, a confirmed
   command.)
+- The second exception is the Source repo tab, which runs `git` (and,
+  read-only, `chezmoi source-path`) on the repository that holds the home.
+  Its only git writes are exactly these, each shown as its full command line
+  and confirmed: `add -- <paths>` and `commit --message=<msg> -- <paths>`
+  (one confirmation for both; only the files you selected, never `add -A`
+  or `commit -a`), `fetch <remote>` (no dialog, logged), `pull --ff-only
+  --no-rebase --no-autostash`, and `push --no-follow-tags
+  --no-recurse-submodules <remote> <scanned sha>:refs/heads/<branch>`: the
+  commit the pre-push scan read, to the current branch's name on its
+  upstream's remote. A push is never forced and never sends another branch,
+  a tag or a submodule, whatever the repository's push configuration says.
+  Everything else it runs is read-only: `status`, `diff`, `rev-parse`,
+  `log`, `for-each-ref`, `config --get`, `remote get-url` and `rev-list`. It
+  never runs `--force`, `reset`, `clean`, `checkout`, `restore`, `stash`,
+  `rebase`, `--no-verify`, `remote add`/`set-url` or a `config` write, and it
+  never creates a remote or a hosted repository. A commit is refused when
+  `agentsync check` fails, a selected file is under `.state/` or looks
+  sensitive (a key, `.env`, an age identity), the scan of the added lines
+  finds a likely secret, HEAD is detached, a merge, rebase, cherry-pick,
+  revert or bisect is in progress, or `index.lock` is present (the TUI never
+  deletes it). A push is scanned the same way first. Your hooks and signing
+  run as configured, with no terminal (see above). Git commands are always
+  bounded (see Usage). agentsync's own destination-backup repositories are
+  never touched, and a home that chezmoi manages gets a read-only notice
+  with the chezmoi commands to use instead. Diff and file content are only
+  rendered, masked: never written to the activity log, the status line or
+  `--debug-log`.
 - Destructive actions (removing a server, agent, plugin, marketplace or
   secret; revert) need a typed verb (the subcommand, for example `remove`).
   `agent disable --purge` needs the word `purge`, so it cannot be confirmed as
@@ -207,6 +264,41 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   purpose. In-UI write-back is not offered while upstream issues #239, #255
   and #256 are open.
 - Tabs after the ninth have no digit shortcut.
+- Source repo: the secret scan is heuristic. It reads only the lines a
+  commit or push would add. A hard finding (a known token shape, a literal
+  credential in an Authorization/Bearer header, URL userinfo, a private
+  key, a literal value under a secret-named key in a config file) refuses
+  the commit or push; a soft finding (a token-shaped word in prose, a file
+  too large or binary to scan) asks you to type `commit` first. An all-caps
+  `$NAME` is treated as a reference to a variable, so a literal that looks
+  like one (`$PASSWORD123`) is not flagged. A hard refusal can be bypassed
+  only by committing outside the TUI; the refusal shows the commands.
+- Source repo: the scan and the commit are separate steps, like `E`'s
+  check-then-use. The window runs to the commit itself, not to the add:
+  `git commit -- <paths>` records what those paths hold in the worktree
+  when it runs, so a same-user process that rewrites a selected file, or
+  recreates a rename's old path, after the scan and before you confirm
+  changes what is committed, unscanned. The push has no such gap: it sends
+  the exact commit the scan read, so commits made after the scan (while the
+  dialog was open) stay local, and the note after the push says how many.
+- Source repo: pull and push are offered only when the repository is the
+  home itself. When the home sits inside a larger repository (a dotfiles
+  repo), status, diff, commit and fetch are limited to the home and pull
+  and push are refused with the commands to run, because they would move
+  commits and files the TUI does not own. A push is also refused for a
+  mirror remote, an upstream whose branch name differs from the local
+  branch, an upstream that is a local branch, a branch with no upstream
+  (the commands to add one are shown), and more than 2000 outgoing files.
+- Source repo: signed commits and pushes and pre-commit or pre-push hooks
+  run with no terminal, so one that prompts (pinentry, a passphrase, an
+  interactive hook) fails instead of hanging. Use an agent (gpg-agent,
+  ssh-agent) or commit and push outside the TUI.
+- Source repo: a home that chezmoi manages is left to chezmoi (read-only
+  notice). agentsync's destination-backup repositories, recognised by their
+  author and the `agentsync.managed` config marker, are never touched.
+- Source repo: push sends to the remote you configured and warns when its
+  host is a public hosting service, since the TUI cannot see whether the
+  repository is private.
 
 ## Development
 
@@ -219,7 +311,13 @@ mise run build
 Tests are hermetic: `HOME`, `AGENTSYNC_HOME` and `XDG_*` point at temp
 directories and every `AGENTSYNC_*` variable (including the CLI's own
 `AGENTSYNC_TARGET_ROOT` redirect) plus `GROK_HOME` is scrubbed from the
-agentsync children, so nothing reads your real home. Tests that drive the real CLI
+agentsync children, so nothing reads your real home. agentsync looks for a
+project tree (`.agentsync/`) above its working directory, so the temp root
+the real-CLI tests use is made where no ancestor holds `.agentsync` (under
+`$TMPDIR`, or `/tmp` when `$TMPDIR` lies below your real home) and the
+children run from the fake home. Git tests use a temp global config,
+`GIT_CONFIG_NOSYSTEM=1` and a scrubbed `GIT_*` environment, and skip when
+`git` is missing. Tests that drive the real CLI
 need `agentsync` (and some need `age-keygen`) on `PATH` and skip otherwise.
 CI runs them against agentsync v0.17.0, including an end-to-end smoke test in
 `test/e2e`.

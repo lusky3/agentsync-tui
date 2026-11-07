@@ -66,19 +66,24 @@ const GitLocalWriteBound = 2 * time.Minute
 // bound.
 const LocalReadBound = 30 * time.Second
 
-// Timeouts bound the commands the shell runs; zero means no bound. Past a
-// bound the run is cancelled like ctrl+c (SIGINT, then SIGKILL after
-// runner.InterruptGrace) and reported, and logged, as a timeout.
+// Timeouts bound the commands the shell runs. For agentsync commands zero
+// means no bound; git commands are always bounded (R3, see gitLimit): a
+// zero Read leaves network git (fetch, pull, push) at DefaultReadTimeout,
+// and a zero Write leaves local git writes (add, commit) at
+// GitLocalWriteBound. Past a bound the run is cancelled like ctrl+c
+// (SIGINT, then SIGKILL after runner.InterruptGrace) and reported, and
+// logged, as a timeout.
 type Timeouts struct {
 	// Read bounds network reads: ReadOnly actions with Network set (import
-	// dry runs of plugins or a whole agent) and the plugins screen's
-	// `plugin outdated`. Local reads, the screens' and the ReadOnly
-	// actions without Network (apply/revert/import previews, check), use
-	// Local, which it can lower.
+	// dry runs of plugins or a whole agent), the plugins screen's
+	// `plugin outdated`, and git fetch, pull and push. Local reads, the
+	// screens' and the ReadOnly actions without Network (apply/revert/import
+	// previews, check, git status and diff), use Local, which it can lower.
 	Read time.Duration
-	// Write bounds every non-ReadOnly action. The default is none: a write
-	// such as `plugin upgrade --all` cut off partway can leave agentsync's
-	// state and the destination files out of step.
+	// Write bounds every non-ReadOnly action. For agentsync the default is
+	// none: a write such as `plugin upgrade --all` cut off partway can leave
+	// agentsync's state and the destination files out of step. Git add and
+	// commit fall back to GitLocalWriteBound.
 	Write time.Duration
 }
 

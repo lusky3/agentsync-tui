@@ -712,3 +712,54 @@ func TestRenameSourceSensitiveNameNoteShown(t *testing.T) {
 	wantView(t, f.s, "old path is a sensitive path; its removal stays staged",
 		"git -C "+f.s.repo.Top+" commit -- skills/k.pem")
 }
+
+// A home laid out like the maintainer's real one (synthetic: no real file
+// is read): the agentsync-owned files are selected by default, the other
+// tracked-worthy files (kiro-agents-src/, steering/, setup.sh) are listed
+// unselected, ignored .state/ is not listed, and `${VAR}` / `Bearer ${VAR}`
+// references are not findings, so the default commit needs no typed word.
+func TestMaintainerLayoutDefaultSelection(t *testing.T) {
+	gittest.Need(t)
+	home := filepath.Join(t.TempDir(), "agent-config")
+	gittest.Init(t, home)
+	gittest.Commit(t, home, "init", map[string]string{".gitignore": "/.state/\n", "README.md": "# agent config\n"})
+	files := map[string]string{
+		"agentsync.toml":                        "[agents]\nenabled = ['claude', 'kiro']\n",
+		"mcp/brave.toml":                        "[server]\ntype = 'stdio'\ncommand = 'npx'\nargs = ['-y', '@brave/brave-search-mcp-server']\n\n[server.env]\nBRAVE_API_KEY = '${BRAVE_API_KEY}'\n",
+		"mcp/github.toml":                       "[server]\ntype = 'http'\nurl = 'https://api.githubcopilot.com/mcp/'\n\n[server.headers]\nAuthorization = 'Bearer ${GITHUB_TOKEN}'\n",
+		"skills/review/SKILL.md":                "---\nname: review\n---\n# Review\nRead the diff first.\n",
+		"kiro-agents-src/agents/ka-leader.json": "{\"headers\": {\"Authorization\": \"Bearer $KA_TOKEN\"}}\n",
+		"steering/product.md":                   "# Product\n",
+		"setup.sh":                              "#!/bin/sh\nagentsync apply\n",
+		".state/backup.json":                    "{\"note\": \"ignored\"}\n",
+	}
+	for p, body := range files {
+		write(t, home, p, body)
+	}
+	write(t, home, "README.md", "# agent config\n\nUpdated.\n")
+	f := open(t, home)
+	listed := paths(f.s)
+	for _, p := range []string{"agentsync.toml", "mcp/brave.toml", "mcp/github.toml", "skills/review/SKILL.md"} {
+		if !slices.Contains(listed, p) || !f.s.sel[p] {
+			t.Errorf("%s not selected by default (listed %v, selection %v)", p, listed, f.s.sel)
+		}
+	}
+	for _, p := range []string{"kiro-agents-src/agents/ka-leader.json", "steering/product.md", "setup.sh", "README.md"} {
+		if !slices.Contains(listed, p) || f.s.sel[p] {
+			t.Errorf("%s should be listed unselected (listed %v, selection %v)", p, listed, f.s.sel)
+		}
+	}
+	for _, p := range listed {
+		if strings.HasPrefix(p, ".state") {
+			t.Errorf("ignored %s listed", p)
+		}
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	want := []string{"agentsync.toml", "mcp/brave.toml", "mcp/github.toml", "skills/review/SKILL.md"}
+	if got := argvPaths(d.Then[0].Argv); !slices.Equal(got, want) {
+		t.Errorf("commit paths %q, want %q", got, want)
+	}
+	if d.Then[0].TypedConfirm || len(f.s.commit.findings) != 0 {
+		t.Errorf("references reported as findings: %+v", f.s.commit.findings)
+	}
+}
