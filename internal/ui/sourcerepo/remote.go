@@ -34,6 +34,7 @@ const (
 	pulledNote       = "pulled: agents see these changes only after an apply. D = Drift, A = Apply"
 	rejectedNote     = "remote has new commits: fetch (f) and pull (p) first"
 	runOutside       = ", run outside the TUI:"
+	whyBadRemote     = "the upstream's remote name is not one the TUI passes to git; fetch, pull and push outside the TUI"
 	outgoingRange    = "@{u}..HEAD"
 	headsPrefix      = "refs/heads/"
 )
@@ -66,13 +67,12 @@ type remoteInfo struct{ name, ref string }
 
 // readRemote reads the upstream of b's branch; the zero remoteInfo when it
 // has none. note is display-safe and empty on success.
-func readRemote(ctx context.Context, git runner.Runner, top string, b gitrepo.Branch, limit time.Duration) (remoteInfo, string) {
+func readRemote(ctx context.Context, git runner.Runner, repo gitrepo.Repo, b gitrepo.Branch, limit time.Duration) (remoteInfo, string) {
 	if b.Upstream == "" || b.Head == "" || b.Detached {
 		return remoteInfo{}, ""
 	}
 	want := headsPrefix + b.Head
-	res, err := ui.Read(ctx, git, limit, "-C", top, "for-each-ref",
-		"--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)", want)
+	res, err := ui.Read(ctx, git, limit, gitrepo.UpstreamArgv(repo, b.Head)...)
 	if note := ui.ReadNote("git for-each-ref", res, err); note != "" {
 		return remoteInfo{}, note
 	}
@@ -138,7 +138,7 @@ func upstreamRefusal(top string, b gitrepo.Branch, r remoteInfo) []string {
 	case r.name == ".":
 		return []string{refused + whyLocalUpstream}
 	case actions.ValidRemoteName(r.name) != nil:
-		return []string{refused + "the upstream's remote name is not one the TUI passes to git; fetch, pull and push outside the TUI"}
+		return []string{refused + whyBadRemote}
 	}
 	return nil
 }
@@ -306,21 +306,17 @@ func pushBranchRefusal(b gitrepo.Branch, r remoteInfo) string {
 // pinRange reads the object ids of the upstream and HEAD: the outgoing
 // commits are base..tip, and the push sends tip.
 func pinRange(ctx context.Context, in netInput) (base, tip, why string) {
-	if base, why = revParse(ctx, in, upstreamCommit); why != "" {
+	if base, why = revParse(ctx, in, gitrepo.UpstreamCommitArgv(in.repo)); why != "" {
 		return "", "", why
 	}
-	tip, why = revParse(ctx, in, headCommit)
+	tip, why = revParse(ctx, in, gitrepo.HeadCommitArgv(in.repo))
 	return base, tip, why
 }
 
-const (
-	headCommit     = "HEAD^{commit}"
-	upstreamCommit = "@{u}^{commit}"
-)
-
-// revParse reads the object id rev names; why is a refusal.
-func revParse(ctx context.Context, in netInput, rev string) (string, string) {
-	res, err := ui.Read(ctx, in.git, in.limit, "-C", in.repo.Top, "rev-parse", "--verify", rev)
+// revParse runs a rev-parse argv and reads the object id it prints; why
+// is a refusal.
+func revParse(ctx context.Context, in netInput, argv []string) (string, string) {
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
 	if note := ui.ReadNote("git rev-parse", res, err); note != "" {
 		return "", refused + note
 	}
@@ -334,7 +330,11 @@ func revParse(ctx context.Context, in netInput, rev string) (string, string) {
 // mirrorRefusal refuses a remote configured as a mirror: git would refuse
 // the explicit refspec with a confusing error (D6).
 func mirrorRefusal(ctx context.Context, in netInput, remote string) string {
-	res, err := ui.Read(ctx, in.git, in.limit, "-C", in.repo.Top, "config", "--get", "--type=bool", "remote."+remote+".mirror")
+	argv := gitrepo.MirrorArgv(in.repo, remote)
+	if argv == nil {
+		return refused + whyBadRemote
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
 	if err == nil && res.ExitCode == 1 { // not set
 		return ""
 	}
@@ -350,7 +350,11 @@ func mirrorRefusal(ctx context.Context, in netInput, remote string) string {
 // pushURLs is every URL a push to remote goes to: pushurl entries when
 // set, else url, with pushInsteadOf applied.
 func pushURLs(ctx context.Context, in netInput, remote string) ([]string, string) {
-	res, err := ui.Read(ctx, in.git, in.limit, "-C", in.repo.Top, "remote", "get-url", "--push", "--all", remote)
+	argv := gitrepo.PushURLsArgv(in.repo, remote)
+	if argv == nil {
+		return nil, refused + whyBadRemote
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
 	if note := ui.ReadNote("git remote get-url", res, err); note != "" {
 		return nil, refused + note
 	}

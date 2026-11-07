@@ -169,7 +169,7 @@ func readSnapshot(ctx context.Context, git runner.Runner, repo gitrepo.Repo, lim
 		return snapshot{}, note
 	}
 	sn := snapshot{status: st, kept: keptSources(repo, st.Files)}
-	sn.remote, note = readRemote(ctx, git, repo.Top, st.Branch, limit)
+	sn.remote, note = readRemote(ctx, git, repo, st.Branch, limit)
 	return sn, note
 }
 
