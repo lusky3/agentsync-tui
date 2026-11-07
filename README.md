@@ -213,7 +213,8 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   fetched upstream does not tell what that URL lacks, so the branch's whole
   history is scanned instead. That scan is bounded: a history with more than
   2000 paths or 20000 file changes, or one whose log is too large to read in
-  full, or that takes longer than the read timeout, is refused, and you push
+  full, or whose scan takes longer than two minutes (whatever
+  `--read-timeout` says), is refused, and you push
   it outside the TUI. Your hooks and signing
   run as configured, with no terminal (see above). Git commands are always
   bounded (see Usage). agentsync's own destination-backup repositories are
