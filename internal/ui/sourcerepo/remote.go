@@ -86,8 +86,21 @@ func readRemote(ctx context.Context, git runner.Runner, repo gitrepo.Repo, b git
 	return remoteInfo{}, ""
 }
 
-// remoteKey handles the network and bootstrap keys of the list.
+// opNames name a pending network action in the busy note.
+var opNames = [...]string{opFetch: "fetch", opPull: "pull", opPush: "push", opInit: "init"}
+
+// remoteKey handles the network and bootstrap keys of the list. While an
+// action this screen handed to the shell has not reported back, no other
+// one starts: its outcome (the D/A offer, the stopped-pull note) must not
+// be lost.
 func (s *Screen) remoteKey(k string) tea.Cmd {
+	switch k {
+	case "f", "p", "P", "i":
+		if s.net != nil {
+			s.note = "busy: the " + opNames[s.net.op] + " is still pending"
+			return nil
+		}
+	}
 	switch k {
 	case "f":
 		return s.fetch()
@@ -392,7 +405,8 @@ func (s *Screen) onNet(m netMsg) tea.Cmd {
 		s.note = strings.Join(pushHardRefusal(c.hard, s.repo.Top), "\n")
 		return nil
 	}
-	warn := pushWarnings(m.push.urls)
+	warn := append(pushWarnings(m.push.urls), "scanned against "+mask.Sanitize(m.remote)+"/"+mask.Sanitize(m.head)+
+		" as last fetched; fetch (f) first if the remote may have been rewritten")
 	if len(m.push.findings) > 0 {
 		act.TypedConfirm = true
 		warn = append(warn, c.soft()+" in the outgoing commits, listed on the Source repo tab; type push to proceed")
@@ -412,6 +426,20 @@ func pushHardRefusal(n int, top string) []string {
 
 func inspectCommand(top string) string {
 	return gitC + shellQuote(top) + " log -p " + outgoingRange
+}
+
+// onNotRun drops the pending action (network or commit) the shell will
+// not run: its modal was cancelled or the request refused.
+func (s *Screen) onNotRun(m ui.NotRunMsg) {
+	for _, a := range m.Actions {
+		key := a.Key()
+		if s.net != nil && key == s.net.key {
+			s.net = nil
+		}
+		if p := s.pending; p != nil && (key == p.commitKey || key == p.addKey) {
+			s.pending = nil
+		}
+	}
 }
 
 // onNetRun takes the outcome of this screen's network action. The note
@@ -461,6 +489,8 @@ func pullOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 	case stopped(m):
 		return "the pull was stopped; the worktree may be partly updated. Nothing was rolled back (" + outcomeOf(m) +
 			"). To inspect" + runOutside + "\n  " + gitC + t + " status"
+	case strings.Contains(m.Result.Stderr, "would be overwritten"):
+		return "local changes block the pull; commit or stash them outside the TUI, then press r"
 	case strings.Contains(m.Result.Stderr, "Not possible to fast-forward") || strings.Contains(m.Result.Stderr, "diverging"):
 		return "local and remote have diverged; nothing was changed. Resolve outside the TUI:\n  " +
 			gitC + t + " pull --rebase\n  or " + gitC + t + " merge @{u}\nthen press r"

@@ -172,9 +172,8 @@ func (s *Screen) warnings() []string {
 		out = append(out, theme.Dim.Render(n))
 	}
 	for _, f := range s.status.Files {
-		if s.kept[f.Path].cmd {
-			out = append(out, theme.Dim.Render("to commit the staged removal of "+gitrepo.DisplayName(f.Orig)+
-				", run outside the TUI: "+removalCommand(s.repo.Top, f.Orig)))
+		for _, l := range keptLines(s.repo.Top, f, s.kept[f.Path]) {
+			out = append(out, theme.Dim.Render(l))
 		}
 	}
 	if len(s.status.Files) == 0 && s.loadNote == "" {

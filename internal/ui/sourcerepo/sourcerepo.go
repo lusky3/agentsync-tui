@@ -240,6 +240,8 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ui.RunMsg:
 		s.onRun(msg)
 		return s, s.onNetRun(msg)
+	case ui.NotRunMsg:
+		s.onNotRun(msg)
 	case tea.KeyPressMsg:
 		return s, s.keyPress(msg)
 	}

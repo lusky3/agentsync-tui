@@ -40,6 +40,17 @@ type DoMsg struct {
 	Scope  runner.Scope
 }
 
+// NotRunMsg is broadcast to every screen when a requested action will not
+// run: its confirm modal was cancelled, or the shell refused the request
+// (busy, no project, the scope changed). Actions is the whole chain, in
+// order. A screen that remembers an action until its RunMsg drops it here.
+type NotRunMsg struct{ Actions []actions.Action }
+
+// notRun broadcasts a NotRunMsg for chain.
+func (a *App) notRun(chain []actions.Action) tea.Cmd {
+	return tea.Batch(a.broadcast(NotRunMsg{Actions: chain})...)
+}
+
 // DefaultReadTimeout is the default bound on network reads (Timeouts.Read).
 const DefaultReadTimeout = 120 * time.Second
 
@@ -238,15 +249,15 @@ func (a *App) requestChain(act actions.Action, then []actions.Action, scope runn
 	switch {
 	case a.running != nil || a.modal != nil:
 		a.setStatus(statusFail, "busy: another action is in progress")
-		return nil
+		return a.notRun(chain)
 	case a.noProject:
 		a.setStatus(statusFail, noProjectText)
-		return nil
+		return a.notRun(chain)
 	case scope != "" && scope != a.scope && bound:
 		// Built under the other scope (an s between the key and its Cmd):
 		// its ids came from that scope's list, so it must not run here.
 		a.setStatus(statusFail, "not run: "+titles(chain)+": scope changed since it was built ("+sanitizeScope(scope)+" → "+sanitizeScope(a.scope)+")")
-		return nil
+		return a.notRun(chain)
 	case readOnly:
 		return a.start(act, then)
 	}

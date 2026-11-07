@@ -337,7 +337,8 @@ func TestPushWarnsPublicHost(t *testing.T) {
 	d := onlyDo(t, press(f.s, "P"))
 	w := d.Action.Warning
 	for _, want := range []string{"https://github.com/o/r.git",
-		"pushes to github.com: make sure the repository is private; the TUI cannot see its visibility"} {
+		"pushes to github.com: make sure the repository is private; the TUI cannot see its visibility",
+		"scanned against origin/main as last fetched; fetch (f) first if the remote may have been rewritten"} {
 		if !strings.Contains(w, want) {
 			t.Errorf("warning lacks %q: %q", want, w)
 		}
@@ -572,7 +573,14 @@ func TestNoTTYPromptOnSSH(t *testing.T) {
 		t.Skip("ssh is not installed")
 	}
 	home, _ := newTracked(t)
-	addr := listener(t, func(c net.Conn) { _ = c.Close() })
+	// An SSH server's banner, so ssh goes on to key exchange; then the
+	// server reads the client's banner and hangs up.
+	addr := listener(t, func(c net.Conn) {
+		_, _ = c.Write([]byte("SSH-2.0-test\r\n"))
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, _ = c.Read(make([]byte, 4096))
+		_ = c.Close()
+	})
 	_, port, _ := net.SplitHostPort(addr)
 	gittest.Git(t, home, "config", "remote.origin.pushurl", "ssh://git@127.0.0.1:"+port+"/r.git")
 	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
@@ -588,6 +596,9 @@ func TestNoTTYPromptOnSSH(t *testing.T) {
 	}
 	if !strings.Contains(f.s.note, "push failed") || strings.Contains(f.s.note, "stopped") {
 		t.Errorf("note %q", f.s.note)
+	}
+	if !strings.Contains(r.Result.Stderr, "Connection closed") && !strings.Contains(r.Result.Stderr, "Host key verification failed") {
+		t.Errorf("ssh did not reach the server: %q", r.Result.Stderr)
 	}
 }
 
@@ -623,4 +634,94 @@ func TestPushSendsOnlyTheScannedCommit(t *testing.T) {
 		t.Error("the unscanned commit reached the remote")
 	}
 	wantView(t, f.s, "↑1 ↓0")
+}
+
+func TestPendingPullBlocksOtherNetworkKeys(t *testing.T) {
+	home, bare := newTracked(t)
+	pushFromOther(t, bare, map[string]string{skillA: "# a\n"})
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "p"))
+	for _, k := range []string{"f", "p", "P"} {
+		wantNothing(t, press(f.s, k))
+		wantView(t, f.s, "busy: the pull is still pending")
+	}
+	if r := f.exec(d); r[0].Result.ExitCode != 0 {
+		t.Fatalf("pull failed: %+v", r[0])
+	}
+	wantView(t, f.s, pulledNote)
+	if out := press(f.s, "A"); len(out) != 1 || out[0] != (ui.GotoMsg{Title: "Apply"}) {
+		t.Errorf("A emitted %v", out)
+	}
+}
+
+func TestStoppedPullNoteSurvivesFetchKey(t *testing.T) {
+	home, _ := newTracked(t)
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "p"))
+	wantNothing(t, press(f.s, "f"))
+	f.s.Update(ui.RunMsg{Action: d.Action, Err: context.DeadlineExceeded})
+	if !strings.Contains(f.s.note, "the pull was stopped") {
+		t.Errorf("note %q", f.s.note)
+	}
+}
+
+func TestNotRunReleasesPending(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "P"))
+	f.s.Update(ui.NotRunMsg{Actions: []actions.Action{{Program: actions.ProgramGit, Argv: []string{"-C", "/x", "fetch", "o"}}}})
+	wantNothing(t, press(f.s, "f")) // another action's NotRunMsg releases nothing
+	f.s.Update(ui.NotRunMsg{Actions: []actions.Action{d.Action}})
+	if out := press(f.s, "f"); len(out) != 1 {
+		t.Errorf("f after the push was not run emitted %v", out)
+	}
+}
+
+func TestCancelledModalReleasesPending(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	sh := startShell(t, home, "")
+	sh.keys("P")
+	sh.wait("DoMsg", func(m tea.Msg) bool { _, ok := m.(ui.DoMsg); return ok })
+	sh.keys("esc", "f")
+	m := sh.wait("fetch RunMsg", func(m tea.Msg) bool {
+		r, ok := m.(ui.RunMsg)
+		return ok && gitCmd(r.Action.Argv) == "fetch"
+	}).(ui.RunMsg)
+	sh.finish()
+	if m.Err != nil || m.Result.ExitCode != 0 {
+		t.Fatalf("fetch: %+v", m)
+	}
+}
+
+func TestPullBlockedByLocalChanges(t *testing.T) {
+	home, bare := newTracked(t)
+	pushFromOther(t, bare, map[string]string{tomlX: baseTOML + "args = [\"remote\"]\n"})
+	write(t, home, tomlX, baseTOML+"args = [\"local\"]\n")
+	before := head(t, home)
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "p"))
+	r := f.exec(d)[0]
+	if r.Result.ExitCode == 0 || !strings.Contains(r.Result.Stderr, "would be overwritten") {
+		t.Fatalf("pull: %+v", r)
+	}
+	if head(t, home) != before {
+		t.Error("HEAD moved")
+	}
+	wantView(t, f.s, "local changes block the pull; commit or stash them outside the TUI, then press r")
+	if strings.Contains(f.s.note, "Your local changes") || strings.Contains(f.s.note, "x.toml") {
+		t.Errorf("stderr reached the note: %q", f.s.note)
+	}
+}
+
+func TestPushRefusedDeletingSensitivePath(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "pem", map[string]string{"skills/k.pem": "x\n"})
+	gittest.Git(t, home, "push", "-q", "origin", "main")
+	gittest.Git(t, home, "rm", "-q", "skills/k.pem")
+	gittest.Git(t, home, "commit", "-q", "-m", "drop pem")
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "skills/k.pem", "deleting such a file counts too")
 }

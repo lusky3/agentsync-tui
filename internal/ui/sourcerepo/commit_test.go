@@ -692,7 +692,10 @@ func TestRenameSourceNowDirectoryNoteShown(t *testing.T) {
 	write(t, home, "skills/old.md/x.md", "# x\n")
 	f := open(t, home)
 	wantView(t, f.s, "old path is now a directory; its removal stays staged",
-		"git -C "+f.s.repo.Top+" commit -- skills/old.md")
+		"resolve outside the TUI", "git -C "+f.s.repo.Top+" status")
+	if strings.Contains(view(f.s), "commit -- skills/old.md") {
+		t.Errorf("suggests committing a path that now matches a directory:\n%s", view(f.s))
+	}
 	selectRow(t, f.s, "skills/old.md/x.md")
 	if f.s.sel["skills/old.md/x.md"] {
 		selectRow(t, f.s, "skills/old.md/x.md")

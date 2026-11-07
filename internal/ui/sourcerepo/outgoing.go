@@ -91,6 +91,7 @@ func outgoingPathRefusal(r gitrepo.Repo, paths []string) []string {
 		if class == gitrepo.StateDir || class == gitrepo.Sensitive {
 			return []string{
 				refused + "an outgoing commit touches " + gitrepo.DisplayName(p) + " (" + class.String() + " path); a push would publish it",
+				"(deleting such a file counts too: the push publishes the history that held it)",
 				"to inspect the commits" + runOutside,
 				"  " + inspectCommand(r.Top),
 			}
