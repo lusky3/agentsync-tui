@@ -40,7 +40,8 @@ func Need(t testing.TB) {
 // Env returns t's hermetic git environment: os.Environ() without HOME,
 // XDG_CONFIG_HOME and any GIT_* variable, plus a temp HOME, a temp
 // XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL naming a temp file with the test
-// identity (and init.defaultBranch=main) and GIT_CONFIG_NOSYSTEM=1.
+// identity (and init.defaultBranch=main), GIT_CONFIG_NOSYSTEM=1 and
+// GIT_CEILING_DIRECTORIES at the parent of the test's temp dirs.
 func Env(t testing.TB) []string {
 	t.Helper()
 	if v, ok := envs.Load(t); ok {
@@ -68,8 +69,12 @@ func Env(t testing.TB) []string {
 		}
 		env = append(env, kv)
 	}
+	// Discovery stops at the parent of the test's temp dirs, so a repository
+	// above the developer's TMPDIR is never found by a gittest.Git call. (The
+	// production Program scrubs this variable, R2.)
 	env = append(env, "HOME="+home, "XDG_CONFIG_HOME="+xdg,
-		"GIT_CONFIG_GLOBAL="+global, "GIT_CONFIG_NOSYSTEM=1")
+		"GIT_CONFIG_GLOBAL="+global, "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CEILING_DIRECTORIES="+filepath.Dir(root))
 	envs.Store(t, env)
 	t.Cleanup(func() { envs.Delete(t) })
 	return env

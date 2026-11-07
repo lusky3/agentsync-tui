@@ -74,3 +74,14 @@ func TestNewGitUsesHermeticEnv(t *testing.T) {
 		t.Fatalf("config user.name = %+v, %v", res, err)
 	}
 }
+
+// Discovery stops at the test's temp parent: a repository above the
+// developer's TMPDIR cannot make a temp dir look versioned.
+func TestEnvSetsCeiling(t *testing.T) {
+	Need(t)
+	dir := t.TempDir()
+	want := "GIT_CEILING_DIRECTORIES=" + filepath.Dir(dir)
+	if env := Env(t); !slices.Contains(env, want) {
+		t.Fatalf("env lacks %s", want)
+	}
+}

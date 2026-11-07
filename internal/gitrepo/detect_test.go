@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -101,6 +102,13 @@ func TestHomeIsAFileIsAnError(t *testing.T) {
 
 func TestNoRepoIsNone(t *testing.T) {
 	home := t.TempDir()
+	// The production Program scrubs GIT_CEILING_DIRECTORIES (R2), so a
+	// repository above TMPDIR would be found: skip rather than fail.
+	probe := exec.Command("git", "-C", home, "rev-parse", "--git-dir")
+	probe.Env = append(gittest.Env(t), "GIT_CEILING_DIRECTORIES=")
+	if probe.Run() == nil {
+		t.Skip("the temp dir is inside a git repository")
+	}
 	if err := os.WriteFile(filepath.Join(home, tomlName), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -519,12 +527,93 @@ func TestDetectBounded(t *testing.T) {
 		},
 	} {
 		start := time.Now()
-		_, err := run()
+		r, err := run()
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("%s: err = %v, want DeadlineExceeded", name, err)
 		}
+		wantUnknown(t, r, home)
 		if took := time.Since(start); took > 5*time.Second {
 			t.Errorf("%s: took %v", name, took)
 		}
 	}
+}
+
+// wantUnknown checks the shape of a failed detection: nothing usable, and
+// nothing a caller could mistake for a writable repository or a missing
+// home (which would offer the bootstrap).
+func wantUnknown(t *testing.T, r Repo, home string) {
+	t.Helper()
+	if r.Manager != Unknown || r.Refusal != RefusalUnknown || r.Home != home {
+		t.Errorf("Manager %v Refusal %q Home %q; want Unknown with %q", r.Manager, r.Refusal, r.Home, RefusalUnknown)
+	}
+	if r.Top != "" || r.GitDir != "" || r.Pathspec != "" || r.ChezmoiSource != "" {
+		t.Errorf("partial repo leaked: %+v", r)
+	}
+}
+
+// A failure after rev-parse succeeded (a later read bounded out, or git log
+// failing) never returns the half-filled repository.
+func TestDetectErrorAfterRevParseIsNotWritable(t *testing.T) {
+	home, res := fakeHome(t)
+	blockObjectFormat := fakeTop(runnertest.New().Block(), res)
+	failLog := fakeTop(runnertest.New(), res).
+		On("-C "+res+" rev-parse --show-object-format", runner.Result{Stdout: "sha1\n"}, nil).
+		On("-C "+res+" config --local --type=bool --get agentsync.managed", runner.Result{ExitCode: 1}, nil).
+		On("-C "+res+" log -1 --fixed-strings --author=<"+DefaultBackupAuthor+"> --format=%H", runner.Result{ExitCode: 128, Stderr: "fatal: bad object HEAD\n"}, nil)
+	for name, git := range map[string]*runnertest.Fake{"object format blocks": blockObjectFormat, "log fails": failLog} {
+		r, err := Detect(context.Background(), git, nil, home, 50*time.Millisecond)
+		if err == nil {
+			t.Fatalf("%s: no error", name)
+		}
+		wantUnknown(t, r, home)
+	}
+}
+
+// A home that is not a directory is an error with the Unknown shape, never
+// Missing (which would offer to clone over it).
+func TestHomeErrorIsUnknown(t *testing.T) {
+	f := filepath.Join(t.TempDir(), homeName)
+	if err := os.WriteFile(f, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Detect(context.Background(), gittest.NewGit(t), nil, f, bound)
+	if err == nil {
+		t.Fatal("no error")
+	}
+	wantUnknown(t, r, f)
+}
+
+// wantControlRefused checks the control-character refusal: no path of the
+// repository is handed on.
+func wantControlRefused(t *testing.T, home string) {
+	t.Helper()
+	r := detect(t, home)
+	if r.Manager != Git || r.Refusal != RefusalControl {
+		t.Fatalf("Manager %v Refusal %q; want Git with %q", r.Manager, r.Refusal, RefusalControl)
+	}
+	if r.Top != "" || r.GitDir != "" || r.Pathspec != "" {
+		t.Fatalf("unsafe paths handed on: Top %q GitDir %q Pathspec %q", r.Top, r.GitDir, r.Pathspec)
+	}
+}
+
+// A line break below the toplevel reaches only the pathspec (rev-parse
+// still prints two lines).
+func TestControlCharBelowTopRefused(t *testing.T) {
+	dots := filepath.Join(t.TempDir(), dotsDir)
+	gittest.Init(t, dots)
+	home := filepath.Join(dots, "a\nb", homeName)
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, tomlName), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantControlRefused(t, home)
+}
+
+// A carriage return in the toplevel keeps rev-parse at two lines.
+func TestControlCharInTopRefused(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "a\rb")
+	newHome(t, home)
+	wantControlRefused(t, home)
 }

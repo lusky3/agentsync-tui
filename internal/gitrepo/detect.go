@@ -19,6 +19,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 )
@@ -38,6 +39,9 @@ const (
 	// Chezmoi: the home is chezmoi's source or a chezmoi target; the tab
 	// leaves it to chezmoi (D8).
 	Chezmoi
+	// Unknown: Detect failed (its error says why). Nothing may be done:
+	// the Repo carries only Home, ResolvedHome and RefusalUnknown.
+	Unknown
 )
 
 // Layout is where the home sits in its repository.
@@ -59,6 +63,8 @@ const DefaultBackupAuthor = "agentsync@localhost"
 // The refusals Detect can set besides git's own dubious-ownership line.
 const (
 	RefusalLineBreak = "repository path has a line break"
+	RefusalControl   = "repository path has a control character"
+	RefusalUnknown   = "the repository could not be inspected"
 	RefusalOutside   = "the home is outside the repository"
 	RefusalBackup    = "this is agentsync's local-only destination history; it must never be committed or pushed"
 )
@@ -91,7 +97,20 @@ var errNoRunner = errors.New("no git runner")
 // or when git reports dubious ownership. Each runner call is bounded by
 // timeout. The error is for what Detect could not find out (git missing,
 // an unexpected git failure, a bound reached); a refusal is not an error.
+//
+// On error the Repo is Manager Unknown with RefusalUnknown and only Home
+// and ResolvedHome set, never a half-filled repository a caller could take
+// for a writable one or a Missing home it would offer to clone over.
 func Detect(ctx context.Context, git, chezmoi runner.Runner, home string, timeout time.Duration) (Repo, error) {
+	r, err := detectHome(ctx, git, chezmoi, home, timeout)
+	if err != nil {
+		return Repo{Manager: Unknown, Home: home, ResolvedHome: r.ResolvedHome, Refusal: RefusalUnknown}, err
+	}
+	return r, nil
+}
+
+// detectHome is Detect without the error shape.
+func detectHome(ctx context.Context, git, chezmoi runner.Runner, home string, timeout time.Duration) (Repo, error) {
 	r := Repo{Home: home}
 	resolvedHome, missing, err := resolveHome(home)
 	if err != nil || missing {
@@ -207,7 +226,10 @@ func within(dir, p string) bool {
 }
 
 // detectGit fills r from the git work tree around r.ResolvedHome (steps
-// 4 to 7 of the pinned order).
+// 4 to 7 of the pinned order). A toplevel, git dir or pathspec holding a
+// control or format character (a \r, or a \n below the toplevel, which
+// rev-parse's two lines cannot show) or invalid UTF-8 is refused and not
+// handed on.
 func detectGit(ctx context.Context, git runner.Runner, r Repo, timeout time.Duration) (Repo, error) {
 	res, err := readIn(ctx, git, timeout, r.ResolvedHome, "rev-parse", "--show-toplevel", "--absolute-git-dir")
 	if err != nil {
@@ -229,6 +251,10 @@ func detectGit(ctx context.Context, git runner.Runner, r Repo, timeout time.Dura
 	rel, ok := relWithin(top, r.ResolvedHome)
 	if !ok {
 		r.Refusal = RefusalOutside
+		return r, nil
+	}
+	if actions.HasControl(top) || actions.HasControl(lines[1]) || actions.HasControl(rel) {
+		r.Refusal = RefusalControl
 		return r, nil
 	}
 	r.Top, r.GitDir, r.Pathspec = top, lines[1], filepath.ToSlash(rel)
