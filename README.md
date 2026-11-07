@@ -180,8 +180,9 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
 - The second exception is the Source repo tab, which runs `git` (and,
   read-only, `chezmoi source-path`) on the repository that holds the home.
   Its only git writes are exactly these, each shown as its full command line
-  and confirmed, except `fetch <remote>`, which only updates
-  remote-tracking refs and runs without a dialog (logged): `add -- <paths>`
+  and confirmed, except `fetch <remote>`, which updates what the remote's
+  fetch refspec names (remote-tracking refs by default, plus tags) and runs
+  without a dialog (logged): `add -- <paths>`
   and `commit --message=<msg> -- <paths>` (one confirmation for both; only
   the files you selected, never `add -A` or `commit -a`), `fetch <remote>`,
   `pull --ff-only --no-rebase --no-autostash`, and `push --no-follow-tags
