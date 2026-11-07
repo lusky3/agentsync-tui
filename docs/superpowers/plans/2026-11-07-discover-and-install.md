@@ -27,7 +27,7 @@
 
 ## Relationship to the Source repo plan
 
-`/home/cody/tmp/agentsync-tui-source-repo-plan.md` is executed **first**. Build Task 11's install confirm on its shell changes (`Action.Program`, `DoChain`, one confirm path) rather than adding a parallel path, rebase shared files (`internal/ui/app.go`, `exec.go`, `modal.go`, `internal/app/screens.go`, `main.go`, README safety model) onto it, and keep its `TestImageDigestInArgsNotAFinding` green: the digest-pinned Docker installs from Task 5B must stay committable from the Source repo tab.
+`docs/superpowers/plans/2026-11-07-source-repo.md` is executed **first**. Build Task 11's install confirm on its shell changes (`Action.Program`, `DoChain`, one confirm path) rather than adding a parallel path, rebase shared files (`internal/ui/app.go`, `exec.go`, `modal.go`, `internal/app/screens.go`, `main.go`, README safety model) onto it, and keep its `TestImageDigestInArgsNotAFinding` green: the digest-pinned Docker installs from Task 5B must stay committable from the Source repo tab.
 
 ## Global Constraints
 
