@@ -252,8 +252,13 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return s, nil
 }
 
-// apply takes a finished load.
+// apply takes a finished load. A load of another repository (the home's
+// symlink moved) first drops the old one's files, selection and upstream,
+// so they never stand under the new heading when its own read failed.
 func (s *Screen) apply(m loadMsg) {
+	if s.loaded && !sameRepo(s.repo, m.repo) {
+		s.applySnapshot(snapshot{})
+	}
 	s.loaded, s.repo, s.loadNote = true, m.repo, m.note
 	if m.repo.Manager != gitrepo.Git || m.repo.Top == "" {
 		s.applySnapshot(snapshot{})
@@ -262,6 +267,11 @@ func (s *Screen) apply(m loadMsg) {
 	if m.note == "" {
 		s.applySnapshot(m.snap)
 	}
+}
+
+// sameRepo reports whether a and b are the same repository and home.
+func sameRepo(a, b gitrepo.Repo) bool {
+	return a.ResolvedHome == b.ResolvedHome && a.Top == b.Top && a.GitDir == b.GitDir && a.Pathspec == b.Pathspec
 }
 
 // applySnapshot takes a fresh status with what was read alongside it.

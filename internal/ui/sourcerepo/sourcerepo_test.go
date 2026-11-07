@@ -521,3 +521,28 @@ func TestDiffNeverShowsPrivateKey(t *testing.T) {
 		t.Errorf("removed key shown:\n%s", v)
 	}
 }
+
+// A load of another repository (the home's symlink now points elsewhere)
+// drops the old one's files and selection even when its own status read
+// failed: they must never stand under the new heading, where a commit
+// would pick the new repository's files of the same names. A failed read
+// of the same repository keeps the last snapshot.
+func TestRepoChangeDropsOldSnapshot(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, skillA, "# a\n")
+	f := open(t, home)
+	if len(f.s.selectedFiles()) == 0 {
+		t.Fatal("nothing selected")
+	}
+	same := f.s.repo
+	f.s.apply(loadMsg{repo: same, note: "git status: timed out"})
+	if len(f.s.selectedFiles()) == 0 {
+		t.Fatal("a failed read of the same repository dropped the snapshot")
+	}
+	other := same
+	other.Top, other.GitDir, other.ResolvedHome = "/elsewhere", "/elsewhere/.git", "/elsewhere"
+	f.s.apply(loadMsg{repo: other, note: "git status: timed out"})
+	if len(f.s.status.Files) != 0 || len(f.s.selectedFiles()) != 0 {
+		t.Errorf("old snapshot kept under the new repository: %+v", f.s.status.Files)
+	}
+}
