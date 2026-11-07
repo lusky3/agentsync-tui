@@ -55,22 +55,32 @@ func TestGitCommitArgv(t *testing.T) {
 
 func TestGitCommitMessageIsOneElement(t *testing.T) {
 	for _, msg := range []string{"--amend", "-a", "x --no-verify"} {
-		a := mustAction(t)(GitCommit(testRepo, msg, []string{"agentsync.toml"}))
-		n := 0
-		for _, el := range a.Argv {
-			if strings.HasPrefix(el, "--message=") {
-				n++
-				if el != "--message="+msg {
-					t.Errorf("message element = %q", el)
-				}
-			}
-			if el == "--amend" || el == "-a" || el == "--no-verify" {
-				t.Errorf("message %q produced its own element %q", msg, el)
+		t.Run(msg, func(t *testing.T) {
+			a := mustAction(t)(GitCommit(testRepo, msg, []string{"agentsync.toml"}))
+			checkMessageIsOneElement(t, msg, a.Argv)
+		})
+	}
+}
+
+// checkMessageIsOneElement checks that argv carries msg as exactly one
+// "--message=" element and that no option-looking word of msg became an
+// element of its own.
+func checkMessageIsOneElement(t *testing.T, msg string, argv []string) {
+	t.Helper()
+	n := 0
+	for _, el := range argv {
+		if strings.HasPrefix(el, "--message=") {
+			n++
+			if el != "--message="+msg {
+				t.Errorf("message element = %q", el)
 			}
 		}
-		if n != 1 {
-			t.Errorf("message %q: %d --message= elements", msg, n)
+		if el == "--amend" || el == "-a" || el == "--no-verify" {
+			t.Errorf("message %q produced its own element %q", msg, el)
 		}
+	}
+	if n != 1 {
+		t.Errorf("message %q: %d --message= elements", msg, n)
 	}
 }
 
@@ -365,37 +375,15 @@ func TestGitBuildersNeverEmitForbidden(t *testing.T) {
 	// Paths no path-taking builder may accept: the ignored .state/ (pre-apply
 	// backups holding live secrets) at any depth, and git pathspec magic.
 	refusedPaths := []string{".state/backup/x", ".agentsync/.state/x", ":(glob)x", ":(top)a", ":!x"}
-	for _, p := range refusedPaths {
-		for name, b := range map[string]func() (Action, error){
-			"GitAdd":       func() (Action, error) { return GitAdd(testRepo, []string{p}) },
-			"GitAdd mixed": func() (Action, error) { return GitAdd(testRepo, []string{"ok", p}) },
-			"GitCommit":    func() (Action, error) { return GitCommit(testRepo, "m", []string{p}) },
-		} {
-			if a, err := b(); err == nil {
-				t.Errorf("%s accepted %q: %q", name, p, a.Argv)
-			}
+	t.Run("refused paths", func(t *testing.T) {
+		for _, p := range refusedPaths {
+			checkPathRefused(t, p)
 		}
-	}
+	})
 	hostile = append(hostile, refusedPaths...)
-	allowed := []string{"add", "commit", "fetch", "pull", "push"}
 	var built []Action
 	for _, h := range hostile {
-		for _, b := range []func() (Action, error){
-			func() (Action, error) { return GitAdd(testRepo, []string{h}) },
-			func() (Action, error) { return GitAdd(testRepo, []string{"ok", h, "x"}) },
-			func() (Action, error) { return GitCommit(testRepo, h, []string{"a"}) },
-			func() (Action, error) { return GitCommit(testRepo, "m", []string{h}) },
-			func() (Action, error) { return GitCommit(testRepo, h, []string{h}) },
-			func() (Action, error) { return GitFetch(testRepo, h) },
-			func() (Action, error) { return GitPull(GitRepo{Top: h}) },
-			func() (Action, error) { return GitPush(GitRepo{Top: h}) },
-			func() (Action, error) { return GitAdd(GitRepo{Top: h}, []string{"a"}) },
-			func() (Action, error) { return InitFromURL(h) },
-		} {
-			if a, err := b(); err == nil {
-				built = append(built, a)
-			}
-		}
+		built = append(built, buildHostile(h)...)
 	}
 	built = append(built, mustAction(t)(GitPull(testRepo)), mustAction(t)(GitPush(testRepo)))
 	if len(built) < 50 {
@@ -403,22 +391,76 @@ func TestGitBuildersNeverEmitForbidden(t *testing.T) {
 	}
 	for _, a := range built {
 		if a.Program == "" {
-			if len(a.Argv) != 2 || a.Argv[0] != "init" || strings.HasPrefix(a.Argv[1], "-") {
-				t.Errorf("agentsync builder emitted %q", a.Argv)
-			}
+			checkAgentsyncInit(t, a)
 			continue
 		}
-		if len(a.Argv) < 3 || a.Argv[0] != "-C" || a.Argv[1] != testTop {
-			t.Errorf("git argv does not start -C <top>: %q", a.Argv)
+		checkGitArgvSafe(t, a)
+	}
+}
+
+// checkPathRefused checks that every path-taking git builder refuses p,
+// alone and among accepted paths.
+func checkPathRefused(t *testing.T, p string) {
+	t.Helper()
+	for name, b := range map[string]func() (Action, error){
+		"GitAdd":       func() (Action, error) { return GitAdd(testRepo, []string{p}) },
+		"GitAdd mixed": func() (Action, error) { return GitAdd(testRepo, []string{"ok", p}) },
+		"GitCommit":    func() (Action, error) { return GitCommit(testRepo, "m", []string{p}) },
+	} {
+		if a, err := b(); err == nil {
+			t.Errorf("%s accepted %q: %q", name, p, a.Argv)
 		}
-		if v := a.ConfirmVerb(); !slices.Contains(allowed, v) {
-			t.Errorf("subcommand %q outside %q: %q", v, allowed, a.Argv)
+	}
+}
+
+// buildHostile feeds h to every builder in every argument position it
+// takes and returns the actions the builders accepted.
+func buildHostile(h string) []Action {
+	var built []Action
+	for _, b := range []func() (Action, error){
+		func() (Action, error) { return GitAdd(testRepo, []string{h}) },
+		func() (Action, error) { return GitAdd(testRepo, []string{"ok", h, "x"}) },
+		func() (Action, error) { return GitCommit(testRepo, h, []string{"a"}) },
+		func() (Action, error) { return GitCommit(testRepo, "m", []string{h}) },
+		func() (Action, error) { return GitCommit(testRepo, h, []string{h}) },
+		func() (Action, error) { return GitFetch(testRepo, h) },
+		func() (Action, error) { return GitPull(GitRepo{Top: h}) },
+		func() (Action, error) { return GitPush(GitRepo{Top: h}) },
+		func() (Action, error) { return GitAdd(GitRepo{Top: h}, []string{"a"}) },
+		func() (Action, error) { return InitFromURL(h) },
+	} {
+		if a, err := b(); err == nil {
+			built = append(built, a)
 		}
-		for _, el := range optionRegion(a.Argv) {
-			for _, f := range forbidden {
-				if el == f || strings.HasPrefix(el, f) && !strings.HasPrefix(el, "--message=") {
-					t.Errorf("forbidden %q in option region of %q", f, a.Argv)
-				}
+	}
+	return built
+}
+
+// checkAgentsyncInit checks an agentsync action a hostile value built: it
+// must be "init <url>" with a url that cannot be read as an option.
+func checkAgentsyncInit(t *testing.T, a Action) {
+	t.Helper()
+	if len(a.Argv) != 2 || a.Argv[0] != "init" || strings.HasPrefix(a.Argv[1], "-") {
+		t.Errorf("agentsync builder emitted %q", a.Argv)
+	}
+}
+
+// checkGitArgvSafe checks a git action a hostile value built: it starts
+// -C <top>, runs an allowed subcommand and has no forbidden option before
+// the "--" separator.
+func checkGitArgvSafe(t *testing.T, a Action) {
+	t.Helper()
+	allowed := []string{"add", "commit", "fetch", "pull", "push"}
+	if len(a.Argv) < 3 || a.Argv[0] != "-C" || a.Argv[1] != testTop {
+		t.Errorf("git argv does not start -C <top>: %q", a.Argv)
+	}
+	if v := a.ConfirmVerb(); !slices.Contains(allowed, v) {
+		t.Errorf("subcommand %q outside %q: %q", v, allowed, a.Argv)
+	}
+	for _, el := range optionRegion(a.Argv) {
+		for _, f := range forbidden {
+			if el == f || strings.HasPrefix(el, f) && !strings.HasPrefix(el, "--message=") {
+				t.Errorf("forbidden %q in option region of %q", f, a.Argv)
 			}
 		}
 	}

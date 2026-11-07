@@ -539,11 +539,11 @@ func TestEachScreenKeepsItsOwnList(t *testing.T) {
 // still open the editor when AgentsyncHome is a symlink.
 func TestLibraryEditUnderSymlinkedHome(t *testing.T) {
 	tmp := t.TempDir()
-	real, link := filepath.Join(tmp, "real"), filepath.Join(tmp, "link")
-	if err := os.MkdirAll(real, 0o700); err != nil {
+	target, link := filepath.Join(tmp, "real"), filepath.Join(tmp, "link")
+	if err := os.MkdirAll(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
 	p := writeItem(t, link, Skill, "alpha")

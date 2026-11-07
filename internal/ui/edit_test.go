@@ -330,26 +330,27 @@ func TestEditDoneMarksOtherScreensStale(t *testing.T) {
 	}
 }
 
-// symHome builds <tmp>/real holding mcp/srv.toml and <tmp>/link -> real, the
-// shape of a home that is itself a symlink (~/.agentsync -> ~/git/agent-config).
-func symHome(t *testing.T) (tmp, link, real string) {
+// symHome builds target (<tmp>/real) holding mcp/srv.toml and <tmp>/link ->
+// target, the shape of a home that is itself a symlink (~/.agentsync ->
+// ~/git/agent-config).
+func symHome(t *testing.T) (tmp, link, target string) {
 	t.Helper()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	real = filepath.Join(tmp, "real")
+	target = filepath.Join(tmp, "real")
 	link = filepath.Join(tmp, "link")
-	if err := os.MkdirAll(filepath.Join(real, "mcp"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(target, "mcp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(real, "mcp", "srv.toml"), []byte("x\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(target, "mcp", "srv.toml"), []byte("x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	return tmp, link, real
+	return tmp, link, target
 }
 
 // argvEditor records its last argument in the returned file, then exits 0.
@@ -388,13 +389,13 @@ func editAccepted(t *testing.T, link, p, want string) {
 }
 
 func TestEditFileAcceptsFileUnderSymlinkedHome(t *testing.T) {
-	_, link, real := symHome(t)
-	editAccepted(t, link, filepath.Join(link, "mcp", "srv.toml"), filepath.Join(real, "mcp", "srv.toml"))
+	_, link, target := symHome(t)
+	editAccepted(t, link, filepath.Join(link, "mcp", "srv.toml"), filepath.Join(target, "mcp", "srv.toml"))
 }
 
 func TestEditFileAcceptsResolvedPathUnderSymlinkedHome(t *testing.T) {
-	_, link, real := symHome(t)
-	p := filepath.Join(real, "mcp", "srv.toml")
+	_, link, target := symHome(t)
+	p := filepath.Join(target, "mcp", "srv.toml")
 	editAccepted(t, link, p, p)
 }
 
@@ -418,12 +419,12 @@ func refusedUnderSymlinkedHome(t *testing.T, link, p string) {
 }
 
 func TestEditFileRefusesEscapeFromSymlinkedHome(t *testing.T) {
-	tmp, link, real := symHome(t)
+	tmp, link, target := symHome(t)
 	outside := filepath.Join(tmp, "outside.toml")
 	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	evil := filepath.Join(real, "mcp", "evil.toml")
+	evil := filepath.Join(target, "mcp", "evil.toml")
 	if err := os.Symlink(outside, evil); err != nil {
 		t.Fatal(err)
 	}
