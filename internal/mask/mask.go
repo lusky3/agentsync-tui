@@ -65,11 +65,13 @@ var (
 	// that group consists only of references.
 	textRules = append([]rule{
 		// Authorization-style headers with any scheme.
-		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"']+)`), kind: KindAuthHeader},
-		{re: regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["']?)([^\s"']+)`), kind: KindAuthHeader},
+		// A backtick may quote the value (Markdown code), so it is neither
+		// part of the value nor stops the scheme from being recognised.
+		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["'` + "`" + `]?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["'` + "`" + `]?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// Cookie headers: the whole cookie string is the secret.
-		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*:\s*["']?)([^\n"']+)`), kind: KindAuthHeader},
-		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"']+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*:\s*["'` + "`" + `]?)([^\n"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// userinfo in URLs.
 		{re: regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)([^/\s@"']+)@`), kind: KindURLUserinfo},
 		// credential-looking query parameters.
@@ -97,6 +99,22 @@ var (
 // IsRef reports whether s is exactly one reference: ${secret:NAME},
 // ${env:NAME} or ${NAME}.
 func IsRef(s string) bool { return wholeRef.MatchString(strings.TrimSpace(s)) }
+
+// textRefRe is a reference as the Text and Credential rules read one: an
+// agentsync reference, or an unbraced shell variable whose name is upper
+// case ($GITHUB_TOKEN, as docs and shell snippets write it). A lower-case
+// $word is not one: it is too easily the start of a literal password.
+var textRefRe = regexp.MustCompile(refPat + `|\$[A-Z_][A-Z0-9_]*\b`)
+
+// textRefsOnly is onlyRefs for the Text and Credential rules: shell
+// variables count as references, and backticks (template quoting) and ':'
+// separators may surround them.
+func textRefsOnly(s string) bool {
+	if !textRefRe.MatchString(s) {
+		return false
+	}
+	return strings.Trim(textRefRe.ReplaceAllString(s, ""), " \t:`") == ""
+}
 
 // onlyRefs: s holds at least one reference and nothing else but whitespace
 // and ':' separators (e.g. ${U}:${P}).
@@ -138,17 +156,13 @@ func Text(s string) string {
 		s = re.ReplaceAllStringFunc(s, func(m string) string {
 			sub := re.FindStringSubmatch(m)
 			secret := sub[2]
-			if onlyRefs(secret) {
+			if !literal(secret, r.bare) {
 				return m
 			}
 			tail := ""
 			if r.bare {
 				// Trailing closers belong to the surrounding text.
-				keep := strings.TrimRight(secret, `,;)}]"'`)
-				if keep == "" {
-					return m
-				}
-				tail = secret[len(keep):]
+				tail = secret[len(strings.TrimRight(secret, closers)):]
 			}
 			return sub[1] + Mask + tail + m[len(sub[1])+len(secret):]
 		})

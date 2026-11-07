@@ -68,3 +68,36 @@ func TestCredentialSanitisesFirst(t *testing.T) {
 		t.Error("an escape sequence split a token past Credential")
 	}
 }
+
+// TestShellAndTemplateRefsAreRefs: an unbraced upper-case shell variable
+// ($NAME) and a backtick-quoted template reference are references in the
+// header and value rules, so they are neither a finding nor masked.
+func TestShellAndTemplateRefsAreRefs(t *testing.T) {
+	for _, in := range []string{
+		"Authorization: `Bearer ${token}`",
+		"Authorization: Bearer $MEM0_API_KEY",
+		"curl -H 'Authorization: Bearer $GITHUB_TOKEN'",
+		"x-api-key: `${secret:K}`",
+		"Bearer `${API_KEY}`",
+		"API_KEY=$MEM0_API_KEY",
+		"password: $DB_PASSWORD",
+	} {
+		if kind, ok := Credential(in); ok {
+			t.Errorf("Credential(%q) = %q, true; want false", in, kind)
+		}
+		if got := Text(in); got != in {
+			t.Errorf("Text(%q) = %q, want unchanged", in, got)
+		}
+	}
+	// A literal next to a shell variable, or a lower-case $word, is still
+	// a literal.
+	for _, in := range []string{
+		"Authorization: `Bearer abc123`",
+		"Authorization: Bearer $MEM0_API_KEY-literal",
+		"password: $ecret99",
+	} {
+		if _, ok := Credential(in); !ok {
+			t.Errorf("Credential(%q) not found", in)
+		}
+	}
+}

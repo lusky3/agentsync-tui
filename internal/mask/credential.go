@@ -25,7 +25,7 @@ var (
 // Authorization-style headers, URL userinfo, secret-named assignments),
 // plus PEM private keys and age identities, but not Text's URL-structure
 // pass: a plain URL's path and query are not a finding on their own. A
-// header or assignment value that is only references (${secret:X},
+// header or assignment value that is only references (${secret:X}, $UPPER,
 // ${env:T}) is not one, but a known token shape is found wherever it
 // appears, a reference's name included (R5; Text masks it there too): a
 // name such as ${env:ghp_...} still puts the token's text in the file. s is
@@ -55,11 +55,19 @@ func Credential(s string) (kind string, found bool) {
 }
 
 // literal reports whether a rule's value group is a literal Text would
-// mask: not only references and, for a bare value, not only the trailing
-// closers that belong to the surrounding text.
+// mask: not only references (textRefsOnly: shell variables and backtick
+// quoting included) and, for a bare value, neither only the trailing
+// closers that belong to the surrounding text nor references followed by
+// them ("$TOKEN,").
 func literal(v string, bare bool) bool {
-	if onlyRefs(v) {
+	if textRefsOnly(v) {
 		return false
 	}
-	return !bare || strings.TrimRight(v, `,;)}]"'`) != ""
+	if bare {
+		v = strings.TrimRight(v, closers)
+	}
+	return v != "" && !textRefsOnly(v)
 }
+
+// closers end a bare value without belonging to it.
+const closers = `,;)}]"'`
