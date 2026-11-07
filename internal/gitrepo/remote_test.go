@@ -18,8 +18,9 @@ func TestSourceRepoReadArgvPinned(t *testing.T) {
 			"--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/main"}},
 		{"mirror", MirrorArgv(r, "origin"), []string{"-C", "/h/top", "config", "--get", "--type=bool", "remote.origin.mirror"}},
 		{"push urls", PushURLsArgv(r, "origin"), []string{"-C", "/h/top", "remote", "get-url", "--push", "--all", "origin"}},
-		{"head", HeadCommitArgv(r), []string{"-C", "/h/top", "rev-parse", "--verify", "HEAD^{commit}"}},
-		{"upstream commit", UpstreamCommitArgv(r), []string{"-C", "/h/top", "rev-parse", "--verify", "@{u}^{commit}"}},
+		{"branch commit", BranchCommitArgv(r, "main"), []string{"-C", "/h/top", "rev-parse", "--verify", "refs/heads/main^{commit}"}},
+		{"upstream commit", BranchUpstreamCommitArgv(r, "main"), []string{"-C", "/h/top", "rev-parse", "--verify", "main@{upstream}^{commit}"}},
+		{"commits after", CommitsAfterArgv(r, a, "main"), []string{"-C", "/h/top", "rev-list", "--count", a + "..refs/heads/main", "--"}},
 		{"names", OutgoingNamesArgv(r, a, b), []string{"-C", "/h/top", "log", "--format=", "--name-only", "-z",
 			"--no-renames", "--diff-merges=first-parent", a + ".." + b, "--", "agentsync"}},
 		{"patch", OutgoingPatchArgv(r, a, b), []string{"-C", "/h/top", "log", "-p", "--no-ext-diff", "--no-textconv",
@@ -47,6 +48,12 @@ func TestSourceRepoReadArgvRefusesBadArguments(t *testing.T) {
 		"patch short tip":    OutgoingPatchArgv(r, sha, sha[:39]),
 		"patch upper tip":    OutgoingPatchArgv(r, sha, strings.ToUpper(sha)),
 		"names glued option": OutgoingNamesArgv(r, sha+"..x", sha),
+		"branch commit bad":  BranchCommitArgv(r, "-x"),
+		"branch commit HEAD": BranchCommitArgv(r, "HEAD"),
+		"upstream bad":       BranchUpstreamCommitArgv(r, "a@{u}"),
+		"upstream empty":     BranchUpstreamCommitArgv(r, ""),
+		"after bad sha":      CommitsAfterArgv(r, "HEAD", "main"),
+		"after bad branch":   CommitsAfterArgv(r, sha, "a..b"),
 	} {
 		if argv != nil {
 			t.Errorf("%s: built %q", name, argv)

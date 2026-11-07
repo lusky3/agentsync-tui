@@ -189,7 +189,10 @@ func TestPushRoundTripToBare(t *testing.T) {
 	if got := strings.TrimSpace(gittest.Git(t, bare, "rev-parse", "main")); got != head(t, home) {
 		t.Errorf("bare main %s, local %s", got, head(t, home))
 	}
-	wantView(t, f.s, "pushed main to origin", "↑0 ↓0")
+	wantView(t, f.s, "pushed "+head(t, home)[:7]+" to origin/main", "↑0 ↓0")
+	if strings.Contains(f.s.note, "not pushed") {
+		t.Errorf("note %q", f.s.note)
+	}
 }
 
 func TestPushNeverForce(t *testing.T) {
@@ -511,6 +514,14 @@ func startShellBounded(t *testing.T, home string, bound time.Duration) *shell {
 	return newShell(t, ad, s)
 }
 
+// waitRefresh waits for the refresh the shell starts after a run, so no
+// read of the screen's is still in flight when the test checks for
+// children left running.
+func (sh *shell) waitRefresh() {
+	sh.t.Helper()
+	sh.wait("refresh", func(m tea.Msg) bool { _, ok := m.(loadMsg); return ok })
+}
+
 func noLiveChild(t *testing.T) {
 	t.Helper()
 	if ended := runner.Shutdown(os.Interrupt, 0, 0); len(ended) != 0 {
@@ -531,6 +542,7 @@ func TestHangingRemoteTimesOut(t *testing.T) {
 		r, ok := m.(ui.RunMsg)
 		return ok && gitCmd(r.Action.Argv) == "push"
 	}).(ui.RunMsg)
+	sh.waitRefresh()
 	sh.finish()
 	if r.Err == nil || !strings.Contains(r.Err.Error(), "timed out") {
 		t.Fatalf("push RunMsg %+v", r)
@@ -554,6 +566,7 @@ func TestPullStoppedSaysWorktreeMayBePartlyUpdated(t *testing.T) {
 		r, ok := m.(ui.RunMsg)
 		return ok && gitCmd(r.Action.Argv) == "pull"
 	})
+	sh.waitRefresh()
 	sh.finish()
 	note := sh.s.note
 	for _, want := range []string{"the pull was stopped; the worktree may be partly updated. Nothing was rolled back",
@@ -633,7 +646,8 @@ func TestPushSendsOnlyTheScannedCommit(t *testing.T) {
 	if strings.Contains(gittest.Git(t, bare, "rev-list", "--all"), late) {
 		t.Error("the unscanned commit reached the remote")
 	}
-	wantView(t, f.s, "↑1 ↓0")
+	wantView(t, f.s, "↑1 ↓0", "pushed "+scanned[:7]+" to origin/main; 1 newer local commit(s) were not pushed (made after the scan)"+
+		" — press P again to scan and push them")
 }
 
 func TestPendingPullBlocksOtherNetworkKeys(t *testing.T) {
@@ -724,4 +738,69 @@ func TestPushRefusedDeletingSensitivePath(t *testing.T) {
 	f := open(t, home)
 	wantNothing(t, press(f.s, "P"))
 	wantView(t, f.s, "skills/k.pem", "deleting such a file counts too")
+}
+
+// The guard round of a pull or push is running: f, p, P and i wait, so
+// the network action that comes out of the round never replaces another.
+func TestGuardRoundBlocksNetworkKeys(t *testing.T) {
+	for _, first := range []string{"P", "p"} {
+		t.Run(first, func(t *testing.T) {
+			home, _ := newTracked(t)
+			gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+			f := open(t, home)
+			_, guard := f.s.Update(key(first))
+			if guard == nil {
+				t.Fatal("no guard round")
+			}
+			for _, k := range []string{"f", "p", "P", "i"} {
+				wantNothing(t, press(f.s, k))
+				wantView(t, f.s, "busy: the "+map[string]string{"P": "push", "p": "pull"}[first]+" is being checked")
+			}
+			d := onlyDo(t, drive(f.s, guard))
+			// The shell refuses it (another action ran meanwhile): the
+			// pending state is released, and a fetch now runs and reports.
+			f.s.Update(ui.NotRunMsg{Actions: []actions.Action{d.Action}})
+			df := onlyDo(t, press(f.s, "f"))
+			if r := f.exec(df); r[0].Result.ExitCode != 0 {
+				t.Fatalf("fetch: %+v", r[0])
+			}
+			wantView(t, f.s, "fetched origin")
+		})
+	}
+}
+
+// A checkout of another branch between the guard's status read and its
+// pin never sends that branch's commits: the guard pins refs/heads/<b>
+// of the branch it read, so the push is main's tip.
+func TestPushPinsTheScannedBranch(t *testing.T) {
+	home, bare := newTracked(t)
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	mainTip := head(t, home)
+	gittest.Git(t, home, "checkout", "-q", "-b", "feat")
+	gittest.Commit(t, home, "feat", map[string]string{"skills/f/SKILL.md": "# f\n"})
+	featTip := head(t, home)
+	gittest.Git(t, home, "checkout", "-q", "main")
+	f := open(t, home)
+	var once sync.Once
+	f.git.override = func(args []string) (runner.Result, bool) {
+		if gitCmd(args) == "rev-parse" {
+			once.Do(func() { gittest.Git(t, home, "checkout", "-q", "feat") })
+		}
+		return runner.Result{}, false
+	}
+	d := onlyDo(t, press(f.s, "P"))
+	f.git.override = nil
+	want := mustAct(actions.GitPush(actions.GitRepo{Top: f.s.repo.Top}, "origin", "main", mainTip))
+	if !slices.Equal(d.Action.Argv, want.Argv) {
+		t.Fatalf("argv %q, want %q", d.Action.Argv, want.Argv)
+	}
+	if r := f.exec(d); r[0].Result.ExitCode != 0 {
+		t.Fatalf("push: %+v", r[0])
+	}
+	if got := strings.TrimSpace(gittest.Git(t, bare, "rev-parse", "main")); got != mainTip {
+		t.Errorf("remote main %s, want main's tip %s", got, mainTip)
+	}
+	if strings.Contains(gittest.Git(t, bare, "rev-list", "--all"), featTip) {
+		t.Error("feat's commit reached the remote")
+	}
 }

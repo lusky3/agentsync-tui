@@ -237,6 +237,10 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s.nets.Current(msg.gen) {
 			return s, s.onNet(msg)
 		}
+	case unpushedMsg:
+		if s.nets.Current(msg.gen) {
+			s.onUnpushed(msg)
+		}
 	case ui.RunMsg:
 		s.onRun(msg)
 		return s, s.onNetRun(msg)

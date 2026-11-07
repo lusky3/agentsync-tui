@@ -36,15 +36,33 @@ func PushURLsArgv(r Repo, remote string) []string {
 	return []string{"-C", r.Top, "remote", "get-url", "--push", "--all", remote}
 }
 
-// HeadCommitArgv prints the object id of the commit HEAD names.
-func HeadCommitArgv(r Repo) []string {
-	return []string{"-C", r.Top, "rev-parse", "--verify", "HEAD^{commit}"}
+// BranchCommitArgv prints the object id of the commit branch points at,
+// named in full (refs/heads/<branch>), so neither HEAD moving to another
+// branch nor a tag of the same name changes what it reads.
+func BranchCommitArgv(r Repo, branch string) []string {
+	if actions.ValidBranchName(branch) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "rev-parse", "--verify", "refs/heads/" + branch + "^{commit}"}
 }
 
-// UpstreamCommitArgv prints the object id of the commit the current
-// branch's upstream (its remote-tracking ref) names.
-func UpstreamCommitArgv(r Repo) []string {
-	return []string{"-C", r.Top, "rev-parse", "--verify", "@{u}^{commit}"}
+// BranchUpstreamCommitArgv prints the object id of the commit branch's
+// upstream (its remote-tracking ref) points at. <branch>@{upstream} always
+// reads branch as a branch name (git refuses refs/heads/<b>@{upstream}).
+func BranchUpstreamCommitArgv(r Repo, branch string) []string {
+	if actions.ValidBranchName(branch) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "rev-parse", "--verify", branch + "@{upstream}^{commit}"}
+}
+
+// CommitsAfterArgv counts the commits on branch that sha does not hold
+// (after a push of sha: the local commits that were not pushed).
+func CommitsAfterArgv(r Repo, sha, branch string) []string {
+	if actions.ValidObjectID(sha) != nil || actions.ValidBranchName(branch) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "rev-list", "--count", sha + "..refs/heads/" + branch, "--"}
 }
 
 // OutgoingNamesArgv lists, NUL-separated, every path any commit in

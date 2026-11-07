@@ -42,6 +42,7 @@ const (
 // netState is the network keys' part of the screen.
 type netState struct {
 	netBusy      bool              // a pull or push guard round is running
+	busyOp       netOp             // which one
 	net          *pendingNet       // the network action handed to the shell
 	pulled       bool              // the last pull succeeded: D and A jump
 	pushFindings []gitrepo.Finding // the last pre-push scan's, masked
@@ -55,9 +56,9 @@ func newNetState() netState {
 
 // pendingNet is a network action handed to the shell, until its RunMsg.
 type pendingNet struct {
-	op                netOp
-	key               string
-	top, remote, head string
+	op                     netOp
+	key                    string
+	top, remote, head, sha string // sha: the commit a push sends
 }
 
 // remoteInfo is the current branch's upstream as for-each-ref reports it,
@@ -89,15 +90,27 @@ func readRemote(ctx context.Context, git runner.Runner, repo gitrepo.Repo, b git
 // opNames name a pending network action in the busy note.
 var opNames = [...]string{opFetch: "fetch", opPull: "pull", opPush: "push", opInit: "init"}
 
-// remoteKey handles the network and bootstrap keys of the list. While an
-// action this screen handed to the shell has not reported back, no other
-// one starts: its outcome (the D/A offer, the stopped-pull note) must not
-// be lost.
+// busyNote is why no network action may start now, "" when one may: a
+// pull or push guard round is running, or an action this screen handed
+// to the shell has not reported back. One network action at a time, so
+// none replaces another and every outcome (the D/A offer, the
+// stopped-pull note, a fetch's result) is shown.
+func (s *Screen) busyNote() string {
+	switch {
+	case s.netBusy:
+		return "busy: the " + opNames[s.busyOp] + " is being checked"
+	case s.net != nil:
+		return "busy: the " + opNames[s.net.op] + " is still pending"
+	}
+	return ""
+}
+
+// remoteKey handles the network and bootstrap keys of the list.
 func (s *Screen) remoteKey(k string) tea.Cmd {
 	switch k {
 	case "f", "p", "P", "i":
-		if s.net != nil {
-			s.note = "busy: the " + opNames[s.net.op] + " is still pending"
+		if why := s.busyNote(); why != "" {
+			s.note = why
 			return nil
 		}
 	}
@@ -233,14 +246,11 @@ type pushPlan struct {
 // startNet checks what the last refresh read, then starts the guard round
 // of a pull or push in the background.
 func (s *Screen) startNet(op netOp) tea.Cmd {
-	if s.netBusy {
-		return nil
-	}
 	if r := s.netRefusal(op); r != nil {
 		s.note = strings.Join(r, "\n")
 		return nil
 	}
-	s.netBusy, s.note, s.pushFindings, s.commit.findings = true, "", nil, nil
+	s.netBusy, s.busyOp, s.note, s.pushFindings, s.commit.findings = true, op, "", nil, nil
 	gen, ctx := s.nets.Next(s.base)
 	in := netInput{repo: s.repo, git: s.git, limit: s.limit, op: op}
 	return func() tea.Msg { return runNet(ctx, gen, in) }
@@ -292,7 +302,7 @@ func pushGuard(ctx context.Context, in netInput, b gitrepo.Branch, r remoteInfo)
 	if why != "" {
 		return pushPlan{}, []string{why}
 	}
-	base, tip, why := pinRange(ctx, in)
+	base, tip, why := pinRange(ctx, in, b.Head)
 	if why != "" {
 		return pushPlan{}, []string{why}
 	}
@@ -316,19 +326,24 @@ func pushBranchRefusal(b gitrepo.Branch, r remoteInfo) string {
 	return ""
 }
 
-// pinRange reads the object ids of the upstream and HEAD: the outgoing
-// commits are base..tip, and the push sends tip.
-func pinRange(ctx context.Context, in netInput) (base, tip, why string) {
-	if base, why = revParse(ctx, in, gitrepo.UpstreamCommitArgv(in.repo)); why != "" {
+// pinRange reads the object ids of branch's upstream and of branch itself
+// (named in full, never HEAD: a checkout of another branch meanwhile must
+// not change what is pushed). The outgoing commits are base..tip, and the
+// push sends tip to refs/heads/<branch>.
+func pinRange(ctx context.Context, in netInput, branch string) (base, tip, why string) {
+	if base, why = revParse(ctx, in, gitrepo.BranchUpstreamCommitArgv(in.repo, branch)); why != "" {
 		return "", "", why
 	}
-	tip, why = revParse(ctx, in, gitrepo.HeadCommitArgv(in.repo))
+	tip, why = revParse(ctx, in, gitrepo.BranchCommitArgv(in.repo, branch))
 	return base, tip, why
 }
 
 // revParse runs a rev-parse argv and reads the object id it prints; why
 // is a refusal.
 func revParse(ctx context.Context, in netInput, argv []string) (string, string) {
+	if argv == nil {
+		return "", refused + "the branch name is not one the TUI passes to git; push outside the TUI"
+	}
 	res, err := ui.Read(ctx, in.git, in.limit, argv...)
 	if note := ui.ReadNote("git rev-parse", res, err); note != "" {
 		return "", refused + note
@@ -391,7 +406,7 @@ func (s *Screen) onNet(m netMsg) tea.Cmd {
 		s.note = strings.Join(m.refusal, "\n")
 		return nil
 	}
-	p := pendingNet{op: m.op, remote: m.remote, head: m.head}
+	p := pendingNet{op: m.op, remote: m.remote, head: m.head, sha: m.push.sha}
 	if m.op == opPull {
 		act, err := actions.GitPull(actions.GitRepo{Top: s.repo.Top})
 		return s.emitNet(act, err, p)
@@ -459,6 +474,9 @@ func (s *Screen) onNetRun(m ui.RunMsg) tea.Cmd {
 		s.note, s.pulled = pullOutcome(p, m, ok), ok
 	case opPush:
 		s.note = pushOutcome(p, m, ok)
+		if ok {
+			return s.countUnpushed(p)
+		}
 	case opInit:
 		return s.initOutcome(m, ok)
 	}
@@ -501,11 +519,51 @@ func pullOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 func pushOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 	switch {
 	case ok:
-		return "pushed " + mask.Sanitize(p.head) + " to " + mask.Sanitize(p.remote)
+		return pushedNote(p)
 	case stopped(m):
 		return "push stopped (" + outcomeOf(m) + "): the remote may or may not have the commits; fetch (f) to see"
 	case strings.Contains(m.Result.Stderr, "non-fast-forward") || strings.Contains(m.Result.Stderr, "fetch first"):
 		return rejectedNote
 	}
 	return "push failed (" + outcomeOf(m) + ")"
+}
+
+// pushedNote names the commit a push sent and where.
+func pushedNote(p *pendingNet) string {
+	return "pushed " + p.sha[:min(len(p.sha), 7)] + " to " + mask.Sanitize(p.remote) + "/" + mask.Sanitize(p.head)
+}
+
+// unpushedMsg carries how many commits the branch holds past the pushed one.
+type unpushedMsg struct {
+	gen  int
+	n    int
+	note string // the push note it extends
+}
+
+// countUnpushed reads, in the background, how many commits were made on
+// the branch after the guard scanned (they were not pushed, Ruling 32).
+func (s *Screen) countUnpushed(p *pendingNet) tea.Cmd {
+	argv := gitrepo.CommitsAfterArgv(s.repo, p.sha, p.head)
+	if argv == nil {
+		return nil
+	}
+	gen, ctx := s.nets.Next(s.base)
+	git, limit, note := s.git, s.limit, s.note
+	return func() tea.Msg {
+		res, err := ui.Read(ctx, git, limit, argv...)
+		n, perr := strconv.Atoi(strings.TrimSpace(res.Stdout))
+		if ui.ReadNote("git rev-list", res, err) != "" || perr != nil {
+			n = 0
+		}
+		return unpushedMsg{gen: gen, n: n, note: note}
+	}
+}
+
+// onUnpushed extends the push note when local commits were left behind,
+// unless the note has changed since.
+func (s *Screen) onUnpushed(m unpushedMsg) {
+	if m.n > 0 && s.note == m.note {
+		s.note += "; " + strconv.Itoa(m.n) + " newer local commit(s) were not pushed (made after the scan)" +
+			" — press P again to scan and push them"
+	}
 }
