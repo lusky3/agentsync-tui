@@ -30,6 +30,7 @@ func TestSourceRepoReadArgvPinned(t *testing.T) {
 		{"patch", OutgoingPatchArgv(r, a, b), []string{"-C", "/h/top", "log", "-p", "--no-ext-diff", "--no-textconv",
 			"--no-color", "-U0", "--no-renames", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
 			"--format=%H", a + ".." + b, "--", "agentsync"}},
+		{"blob", BlobArgv(r, a, "mcp/x.toml"), []string{"-C", "/h/top", "cat-file", "blob", a + ":mcp/x.toml"}},
 	}
 	for _, c := range cases {
 		if !slices.Equal(c.got, c.want) {
@@ -58,6 +59,9 @@ func TestSourceRepoReadArgvRefusesBadArguments(t *testing.T) {
 		"upstream empty":     BranchUpstreamCommitArgv(r, ""),
 		"after bad sha":      CommitsAfterArgv(r, "HEAD", "main"),
 		"after bad branch":   CommitsAfterArgv(r, sha, "a..b"),
+		"blob bad sha":       BlobArgv(r, "HEAD", "x"),
+		"blob bad path":      BlobArgv(r, sha, "../x"),
+		"blob empty path":    BlobArgv(r, sha, ""),
 	} {
 		if argv != nil {
 			t.Errorf("%s: built %q", name, argv)

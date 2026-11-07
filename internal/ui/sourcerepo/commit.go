@@ -2,6 +2,7 @@ package sourcerepo
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,7 +25,10 @@ const (
 	maxMessageBytes = 1024
 	// scanReadLimit is how much of a new file the scan reads: one byte past
 	// ScanNewFile's 1 MiB, so a larger file is reported as not scanned.
-	scanReadLimit = 1<<20 + 1
+	scanReadLimit = maxScanned + 1
+	// maxScanned is how much of a file ScanNewFile scans, and how much of
+	// a post-image gives the added lines their context.
+	maxScanned = 1 << 20
 	// shownPaths is how many paths a command shown as text lists.
 	shownPaths = 10
 	refused    = "refused: "
@@ -254,8 +258,9 @@ func readNew(top, rel string) (capped, error) {
 	return readFile(top, rel, scanReadLimit)
 }
 
-// scanTracked scans the added lines of a tracked file's diff against HEAD.
-// A binary change or a patch the runner cut is soft: it was not scanned.
+// scanTracked scans the added lines of a tracked file's diff against HEAD,
+// in the context of the worktree file they come from (postImage). A binary
+// change or a patch the runner cut is soft: it was not scanned.
 func scanTracked(ctx context.Context, in guardInput, unborn bool, f gitrepo.File) ([]gitrepo.Finding, string) {
 	argv := gitrepo.DiffArgv(in.repo, unborn, f.Path, 0)
 	if argv == nil {
@@ -273,7 +278,29 @@ func scanTracked(ctx context.Context, in guardInput, unborn bool, f gitrepo.File
 	if binaryRe.MatchString(patch) {
 		out = append(out, notScanned(f, gitrepo.KindNotScannedBinary))
 	}
-	return append(out, gitrepo.ScanLines(f.HomeRel, gitrepo.AddedLines(patch))...), ""
+	lines := gitrepo.AddedLines(patch)
+	if len(lines) == 0 {
+		return out, ""
+	}
+	post, err := bounded(ctx, in.limit, func() (capped, error) { return postImage(in.repo.Top, f.Path) })
+	if err != nil {
+		return nil, refused + "cannot scan " + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
+	}
+	if post.cut {
+		out = append(out, notScanned(f, gitrepo.KindNotScannedLarge))
+	}
+	return append(out, gitrepo.ScanAdded(f.HomeRel, lines, post.data)...), ""
+}
+
+// postImage is the worktree file rel the diff's added lines come from, its
+// first maxScanned bytes (cut past them). A symlink's diff is its target,
+// which has no multi-line strings: it gives no context.
+func postImage(top, rel string) (capped, error) {
+	c, err := readFile(top, rel, maxScanned)
+	if errors.Is(err, gitrepo.ErrSymlink) {
+		return capped{}, nil
+	}
+	return c, err
 }
 
 func notScanned(f gitrepo.File, kind string) gitrepo.Finding {

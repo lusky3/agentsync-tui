@@ -651,6 +651,38 @@ func TestPushRefusedOursMergeOfSecretSideBranch(t *testing.T) {
 	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3")
 }
 
+// Greptile's example on the push side: an outgoing commit edits only the
+// body of a multi-line value under a secret-named key (and a later one
+// puts the reference back). The body is scanned in the commit's file.
+func TestPushRefusedMultiLineSecretBodyEdit(t *testing.T) {
+	home, _ := newTracked(t)
+	ref := baseTOML + "[servers.x.env]\nAPI_KEY = '''\n${TOKEN}\n'''\n"
+	gittest.Commit(t, home, "ref", map[string]string{tomlX: ref})
+	gittest.Git(t, home, "push", "-q", "origin", "main")
+	gittest.Commit(t, home, "literal", map[string]string{tomlX: strings.Replace(ref, "${TOKEN}", "hunter2", 1)})
+	gittest.Commit(t, home, "back", map[string]string{tomlX: ref})
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:5")
+	if strings.Contains(view(f.s), "hunter2") {
+		t.Error("the secret is shown")
+	}
+}
+
+// The same body edit under a key that is not secret-named needs no typed
+// push.
+func TestPushMultiLineBodyEditUnderPlainKey(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "doc", map[string]string{tomlX: baseTOML + "description = '''\nold\n'''\n"})
+	gittest.Git(t, home, "push", "-q", "origin", "main")
+	gittest.Commit(t, home, "edit", map[string]string{tomlX: baseTOML + "description = '''\nhunter2\n'''\n"})
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "P"))
+	if d.Action.TypedConfirm {
+		t.Errorf("a plain body edit needs a typed push: %q", d.Action.Warning)
+	}
+}
+
 // Ruling 32: a commit made on the branch after the guard scanned (while
 // the confirm modal is open) never reaches the remote.
 func TestPushSendsOnlyTheScannedCommit(t *testing.T) {

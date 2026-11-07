@@ -94,3 +94,14 @@ func OutgoingPatchArgv(r Repo, base, tip string) []string {
 		"--no-renames", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
 		"--format=%H", base + ".." + tip, "--", r.Pathspec}
 }
+
+// BlobArgv prints the content of path (relative to the toplevel) as
+// commit sha records it: the raw blob, no textconv or filter, so a push
+// scan reads an outgoing commit's file the way the push publishes it.
+// sha must be an object id and path a valid git path.
+func BlobArgv(r Repo, sha, path string) []string {
+	if actions.ValidObjectID(sha) != nil || actions.ValidGitPath(path) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "cat-file", "blob", sha + ":" + path}
+}

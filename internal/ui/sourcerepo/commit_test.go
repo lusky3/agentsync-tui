@@ -777,3 +777,36 @@ func TestCommitRefusalLinesSanitised(t *testing.T) {
 		}
 	}
 }
+
+// Greptile's example: only the body of an existing multi-line value under
+// a secret-named key changes, so the -U0 diff holds only the body line.
+// It is scanned as that key's value: hard in a config file.
+func TestCommitRefusedMultiLineSecretBodyEdit(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "ref", map[string]string{tomlX: baseTOML + "[servers.x.env]\nAPI_KEY = '''\n${TOKEN}\n'''\n"})
+	write(t, home, tomlX, baseTOML+"[servers.x.env]\nAPI_KEY = '''\nhunter2\n'''\n")
+	f := open(t, home)
+	before := logCount(t, home)
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if logCount(t, home) != before {
+		t.Error("a commit was made")
+	}
+	wantView(t, f.s, "refused", "mcp/x.toml:5")
+	if strings.Contains(view(f.s), "hunter2") {
+		t.Error("the secret is shown")
+	}
+}
+
+// The same body edit under a key that is not secret-named is no finding.
+func TestCommitMultiLineBodyEditUnderPlainKey(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "doc", map[string]string{tomlX: baseTOML + "description = '''\nold\n'''\n"})
+	write(t, home, tomlX, baseTOML+"description = '''\nhunter2\n'''\n")
+	f := open(t, home)
+	d := onlyDo(t, commit(f.s, commitMsg))
+	if d.Then[0].TypedConfirm {
+		t.Errorf("a plain body edit needs a typed commit: %q", d.Then[0].Warning)
+	}
+}

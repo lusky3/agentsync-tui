@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/gitrepo"
 	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/runner"
@@ -58,7 +60,11 @@ func scanOutgoing(ctx context.Context, in netInput, base, tip string) ([]gitrepo
 		return nil, []string{refused + note}
 	}
 	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
-	fs, err := bounded(ctx, in.limit, func() ([]gitrepo.Finding, error) { return scanPatch(patch, in.repo.Pathspec) })
+	secs := splitPatch(patch)
+	if r := readPostImages(ctx, in, secs); r != nil {
+		return nil, r
+	}
+	fs, err := bounded(ctx, in.limit, func() ([]gitrepo.Finding, error) { return scanPatch(secs, in.repo.Pathspec) })
 	if err != nil {
 		return nil, []string{refused + "cannot scan the outgoing commits: " + errNote(err), "to inspect them" + runOutside,
 			"  " + inspectCommand(in.repo.Top)}
@@ -114,11 +120,12 @@ func unpushablePath(rel string) string {
 	return ""
 }
 
-// scanPatch scans the added lines of each file section of patch. A binary
-// section is a soft finding: it was not scanned.
-func scanPatch(patch, pathspec string) ([]gitrepo.Finding, error) {
+// scanPatch scans the added lines of each file section, in the context of
+// the file as its commit records it (readPostImages). A binary section,
+// or one whose file was cut, is a soft finding: it was not scanned (whole).
+func scanPatch(secs []filePatch, pathspec string) ([]gitrepo.Finding, error) {
 	var out []gitrepo.Finding
-	for _, sec := range splitPatch(patch) {
+	for _, sec := range secs {
 		if sec.path == "" {
 			return nil, errPatchPath
 		}
@@ -126,33 +133,90 @@ func scanPatch(patch, pathspec string) ([]gitrepo.Finding, error) {
 		if binaryRe.MatchString(sec.body) {
 			out = append(out, notScanned(gitrepo.File{HomeRel: rel}, gitrepo.KindNotScannedBinary))
 		}
-		out = append(out, gitrepo.ScanLines(rel, gitrepo.AddedLines(sec.body))...)
+		if sec.postCut {
+			out = append(out, notScanned(gitrepo.File{HomeRel: rel}, gitrepo.KindNotScannedLarge))
+		}
+		out = append(out, gitrepo.ScanAdded(rel, gitrepo.AddedLines(sec.body), sec.post)...)
 	}
 	return out, nil
 }
 
+// gitlinkRe is a section of a submodule (gitlink) change: its added line
+// is "Subproject commit <sha>", and there is no file to read.
+var gitlinkRe = regexp.MustCompile(`(?m)^(?:new file mode|index \S+) 160000$`)
+
+// readPostImages reads, for each section with added lines, the file as the
+// section's commit records it (gitrepo.BlobArgv, the runner's output cap),
+// keeping its first maxScanned bytes: the -U0 patch holds only the changed
+// lines, and a line in a multi-line value is classified by the key that
+// opened it, which may be unchanged. It returns a refusal, or nil.
+func readPostImages(ctx context.Context, in netInput, secs []filePatch) []string {
+	n := 0
+	for i := range secs {
+		sec := &secs[i]
+		if sec.path == "" || gitlinkRe.MatchString(sec.body) || len(gitrepo.AddedLines(sec.body)) == 0 {
+			continue
+		}
+		if n++; n > maxOutgoing {
+			return []string{whyTooMany}
+		}
+		if r := sec.readPost(ctx, in); r != nil {
+			return r
+		}
+	}
+	return nil
+}
+
+// readPost reads sec's file at its commit into sec.post; a refusal or nil.
+func (sec *filePatch) readPost(ctx context.Context, in netInput) []string {
+	argv := gitrepo.BlobArgv(in.repo, sec.commit, sec.path)
+	if argv == nil {
+		return []string{refused + "cannot read " + gitrepo.DisplayName(sec.path) + " in an outgoing commit"}
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
+	if note := ui.ReadNote("git cat-file", res, err); note != "" {
+		return []string{refused + note}
+	}
+	data, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	sec.post, sec.postCut = data[:min(len(data), maxScanned)], cut || len(data) > maxScanned
+	return nil
+}
+
 // filePatch is one "diff --git" section: its path ("" when the header
-// could not be read) and the lines after the header.
-type filePatch struct{ path, body string }
+// could not be read), the commit it belongs to ("" before any %H line),
+// the lines after the header, and its file as that commit records it
+// (readPostImages; postCut when that was cut).
+type filePatch struct {
+	path, commit, body string
+	post               string
+	postCut            bool
+}
 
 const diffHeader = "diff --git "
 
 // splitPatch cuts a log -p output into file sections. Lines before the
 // first header (a commit's %H line) belong to no section; a later commit's
-// %H line ends the section before it, after its hunks.
+// %H line ends the section before it, after its hunks. A section's commit
+// is the last %H line before its header: a line that is exactly an object
+// id (inside a hunk every line starts with a prefix character).
 func splitPatch(patch string) []filePatch {
 	var out []filePatch
 	bodyStart := -1
+	commit := ""
 	for off := 0; off < len(patch); {
 		next := len(patch)
 		if i := strings.IndexByte(patch[off:], '\n'); i >= 0 {
 			next = off + i + 1
 		}
-		if rest, ok := strings.CutPrefix(patch[off:next], diffHeader); ok {
+		line := strings.TrimRight(patch[off:next], "\r\n")
+		if actions.ValidObjectID(line) == nil {
+			commit = line
+		}
+		if rest, ok := strings.CutPrefix(line, diffHeader); ok {
 			if bodyStart >= 0 {
 				out[len(out)-1].body = patch[bodyStart:off]
 			}
-			out = append(out, filePatch{path: diffPath(strings.TrimRight(rest, "\r\n"))})
+			out = append(out, filePatch{path: diffPath(rest), commit: commit})
 			bodyStart = next
 		}
 		off = next

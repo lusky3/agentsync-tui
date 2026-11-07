@@ -184,21 +184,50 @@ type Finding struct {
 // is a token shape. A line over 64 KiB is not scanned: it gives one soft
 // finding with no Shown. A line gives at most one finding, hard when any
 // of its findings is.
-func ScanLines(homeRel string, lines []Line) []Finding {
+func ScanLines(homeRel string, lines []Line) []Finding { return ScanAdded(homeRel, lines, "") }
+
+// ScanAdded is ScanLines with the file's post-image post (the whole new
+// file, "" when unknown) as context: an added line inside the body of a
+// TOML multi-line string opened by a secret-named or header key, whose
+// opener the -U0 patch does not hold when only the body changed, is also
+// classified as that key's value (multiLineBodies, classifyBody). Its
+// Shown is mask.Mask: the body line is the secret.
+func ScanAdded(homeRel string, lines []Line, post string) []Finding {
 	config := IsConfigFile(homeRel)
 	shownPath := mask.OneLine(mask.Text(homeRel))
+	bodies := multiLineBodies(post)
 	var out []Finding
 	for _, l := range lines {
 		if len(l.Text) > maxLineBytes {
 			out = append(out, Finding{Path: shownPath, Line: l.N, Kind: KindLineTooLong})
 			continue
 		}
-		kind, hard, found := classify(l.Text, config)
-		if found {
-			out = append(out, Finding{Path: shownPath, Line: l.N, Shown: shown(l.Text), Hard: hard, Kind: kind})
+		if f, ok := scanLine(l, config, bodies); ok {
+			f.Path = shownPath
+			out = append(out, f)
 		}
 	}
 	return out
+}
+
+// scanLine is one added line's finding, if any: the line on its own and,
+// in a multi-line body, as its key's value; hard when either is.
+func scanLine(l Line, config bool, bodies map[int]mlOpener) (Finding, bool) {
+	kind, hard, found := classify(l.Text, config)
+	f := Finding{Line: l.N, Shown: shown(l.Text), Hard: hard, Kind: kind}
+	o, in := bodies[l.N]
+	if !in {
+		return f, found
+	}
+	bKind, bHard, bFound := o.classifyBody(l.Text, config)
+	if !bFound {
+		return f, found
+	}
+	if !found || (bHard && !hard) {
+		f.Hard, f.Kind = bHard, bKind
+	}
+	f.Shown = mask.Mask
+	return f, true
 }
 
 // ScanNewFile scans a whole new (untracked) file. A binary file (a NUL in
