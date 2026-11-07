@@ -1,6 +1,9 @@
 package mask
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestCredentialHardKinds: every R5 hard credential kind is found and named.
 func TestCredentialHardKinds(t *testing.T) {
@@ -113,6 +116,45 @@ func TestValueKeepsShellRefs(t *testing.T) {
 	for _, in := range []string{"Bearer $GH_TOKEN-lit", "$lower", "x $GH_TOKEN"} {
 		if got := Value(in); got != Mask {
 			t.Errorf("Value(%q) = %q, want masked", in, got)
+		}
+	}
+}
+
+// Header rules read the TOML/JSON "=" form with quoted keys, and the value
+// rules read triple-quoted strings: Text masks what Credential finds.
+func TestHeaderAndTripleQuotedAssignments(t *testing.T) {
+	for _, c := range []struct{ in, kind string }{
+		{`Cookie = "session=hunter2abc"`, KindAuthHeader},
+		{`Authorization = "Basic hunter2abc"`, KindAuthHeader},
+		{`"Proxy-Authorization" = "Token hunter2abc"`, KindAuthHeader},
+		{`'Set-Cookie' = 'id=hunter2abc'`, KindAuthHeader},
+		{`X-Goog-Api-Key = "hunter2abc"`, KindAuthHeader},
+		{`Authorization = """Digest hunter2abc"""`, KindAuthHeader},
+		{`API_KEY = """hunter2abc"""`, KindSecretAssignment},
+		{`API_KEY = '''hunter2abc'''`, KindSecretAssignment},
+		{`API_KEY = """hunter2abc`, KindSecretAssignment},
+	} {
+		if got := Text(c.in); strings.Contains(got, "hunter2abc") {
+			t.Errorf("Text(%q) = %q", c.in, got)
+		}
+		if kind, ok := Credential(c.in); !ok || kind != c.kind {
+			t.Errorf("Credential(%q) = %q, %v; want %q", c.in, kind, ok, c.kind)
+		}
+	}
+	for _, in := range []string{
+		`Authorization = "Bearer ${secret:x}"`,
+		`Authorization = "Bearer ${X}"`,
+		`Authorization = "Bearer $GH_TOKEN"`,
+		`Cookie = "${secret:c}"`,
+		`Cookie = ''`,
+		`Set-Cookie = "  "`,
+		`API_KEY = """${secret:a.k}"""`,
+	} {
+		if got := Text(in); got != in {
+			t.Errorf("Text(%q) = %q, want unchanged", in, got)
+		}
+		if kind, ok := Credential(in); ok {
+			t.Errorf("Credential(%q) = %q", in, kind)
 		}
 	}
 }

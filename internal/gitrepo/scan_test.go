@@ -237,13 +237,29 @@ func TestScanNewFileLines(t *testing.T) {
 }
 
 func TestFindingShownIsMasked(t *testing.T) {
+	// One case per classify branch, then the header and triple-quoted
+	// forms in both file kinds: Shown never holds the raw value.
 	cases := []struct{ path, text, raw string }{
-		{scanSkill, "token " + ghpTok, ghpTok},
-		{scanSkill, "the id is " + opaqueTok, opaqueTok},
-		{scanSkill, "password: hunter2xyz", "hunter2xyz"},
-		{scanMCP, "UPSTREAM_ID = '" + opaqueTok + "'", opaqueTok},
-		{scanMCP, "API_KEY = 'abc123def456ghi789'", "abc123def456ghi789"},
+		{scanSkill, "token " + ghpTok, ghpTok},                              // hard credential: token shape
+		{scanSkill, "see https://u:hunter2abc@example.com/x", "hunter2abc"}, // hard credential: URL userinfo
+		{scanMCP, `API_KEY = """hunter2abc`, "hunter2abc"},                  // multi-line opener
+		{scanSkill, "password: hunter2xyz", "hunter2xyz"},                   // secret assignment (soft in prose)
+		{scanMCP, "API_KEY = 'abc123def456ghi789'", "abc123def456ghi789"},   // secret assignment (hard in config)
+		{scanSkill, "the id is " + opaqueTok, opaqueTok},                    // prose token-shaped word
+		{scanMCP, "UPSTREAM_ID = '" + opaqueTok + "'", opaqueTok},           // config: hard token-shaped word
+		{scanMCP, "model = '" + opaqueTok + "'", opaqueTok},                 // config: soft token-shaped word
 		{scanSkill, "\x1b[31mtoken " + ghpTok + "\x1b[0m", "\x1b"},
+	}
+	for _, path := range []string{scanMCP, scanSkill} {
+		for _, text := range []string{ // header pairs and triple quotes
+			`Cookie = "session=hunter2abc"`,
+			`Authorization = "Basic hunter2abc"`,
+			`Proxy-Authorization = "Token hunter2abc"`,
+			`Set-Cookie = "id=hunter2abc"`,
+			`API_KEY = """hunter2abc"""`,
+		} {
+			cases = append(cases, struct{ path, text, raw string }{path, text, "hunter2abc"})
+		}
 	}
 	for _, c := range cases {
 		fs := scanOne(c.path, c.text)
@@ -251,7 +267,7 @@ func TestFindingShownIsMasked(t *testing.T) {
 			t.Fatalf("%q: %d findings", mask.Text(c.text), len(fs))
 		}
 		if strings.Contains(fs[0].Shown, c.raw) {
-			t.Errorf("Shown %q contains the raw value", fs[0].Shown)
+			t.Errorf("%s: Shown %q contains the raw value", c.path, fs[0].Shown)
 		}
 	}
 	long := strings.Repeat("word ", 60) + ghpTok

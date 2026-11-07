@@ -259,8 +259,10 @@ func classify(text string, config bool) (kind string, hard, found bool) {
 	return KindTokenShapedWord, false, hasTokenWord(text)
 }
 
-// tripleQuotes folds TOML's multi-line string quotes into ordinary ones, so
-// mask.Credential reads API_KEY = ”'x”' as API_KEY = 'x'.
+// tripleQuotes folds TOML's multi-line string quotes into ordinary ones
+// for detection only. mask reads triple quotes itself (and so masks what
+// is found); the fold stays because it also turns a few odd quote runs
+// around a reference into a finding, and the scan errs toward one.
 var tripleQuotes = strings.NewReplacer(`"""`, `"`, "'''", "'")
 
 // allPairs is the line's key/value pair and every pair inside its value
@@ -314,10 +316,14 @@ var authKeyRe = regexp.MustCompile(`^(?:(?:proxy-)?authorization|(?:set-)?cookie
 
 func authKey(p kv) bool { return authKeyRe.MatchString(strings.ToLower(p.lastKey())) }
 
-// authLiteral reports a header pair (TOML or JSON form, which mask's
-// "Name: value" rules do not read) whose value, after an optional scheme
-// word, is not only references: it is checked as the header line
-// "Authorization: <value>" would be.
+// authLiteral reports a header pair whose value, unquoted and after an
+// optional scheme word, is not only references: it is checked as the
+// header line "Authorization: <value>" would be. mask's header rules read
+// the TOML and JSON pair forms too, so Text masks every literal this
+// finds; the check stays because it reads some odd quoting around a
+// reference (a stray quote or backtick, a fragment of a broken inline
+// table) as a finding where those rules do not, and the scan errs toward
+// one.
 func authLiteral(p kv) bool {
 	if !authKey(p) {
 		return false

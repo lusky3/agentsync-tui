@@ -25,6 +25,13 @@ const refPat = `\$\{(?:secret:|env:)?[A-Za-z_][A-Za-z0-9_.\-]*\}`
 // The key must not sit inside a reference: "${secret:NAME}" is not a pair.
 const secretKeyPat = `(?:^|[^{]|[^$]\{)(?:token|secret|password|passwd|pwd|api[-_]?key|credential|private[-_]?key|access[-_]?key)`
 
+// headerSep follows a header name: an optional closing quote of a quoted
+// key, then ':' (a header line, JSON) or '=' (TOML), then any run of
+// blanks and opening quotes. A backtick (Markdown code), a TOML triple
+// quote or a quote nested in the value is neither part of the value nor
+// stops the scheme from being recognised.
+const headerSep = `["']?\s*[:=]\s*["'` + "`" + `\s]*`
+
 // wordKeyPat matches keys that are secrets only as whole words: "auth" and
 // "pat" (personal access token), so AUTH=, github_pat= and PAT: are masked
 // while oauth=, compat= and path= are not.
@@ -52,6 +59,10 @@ type rule struct {
 func kvRules(keyPat string) []rule {
 	return []rule{
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*)(\$\{[^}\s]*\}(?:\$\{[^}\s]*\}|[^\s"',;)}\]])*|(?:[^\s"'$]|\$[^{\s])[^\s]*)`), bare: true, kind: KindSecretAssignment},
+		// TOML multi-line strings: the value runs to the closing quotes or,
+		// on an opener line, to the end of the line.
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*""")((?:\\.|[^"\\\n])+)`), kind: KindSecretAssignment},
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*''')([^'\n]+)`), kind: KindSecretAssignment},
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`), kind: KindSecretAssignment},
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`), kind: KindSecretAssignment},
 	}
@@ -64,12 +75,19 @@ var (
 	// Each Text rule keeps group 1 and masks group 2 unless
 	// that group consists only of references.
 	textRules = append([]rule{
-		// Authorization-style headers with any scheme.
-		// A backtick may quote the value (Markdown code), so it is neither
-		// part of the value nor stops the scheme from being recognised.
+		// Authorization-style headers with any scheme, as a header line
+		// ("Name: value") or a TOML/JSON pair ("Name" = "value").
+		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization` + headerSep + `(?:(?:bearer|basic|token|digest)\s+["'` + "`" + `]*)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(\b(?:[a-z0-9]+-)*api-key` + headerSep + `)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		// Cookie headers: the whole cookie string is the secret.
+		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie` + headerSep + `)([^\s"'` + "`" + `][^\n"'` + "`" + `]*)`), kind: KindAuthHeader},
+		// The header-line rules as they were before the pair form: with
+		// one optional quote, a run of quotes around a reference makes
+		// them read a scheme word or a blank as the value. Kept so that
+		// what was a finding still is one; on the lines above they only
+		// re-mask a Mask.
 		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["'` + "`" + `]?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		{re: regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["'` + "`" + `]?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
-		// Cookie headers: the whole cookie string is the secret.
 		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*:\s*["'` + "`" + `]?)([^\n"'` + "`" + `]+)`), kind: KindAuthHeader},
 		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// userinfo in URLs.

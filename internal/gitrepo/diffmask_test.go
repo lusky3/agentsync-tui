@@ -275,3 +275,33 @@ func TestMaskPatchLineUnbalancedTables(t *testing.T) {
 		}
 	}
 }
+
+// Header pairs and triple-quoted secrets are masked in a prose file's
+// diff as in a config file's, and references stay visible.
+func TestMaskPatchLineHeaderPairsInProse(t *testing.T) {
+	for _, path := range []string{scanSkill, scanMCP} {
+		for _, l := range []string{
+			`+Cookie = "session=hunter2abc"`,
+			`+Authorization = "Basic hunter2abc"`,
+			`+Proxy-Authorization = "Token hunter2abc"`,
+			`+Set-Cookie = "id=hunter2abc"`,
+			`+API_KEY = """hunter2abc"""`,
+			`+API_KEY = '''hunter2abc'''`,
+			`+API_KEY = """hunter2abc`,
+			`+"X-Custom-Api-Key" = "hunter2abc"`,
+		} {
+			if got := MaskPatchLine(path, l); strings.Contains(got, "hunter2abc") {
+				t.Errorf("%s %q -> %q", path, l, got)
+			}
+		}
+		for _, l := range []string{
+			`+Authorization = "Bearer ${secret:x}"`,
+			`+Authorization = "Bearer ${X}"`,
+			`+Authorization = "Bearer $GH_TOKEN"`,
+		} {
+			if got := MaskPatchLine(path, l); got != l {
+				t.Errorf("%s %q -> %q, want unchanged", path, l, got)
+			}
+		}
+	}
+}
