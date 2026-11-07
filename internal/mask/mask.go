@@ -60,9 +60,10 @@ func kvRules(keyPat string) []rule {
 	return []rule{
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*)(\$\{[^}\s]*\}(?:\$\{[^}\s]*\}|[^\s"',;)}\]])*|(?:[^\s"'$]|\$[^{\s])[^\s]*)`), bare: true, kind: KindSecretAssignment},
 		// TOML multi-line strings: the value runs to the closing quotes or,
-		// on an opener line, to the end of the line.
-		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*""")((?:\\.|[^"\\\n])+)`), kind: KindSecretAssignment},
-		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*''')([^'\n]+)`), kind: KindSecretAssignment},
+		// on an opener line, to the end of the line. One or two quotes
+		// inside the value (TOML allows them) do not end it.
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*""")((?:\\.|"{1,2}(?:\\.|[^"\\\n])|[^"\\\n])+)`), kind: KindSecretAssignment},
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*''')((?:'{1,2}[^'\n]|[^'\n])+)`), kind: KindSecretAssignment},
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`), kind: KindSecretAssignment},
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`), kind: KindSecretAssignment},
 	}
@@ -79,7 +80,11 @@ var (
 		// ("Name: value") or a TOML/JSON pair ("Name" = "value"). The
 		// header rules have no left word boundary: a name glued to what
 		// precedes it ("{0Authorization = ...", "x_Cookie: ...") is still
-		// read, which masks more, never less.
+		// read, which masks more, never less. The first rule is for a
+		// scheme the second does not know (ApiKey, SSWS, Negotiate): it
+		// masks the word after the scheme and the second rule the scheme
+		// word itself, so no half of "<scheme> <secret>" stays visible.
+		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization` + headerSep + `[a-z][a-z0-9._~+/\-]*[ \t]+["'` + "`" + `]*)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization` + headerSep + `(?:(?:bearer|basic|token|digest)\s+["'` + "`" + `]*)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		{re: regexp.MustCompile(`(?i)((?:[a-z0-9]+-)*api-key` + headerSep + `)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// Cookie headers: the whole cookie string is the secret.
@@ -148,7 +153,8 @@ func onlyRefs(s string) bool {
 }
 
 // Value returns a configuration value for display. References pass through
-// (by the Text rule: ${...}, an upper-case $NAME, backtick-quoted), a value
+// (by the Text rule: ${...}, an upper-case $NAME, backtick-quoted; a token
+// shape in a reference's name is masked), a value
 // that is only an auth scheme and references stays visible apart from
 // token-shaped secrets, and everything else becomes Mask. The decision never depends on
 // the key the value belongs to, so an unrecognised key cannot leak a value.
@@ -158,7 +164,8 @@ func Value(val string) string {
 	}
 	val = Sanitize(val)
 	if textRefsOnly(val) {
-		return val
+		// A reference stays, but not a token shape in its name.
+		return scrubShapes(val)
 	}
 	rest := strings.ReplaceAll(textRefRe.ReplaceAllString(val, ""), "`", "")
 	if textRefRe.MatchString(val) && schemeOnlyRe.MatchString(rest) {
@@ -190,6 +197,11 @@ func Text(s string) string {
 			return sub[1] + Mask + tail + m[len(sub[1])+len(secret):]
 		})
 	}
+	return scrubShapes(s)
+}
+
+// scrubShapes masks every known token shape in s (shapeRes).
+func scrubShapes(s string) string {
 	for _, re := range shapeRes {
 		s = re.ReplaceAllString(s, Mask)
 	}
