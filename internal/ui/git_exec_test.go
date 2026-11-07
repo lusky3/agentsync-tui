@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"strings"
@@ -421,6 +422,31 @@ func TestRunMsgStderrWithTokenURLMaskedInStatus(t *testing.T) {
 	for _, leak := range []string{"ghp_x", "u:"} {
 		if strings.Contains(app.status, leak) || strings.Contains(app.statusLine(), leak) {
 			t.Errorf("status leaks %q: %q", leak, app.status)
+		}
+	}
+}
+
+// runStatus words every way a run can end; a failed exit with no stderr
+// names the action instead.
+func TestRunStatus(t *testing.T) {
+	read := actions.Action{Title: "Doctor\x1b[31m", Argv: []string{"doctor"}, ReadOnly: true}
+	write := gitPush(t)
+	for _, c := range []struct {
+		name string
+		m    RunMsg
+		kind statusKind
+		want string
+	}{
+		{"done", RunMsg{Action: write}, statusOK, "done: Push"},
+		{"interrupted write", RunMsg{Action: write, Err: context.Canceled}, statusWarn, "interrupted: Push"},
+		{"cancelled read", RunMsg{Action: read, Err: context.Canceled}, statusWarn, "cancelled: Doctor"},
+		{"timeout", RunMsg{Action: read, Err: timeoutError{2 * time.Second}}, statusFail, "failed: Doctor: " + timeoutError{2 * time.Second}.Error()},
+		{"error", RunMsg{Action: write, Err: errors.New("boom\nmore")}, statusFail, "error: Push: boom"},
+		{"exit with stderr", RunMsg{Action: write, Result: runner.Result{ExitCode: 2, Stderr: "fatal: x\nmore"}}, statusFail, "failed (exit 2): fatal: x"},
+		{"exit without stderr", RunMsg{Action: write, Result: runner.Result{ExitCode: 1}}, statusFail, "failed (exit 1): Push"},
+	} {
+		if kind, got := runStatus(c.m); kind != c.kind || got != c.want {
+			t.Errorf("%s: runStatus = %v %q, want %v %q", c.name, kind, got, c.kind, c.want)
 		}
 	}
 }

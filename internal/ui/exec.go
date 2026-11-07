@@ -357,23 +357,11 @@ func exitResult(err error) (runner.Result, error) {
 }
 
 // finish logs a RunMsg, sets the status line and refreshes the active
-// screen; after a write the other screens are marked stale.
+// screen; after a write the other screens are marked stale. When the run
+// was a successful step of a confirmed chain, the next step starts instead.
 func (a *App) finish(m RunMsg) tea.Cmd {
-	var dur time.Duration
-	var then []actions.Action
-	if a.running != nil {
-		dur = time.Since(a.running.start)
-		then = a.running.then
-		if a.running.cancel != nil {
-			a.running.cancel()
-		}
-		a.running = nil
-	}
-	oc := outcome(m.Result, m.Err)
-	if oc == "cancelled" && !m.Action.ReadOnly {
-		oc = "interrupted" // a write was sent SIGINT (interrupt), not just dropped
-	}
-	a.record(m.Action, oc, dur)
+	dur, then := a.endRun()
+	a.record(m.Action, runOutcome(m), dur)
 	if a.quitting {
 		// q was pressed while this run was in flight: it is now cancelled
 		// and logged, so exit. The rest of a confirmed chain is not run;
@@ -381,28 +369,8 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 		a.recordNotRun(then)
 		return tea.Quit
 	}
-	title := mask.Sanitize(m.Action.Title)
-	switch {
-	case errors.Is(m.Err, context.Canceled) && !m.Action.ReadOnly:
-		a.setStatus(statusWarn, "interrupted: "+title)
-	case errors.Is(m.Err, context.Canceled):
-		a.setStatus(statusWarn, "cancelled: "+title)
-	case errors.As(m.Err, new(timeoutError)):
-		a.setStatus(statusFail, "failed: "+title+": "+m.Err.Error())
-	case m.Err != nil:
-		a.setStatus(statusFail, "error: "+title+": "+mask.FirstLine(m.Err.Error()))
-	case m.Result.ExitCode != 0:
-		msg := "failed (exit " + strconv.Itoa(m.Result.ExitCode) + "): "
-		if l := mask.FirstLine(m.Result.Stderr); l != "" {
-			msg += l
-		} else {
-			msg += title
-		}
-		a.setStatus(statusFail, msg)
-	default:
-		a.setStatus(statusOK, "done: "+title)
-	}
-	ok := m.Err == nil && m.Result.ExitCode == 0
+	ok := m.succeeded()
+	a.setStatus(runStatus(m))
 	if len(then) > 0 && !ok {
 		a.status += "; not run: " + titles(then)
 	}
@@ -416,11 +384,71 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 		// the chain has ended.
 		return tea.Batch(append(cmds, a.start(then[0], then[1:]))...)
 	}
-	if !m.Action.ReadOnly {
-		cmds = append(cmds, a.chipCmd()) // apply/revert/import may change health
+	return tea.Batch(append(cmds, a.afterRun(m.Action)...)...)
+}
+
+// endRun clears the in-flight run, releasing its context, and returns how
+// long it ran and the rest of its chain (zero and nil when none was
+// running).
+func (a *App) endRun() (time.Duration, []actions.Action) {
+	r := a.running
+	if r == nil {
+		return 0, nil
 	}
-	cmds = append(cmds, a.next(), a.refreshActive())
-	return tea.Batch(cmds...)
+	if r.cancel != nil {
+		r.cancel()
+	}
+	a.running = nil
+	return time.Since(r.start), r.then
+}
+
+// succeeded reports whether the run exited 0 without an error.
+func (m RunMsg) succeeded() bool {
+	return m.Err == nil && m.Result.ExitCode == 0
+}
+
+// runOutcome is the activity-log outcome of a finished run. A cancelled
+// write was sent SIGINT (interrupted), not just dropped.
+func runOutcome(m RunMsg) string {
+	oc := outcome(m.Result, m.Err)
+	if oc == "cancelled" && !m.Action.ReadOnly {
+		return "interrupted"
+	}
+	return oc
+}
+
+// runStatus is the status line for a finished run: the masked title, or
+// for a non-zero exit the first stderr line when there is one.
+func runStatus(m RunMsg) (statusKind, string) {
+	title := mask.Sanitize(m.Action.Title)
+	switch {
+	case errors.Is(m.Err, context.Canceled) && !m.Action.ReadOnly:
+		return statusWarn, "interrupted: " + title
+	case errors.Is(m.Err, context.Canceled):
+		return statusWarn, "cancelled: " + title
+	case errors.As(m.Err, new(timeoutError)):
+		return statusFail, "failed: " + title + ": " + m.Err.Error()
+	case m.Err != nil:
+		return statusFail, "error: " + title + ": " + mask.FirstLine(m.Err.Error())
+	case m.Result.ExitCode != 0:
+		detail := mask.FirstLine(m.Result.Stderr)
+		if detail == "" {
+			detail = title
+		}
+		return statusFail, "failed (exit " + strconv.Itoa(m.Result.ExitCode) + "): " + detail
+	}
+	return statusOK, "done: " + title
+}
+
+// afterRun is the follow-up of a run that ended without starting a chain
+// step, in order: the health chip after a write (apply/revert/import may
+// change health), the next queued action and the active screen's refresh.
+func (a *App) afterRun(act actions.Action) []tea.Cmd {
+	var cmds []tea.Cmd
+	if !act.ReadOnly {
+		cmds = append(cmds, a.chipCmd())
+	}
+	return append(cmds, a.next(), a.refreshActive())
 }
 
 // recordNotRun logs each chain step dropped by a quit as not run.

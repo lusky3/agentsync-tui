@@ -163,30 +163,19 @@ func clipMiddle(box string, height int) string {
 	return strings.Join(keep, "\n")
 }
 
-// render builds the box at inner width w in the given mode.
+// render builds the box at inner width w in the given mode: the title,
+// one $ line per step in run order, the scope (or repository) line, each
+// step's warning, the badges and the prompt.
 func (m *modal) render(w int, mode renderMode) string {
-	var b strings.Builder
 	gap := "\n"
 	if mode == renderCompact {
 		gap = ""
 	}
 	steps := m.steps()
-	title := mask.Sanitize(m.act.Title)
-	if len(steps) > 1 {
-		title = joinTitles(steps, ", then ")
-	}
-	b.WriteString(styleBold.Render(title) + "\n" + gap)
-	// One $ line per step, in run order.
-	var destructive, network, interactive bool
+	var b strings.Builder
+	b.WriteString(styleBold.Render(m.title(steps)) + "\n" + gap)
 	for _, s := range steps {
-		cmd := "  $ " + mask.Sanitize(s.Display())
-		if mode != renderFull {
-			cmd = ansi.Truncate(cmd, w-4, "…") // w includes the border and 1-column padding each side
-		}
-		b.WriteString(cmd + "\n")
-		destructive = destructive || s.Destructive
-		network = network || s.Network
-		interactive = interactive || (s.Interactive && s.Program == "")
+		b.WriteString(commandLine(s, w, mode) + "\n")
 	}
 	b.WriteString("  " + styleDim.Render(m.scopeLine()) + "\n")
 	for _, s := range steps {
@@ -194,31 +183,75 @@ func (m *modal) render(w int, mode renderMode) string {
 			b.WriteString(gap + styleError.Render("! "+mask.Sanitize(s.Warning)) + "\n")
 		}
 	}
-	// TypedConfirm asks for the verb but is not destructive: no badge.
-	var badges []string
-	if destructive {
-		badges = append(badges, styleError.Render("[destructive]"))
+	if line := badgesOf(steps).render(); line != "" {
+		b.WriteString(gap + line + "\n")
 	}
-	if network {
-		badges = append(badges, styleWarn.Render("[network]"))
-	}
-	if interactive {
-		badges = append(badges, styleInfo.Render("[interactive]"))
-	}
-	if len(badges) > 0 {
-		b.WriteString(gap + strings.Join(badges, " ") + "\n")
-	}
-	b.WriteString(gap)
-	if m.verb == "" {
-		b.WriteString("Run it? y = yes, n/esc = no")
-		if m.hint != "" {
-			b.WriteString("\n" + styleWarn.Render(m.hint))
-		}
-	} else {
-		fmt.Fprintf(&b, "Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input.Value)
-		if m.hint != "" {
-			b.WriteString("\n" + styleWarn.Render(m.hint))
-		}
-	}
+	b.WriteString(gap + m.prompt())
 	return styleModal.Width(w).Render(b.String())
+}
+
+// title is the modal's heading: the action's title, or every step's title
+// in run order for a chain.
+func (m *modal) title(steps []actions.Action) string {
+	if len(steps) > 1 {
+		return joinTitles(steps, ", then ")
+	}
+	return mask.Sanitize(m.act.Title)
+}
+
+// commandLine is the "$ …" line of one step. Outside renderFull it is cut to
+// one line; w includes the border and 1-column padding each side.
+func commandLine(s actions.Action, w int, mode renderMode) string {
+	cmd := "  $ " + mask.Sanitize(s.Display())
+	if mode != renderFull {
+		cmd = ansi.Truncate(cmd, w-4, "…")
+	}
+	return cmd
+}
+
+// badges is which badges a confirmation shows: each is set when any step
+// of the chain has the property. TypedConfirm asks for the verb but is not
+// destructive, so it has no badge.
+type badges struct {
+	destructive, network, interactive bool
+}
+
+// badgesOf collects the badges of steps. Only an agentsync command is
+// handed the terminal; git never is (R1).
+func badgesOf(steps []actions.Action) badges {
+	var bs badges
+	for _, s := range steps {
+		bs.destructive = bs.destructive || s.Destructive
+		bs.network = bs.network || s.Network
+		bs.interactive = bs.interactive || (s.Interactive && s.Program == "")
+	}
+	return bs
+}
+
+// render is the styled badges, space-separated, or "" when there are none.
+func (bs badges) render() string {
+	var out []string
+	if bs.destructive {
+		out = append(out, styleError.Render("[destructive]"))
+	}
+	if bs.network {
+		out = append(out, styleWarn.Render("[network]"))
+	}
+	if bs.interactive {
+		out = append(out, styleInfo.Render("[interactive]"))
+	}
+	return strings.Join(out, " ")
+}
+
+// prompt is the last line of the box: y/n, or the typed verb so far for a
+// TypedConfirm action, followed by any hint.
+func (m *modal) prompt() string {
+	p := "Run it? y = yes, n/esc = no"
+	if m.verb != "" {
+		p = fmt.Sprintf("Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input.Value)
+	}
+	if m.hint != "" {
+		p += "\n" + styleWarn.Render(m.hint)
+	}
+	return p
 }
