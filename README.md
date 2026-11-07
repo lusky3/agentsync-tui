@@ -186,8 +186,9 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   and `commit --message=<msg> -- <paths>` (one confirmation for both; only
   the files you selected, never `add -A` or `commit -a`), `fetch <remote>`,
   `pull --ff-only --no-rebase --no-autostash`, and `push --no-follow-tags
-  --no-recurse-submodules <remote> <scanned sha>:refs/heads/<branch>`: the
-  commit the pre-push scan read, to the current branch's name on its
+  --no-recurse-submodules <remote> <scanned sha>^{commit}:refs/heads/<branch>`:
+  the commit the pre-push scan read (peeled, so a ref named like the object
+  id cannot stand in for it), to the current branch's name on its
   upstream's remote. A push is never forced and never sends another branch,
   a tag or a submodule, whatever the repository's push configuration says.
   Everything else it runs is read-only: `status`, `diff`, `rev-parse`,

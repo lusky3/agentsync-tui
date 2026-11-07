@@ -379,9 +379,12 @@ func ValidObjectID(s string) error {
 }
 
 // GitPush builds `-C <top> push --no-follow-tags --no-recurse-submodules
-// <remote> <sha>:refs/heads/<branch>` (D6, Ruling 32): one explicit,
-// non-forced, single-branch refspec whose source is the commit the caller
-// scanned, so a commit made on the branch after the scan is never sent.
+// <remote> <sha>^{commit}:refs/heads/<branch>` (D6, Ruling 32): one
+// explicit, non-forced, single-branch refspec whose source is the commit
+// the caller scanned, so a commit made on the branch after the scan is
+// never sent. The source is peeled (^{commit}): git resolves a bare
+// 40-hex push source to a ref of that name when one exists
+// (refs/heads/<sha>), which could point at an unscanned commit.
 // git still updates the remote-tracking ref through the fetch refspec. An
 // explicit refspec overrides the repository's remote.<remote>.push
 // refspecs (which take precedence over push.default and can force every
@@ -404,7 +407,7 @@ func GitPush(r GitRepo, remote, branch, sha string) (Action, error) {
 	if err := ValidObjectID(sha); err != nil {
 		return Action{}, err
 	}
-	a := gitAction("Push", r.head("push", "--no-follow-tags", "--no-recurse-submodules", remote, sha+":refs/heads/"+branch))
+	a := gitAction("Push", r.head("push", "--no-follow-tags", "--no-recurse-submodules", remote, sha+"^{commit}:refs/heads/"+branch))
 	a.Network = true
 	return a, nil
 }

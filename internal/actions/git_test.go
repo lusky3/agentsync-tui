@@ -221,7 +221,7 @@ func TestPullAndPushArgvPinned(t *testing.T) {
 		t.Errorf("pull flags = %+v", pull)
 	}
 	push := mustAction(t)(GitPush(testRepo, "origin", "main", testSHA))
-	want := []string{"-C", testTop, "push", "--no-follow-tags", "--no-recurse-submodules", "origin", testSHA + ":refs/heads/main"}
+	want := []string{"-C", testTop, "push", "--no-follow-tags", "--no-recurse-submodules", "origin", testSHA + "^{commit}:refs/heads/main"}
 	if !slices.Equal(push.Argv, want) {
 		t.Errorf("push argv = %q, want %q", push.Argv, want)
 	}

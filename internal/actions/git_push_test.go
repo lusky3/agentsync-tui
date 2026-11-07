@@ -307,3 +307,30 @@ func TestGitPushSendsTheGivenCommitOnly(t *testing.T) {
 		t.Errorf("origin/main = %s, want %s", got, scanned)
 	}
 }
+
+// A ref whose name is the scanned commit's object id (refs/heads/<sha>,
+// which git can be made to create) wins over the object id when git
+// resolves a bare 40-hex push source; GitPush peels the source
+// (<sha>^{commit}) so it is always the object itself.
+func TestGitPushSourceIsTheObjectNotARefNamedLikeIt(t *testing.T) {
+	f := newPushFixture(t)
+	f.g.commit(f.work, "f", "2")
+	scanned := f.g.must(f.work, "rev-parse", "main")
+	f.g.commit(f.work, "f", "3")
+	later := f.g.must(f.work, "rev-parse", "main")
+	f.g.must(f.work, "update-ref", "refs/heads/"+scanned, later)
+	top, err := filepath.EvalSymlinks(f.work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := mustAction(t)(GitPush(GitRepo{Top: top}, "origin", "main", scanned))
+	if out, err := f.g.run("", a.Argv...); err != nil {
+		t.Fatalf("push: %v\n%s", err, out)
+	}
+	if got := f.remoteRef("refs/heads/main"); got != scanned {
+		t.Errorf("remote main = %s, want the scanned %s (not %s)", got, scanned, later)
+	}
+	if got := f.g.must(f.work, "rev-parse", "refs/remotes/origin/main"); got != scanned {
+		t.Errorf("origin/main = %s, want %s", got, scanned)
+	}
+}
