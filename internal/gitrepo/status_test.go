@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -138,8 +141,33 @@ func write(t *testing.T, dir, rel, body string) string {
 func gitMayFail(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = gittest.Env(t)
+	cmd.Env = pinnedEnv(t)
 	_ = cmd.Run()
+}
+
+// pinnedGit is gittest.Git with pinnedEnv's fixed dates.
+func pinnedGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = pinnedEnv(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// pinnedCommit is gittest.Commit with pinnedEnv's fixed dates.
+func pinnedCommit(t *testing.T, dir, msg string, files map[string]string) {
+	t.Helper()
+	paths := make([]string, 0, len(files))
+	for p, body := range files {
+		write(t, dir, p, body)
+		paths = append(paths, p)
+	}
+	slices.Sort(paths)
+	if len(paths) > 0 {
+		pinnedGit(t, dir, append([]string{"add", "--"}, paths...)...)
+	}
+	pinnedGit(t, dir, "commit", "-q", "--allow-empty", "--message="+msg)
 }
 
 // status runs StatusArgv for r through the production git Program.
@@ -181,15 +209,15 @@ func repoAt(t *testing.T) (string, Repo) {
 func genAheadBehind(t *testing.T) Repo {
 	dir, r := repoAt(t)
 	remote := gittest.Bare(t)
-	gittest.Commit(t, dir, initMsg, map[string]string{skillPath: "v1\n"})
-	gittest.Git(t, dir, "remote", "add", originName, remote)
-	gittest.Git(t, dir, "push", "-q", "-u", originName, "main")
-	gittest.Commit(t, dir, "remote side", map[string]string{"skills/r.md": "r\n"})
-	gittest.Git(t, dir, "push", "-q", originName, "main")
-	gittest.Git(t, dir, "reset", "-q", "--hard", "HEAD~1")
-	gittest.Commit(t, dir, "local 1", map[string]string{"skills/l1.md": "1\n"})
-	gittest.Commit(t, dir, "local 2", map[string]string{"skills/l2.md": "2\n"})
-	gittest.Git(t, dir, "fetch", "-q", originName)
+	pinnedCommit(t, dir, initMsg, map[string]string{skillPath: "v1\n"})
+	pinnedGit(t, dir, "remote", "add", originName, remote)
+	pinnedGit(t, dir, "push", "-q", "-u", originName, "main")
+	pinnedCommit(t, dir, "remote side", map[string]string{"skills/r.md": "r\n"})
+	pinnedGit(t, dir, "push", "-q", originName, "main")
+	pinnedGit(t, dir, "reset", "-q", "--hard", "HEAD~1")
+	pinnedCommit(t, dir, "local 1", map[string]string{"skills/l1.md": "1\n"})
+	pinnedCommit(t, dir, "local 2", map[string]string{"skills/l2.md": "2\n"})
+	pinnedGit(t, dir, "fetch", "-q", originName)
 	write(t, dir, skillPath, "v2\n")
 	return r
 }
@@ -198,21 +226,21 @@ func genAheadBehind(t *testing.T) Repo {
 // a merge conflict.
 func genKinds(t *testing.T) Repo {
 	dir, r := repoAt(t)
-	gittest.Commit(t, dir, initMsg, map[string]string{
+	pinnedCommit(t, dir, initMsg, map[string]string{
 		modPath: "m\n", "skills/d.md": "d\n", renOld: "rename me please\n",
 		"skills/t.md": "t\n", memoryPath: "base\n",
 	})
-	gittest.Git(t, dir, "branch", otherBranch)
-	gittest.Commit(t, dir, "ours", map[string]string{memoryPath: "ours\n"})
-	gittest.Git(t, dir, gitCheckout, "-q", otherBranch)
-	gittest.Commit(t, dir, "theirs", map[string]string{memoryPath: "theirs\n"})
-	gittest.Git(t, dir, gitCheckout, "-q", "main")
+	pinnedGit(t, dir, "branch", otherBranch)
+	pinnedCommit(t, dir, "ours", map[string]string{memoryPath: "ours\n"})
+	pinnedGit(t, dir, gitCheckout, "-q", otherBranch)
+	pinnedCommit(t, dir, "theirs", map[string]string{memoryPath: "theirs\n"})
+	pinnedGit(t, dir, gitCheckout, "-q", "main")
 	gitMayFail(t, dir, "merge", "-q", otherBranch)
 	write(t, dir, modPath, "m2\n")
 	if err := os.Remove(filepath.Join(dir, skillsDir, "d.md")); err != nil {
 		t.Fatal(err)
 	}
-	gittest.Git(t, dir, "mv", renOld, renNew)
+	pinnedGit(t, dir, "mv", renOld, renNew)
 	tm := filepath.Join(dir, skillsDir, "t.md")
 	if err := os.Remove(tm); err != nil {
 		t.Fatal(err)
@@ -221,7 +249,7 @@ func genKinds(t *testing.T) Repo {
 		t.Fatal(err)
 	}
 	write(t, dir, addedPath, "a\n")
-	gittest.Git(t, dir, "add", "--", addedPath)
+	pinnedGit(t, dir, "add", "--", addedPath)
 	write(t, dir, "skills/u.md", "u\n")
 	return r
 }
@@ -234,16 +262,16 @@ func genUnborn(t *testing.T) Repo {
 
 func genDetached(t *testing.T) Repo {
 	dir, r := repoAt(t)
-	gittest.Commit(t, dir, initMsg, map[string]string{skillPath: "1\n"})
-	gittest.Commit(t, dir, "second", map[string]string{skillPath: "2\n"})
-	gittest.Git(t, dir, gitCheckout, "-q", "--detach", "HEAD~1")
+	pinnedCommit(t, dir, initMsg, map[string]string{skillPath: "1\n"})
+	pinnedCommit(t, dir, "second", map[string]string{skillPath: "2\n"})
+	pinnedGit(t, dir, gitCheckout, "-q", "--detach", "HEAD~1")
 	write(t, dir, skillPath, "3\n")
 	return r
 }
 
 func genMaintainer(t *testing.T) Repo {
 	dir, r := repoAt(t)
-	gittest.Commit(t, dir, initMsg, map[string]string{tomlName: "agents = []\n"})
+	pinnedCommit(t, dir, initMsg, map[string]string{tomlName: "agents = []\n"})
 	write(t, dir, mcpPath, "[x]\n")
 	write(t, dir, "kiro-agents-src/a", "a\n")
 	write(t, dir, setupSh, "#!/bin/sh\n")
@@ -258,7 +286,7 @@ var hostileNames = []string{
 
 func genHostile(t *testing.T) Repo {
 	dir, r := repoAt(t)
-	gittest.Commit(t, dir, initMsg, map[string]string{spacePath: "1\n"})
+	pinnedCommit(t, dir, initMsg, map[string]string{spacePath: "1\n"})
 	write(t, dir, spacePath, "2\n")
 	for _, n := range hostileNames {
 		write(t, dir, n, "x\n")
@@ -376,7 +404,7 @@ func TestDisplayNamesNeverCollide(t *testing.T) {
 		{"a\xffb", "a\ufffdb"},
 		{"a\nb", "a b"},
 		// A plain name spelling another name's quoted rendering.
-		{zwName, `zwName (unusual name)`},
+		{zwName, strconv.QuoteToASCII(zwName) + " (unusual name)"},
 	}
 	for _, p := range pairs {
 		if DisplayName(p[0]) == DisplayName(p[1]) {
@@ -672,6 +700,12 @@ func FuzzParseStatus(f *testing.F) {
 	})
 }
 
+// underPathspec reports whether p lies strictly below the home pathspec.
+func underPathspec(p, pathspec string) bool {
+	_, ok := homeRelative(p, pathspec)
+	return ok
+}
+
 // checkFuzzed asserts FuzzParseStatus's invariants: every path is local
 // and below the home, a selectable path passes ValidGitPath, and only a
 // selectable Owned file is a default.
@@ -688,4 +722,31 @@ func checkFuzzed(t *testing.T, s Status, r Repo) {
 			t.Fatalf("default %+v", file)
 		}
 	}
+}
+
+func TestUnreadableFileFailsClosedWithItsOwnNote(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a non-root unix user (mode 000 must deny the read)")
+	}
+	r := atRoot(t)
+	p := write(t, r.Top, skillPath, "fine\n")
+	if err := os.Chmod(p, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
+	f := get(t, parse(t, recs(headerOID, untracked(skillPath)), r), skillPath)
+	if f.Class != Sensitive || f.Selectable || f.Default {
+		t.Fatalf("unreadable = %+v, want Sensitive, not selectable", f)
+	}
+	if f.Note != noteUnreadable || strings.Contains(f.Note, "secret") {
+		t.Fatalf("unreadable note = %q, want %q", f.Note, noteUnreadable)
+	}
+}
+
+// pinnedEnv is t's hermetic git env with fixed author and committer dates,
+// so TestRegenerate writes the same commit ids every run.
+func pinnedEnv(t *testing.T) []string {
+	t.Helper()
+	const date = "2026-01-01T00:00:00Z"
+	return append(slices.Clone(gittest.Env(t)), "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
 }

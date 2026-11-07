@@ -126,6 +126,7 @@ const (
 	noteOther       = "not an agentsync file"
 	noteState       = "agentsync state directory: never committed"
 	noteSensitive   = "looks like a secret (private key, age identity or env file): never committed"
+	noteUnreadable  = "could not be read; not selectable"
 	noteVault       = "encrypted vault: commit only if you mean to share the ciphertext"
 	noteUnusual     = "unusual name, not selectable"
 	noteCredName    = "the name looks like a credential, not selectable"
@@ -167,10 +168,11 @@ var (
 
 // The parse errors; no message ever holds record bytes.
 var (
-	errRecord  = errors.New("unexpected record")
-	errNoOrig  = errors.New("rename without its old path")
-	errAB      = errors.New("malformed branch.ab header")
-	errChanged = errors.New("the file changed while it was opened")
+	errRecord     = errors.New("unexpected record")
+	errNoOrig     = errors.New("rename without its old path")
+	errAB         = errors.New("malformed branch.ab header")
+	errChanged    = errors.New("the file changed while it was opened")
+	errNotRegular = errors.New("not a regular file")
 )
 
 // ParseStatus parses StatusArgv's output for r and classifies every file,
@@ -295,9 +297,10 @@ func (p *parser) renamed(rec, orig string) error {
 	if err != nil {
 		return err
 	}
-	kind := Renamed
+	var kind Kind
 	switch f[8][0] {
 	case 'R':
+		kind = Renamed
 	case 'C':
 		kind = Added
 	default:
@@ -346,12 +349,6 @@ func local(p string) bool {
 	return true
 }
 
-// underPathspec reports whether p lies strictly below the home pathspec.
-func underPathspec(p, pathspec string) bool {
-	_, ok := homeRelative(p, pathspec)
-	return ok
-}
-
 // homeRelative is p relative to the home, when p lies strictly below it.
 func homeRelative(p, pathspec string) (string, bool) {
 	if pathspec == "." {
@@ -389,6 +386,9 @@ func (p *parser) restrict(f *File, c content) {
 		if note := pathIssue(f.Path, c.special); note != "" {
 			f.Class, f.Note, f.Selectable = Unusual, note, false
 		}
+	}
+	if c.unreadable && f.Class == Sensitive {
+		f.Note = noteUnreadable
 	}
 	if c.link {
 		f.Note = joinNote(f.Note, noteSymlink)
@@ -501,15 +501,21 @@ func maskedName(s string) string {
 
 // content is what inspect read of a worktree file.
 type content struct {
-	head          []byte
-	age           bool
-	link, special bool
+	head []byte
+	// age is set when the file holds an age identity or could not be
+	// read (fail closed); unreadable tells the two apart for the note.
+	age, unreadable bool
+	link, special   bool
 }
+
+// unreadable is a file inspect could not read: Sensitive, never selectable.
+var unreadable = content{age: true, unreadable: true}
 
 // inspect reads rel under top: its first 4 KiB and an age-identity scan
 // of the whole file. A symlink (or a path whose parent resolves outside
 // top) is not read; a directory or special file is not read; a missing
-// file has no content; a failed read counts as an age identity.
+// file has no content; a failed read counts as an age identity and is
+// marked unreadable.
 func inspect(top, rel string) content {
 	if strings.HasSuffix(rel, "/") {
 		return content{special: true}
@@ -521,7 +527,7 @@ func inspect(top, rel string) content {
 	f, kind, err := openRegular(full)
 	switch {
 	case err != nil:
-		return content{age: true}
+		return unreadable
 	case kind == fileLink:
 		return content{link: true}
 	case kind == fileSpecial:
@@ -532,10 +538,13 @@ func inspect(top, rel string) content {
 	defer func() { _ = f.Close() }()
 	head, err := io.ReadAll(io.LimitReader(f, headSize))
 	if err != nil {
-		return content{age: true}
+		return unreadable
 	}
 	age, err := scanAge(io.MultiReader(bytes.NewReader(head), f))
-	return content{head: head, age: age || err != nil}
+	if err != nil {
+		return unreadable
+	}
+	return content{head: head, age: age}
 }
 
 // parentWithin reports whether full's parent directory, resolved, lies
@@ -558,8 +567,9 @@ const (
 	fileSpecial
 )
 
-// openRegular opens p only when os.Lstat says it is a regular file and
-// the opened file is the one Lstat saw (never through a symlink). A
+// openRegular opens p only when os.Lstat says it is a regular file, the
+// open itself refuses a symlink or non-regular file swapped in after the
+// Lstat (openRegularFile), and the opened file is the one Lstat saw. A
 // missing path, a symlink or a special file returns a nil file and no
 // error.
 func openRegular(p string) (*os.File, fileKind, error) {
@@ -574,7 +584,7 @@ func openRegular(p string) (*os.File, fileKind, error) {
 	case !fi.Mode().IsRegular():
 		return nil, fileSpecial, nil
 	}
-	f, err := os.Open(p)
+	f, err := openRegularFile(p)
 	if err != nil {
 		return nil, fileRegular, err
 	}
@@ -585,13 +595,24 @@ func openRegular(p string) (*os.File, fileKind, error) {
 	return f, fileRegular, nil
 }
 
-// HasAgeIdentity reports whether the file at path holds
+// regularOnly returns f when fstat calls it a regular file, else closes
+// it and refuses.
+func regularOnly(f *os.File) (*os.File, error) {
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errNotRegular
+	}
+	return f, nil
+}
+
+// HasAgeIdentity reports whether the file named name holds
 // "AGE-SECRET-KEY-" anywhere, streaming the whole file (no size cap) and
 // matching across read boundaries. It never follows a symlink: a symlink,
 // a special file or a missing path is false. A read error counts as found
 // and is returned.
-func HasAgeIdentity(path string) (bool, error) {
-	f, _, err := openRegular(path)
+func HasAgeIdentity(name string) (bool, error) {
+	f, _, err := openRegular(name)
 	if err != nil {
 		return true, err
 	}
