@@ -86,6 +86,7 @@ func TestCommitMessageRefusals(t *testing.T) {
 		"zero-width":  "a\u200bb",
 		"201 runes":   strings.Repeat("é", 201),
 		"ghp token":   "add ghp_abcdefghijklmnop",
+		"slack xoxs":  "use xoxs-12345678901234",
 		"token-shape": "rotate x1f3a9c2d7e8b1f0",
 		"auth header": "Authorization: Basic dXNlcjpwYXNz",
 		"invalid utf": "a\xffb",
