@@ -50,3 +50,57 @@ func TestOpenRegularFileNeverBlocksOnFIFO(t *testing.T) {
 	}
 	_ = f.Close()
 }
+
+// TestReadRegularRefusesFIFOAndSymlinks: a FIFO, a symlink to one and a
+// symlink to a regular file are refused at once; a regular file is read
+// up to max bytes.
+func TestReadRegularRefusesFIFOAndSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	regular := write(t, dir, "r", "0123456789")
+	for name, target := range map[string]string{"fifo-link": fifo, "file-link": regular} {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{fifo, filepath.Join(dir, "fifo-link"), filepath.Join(dir, "file-link")} {
+		readRefusedPromptly(t, p)
+	}
+	if _, err := ReadRegular(filepath.Join(dir, "fifo-link"), 1); !errors.Is(err, ErrSymlink) {
+		t.Errorf("symlink error %v, want ErrSymlink", err)
+	}
+	if _, err := ReadRegular(fifo, 1); !errors.Is(err, ErrNotRegular) {
+		t.Errorf("fifo error %v, want ErrNotRegular", err)
+	}
+	if _, err := ReadRegular(filepath.Join(dir, "missing"), 1); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing error %v, want ErrNotExist", err)
+	}
+	b, err := ReadRegular(regular, 4)
+	if err != nil || string(b) != "0123" {
+		t.Errorf("capped read = %q, %v", b, err)
+	}
+	if b, err := ReadRegular(regular, 100); err != nil || string(b) != "0123456789" {
+		t.Errorf("full read = %q, %v", b, err)
+	}
+}
+
+// readRefusedPromptly asserts ReadRegular refuses p within five seconds.
+func readRefusedPromptly(t *testing.T, p string) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		_, err := ReadRegular(p, 100)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Errorf("%s: read, want refused", filepath.Base(p))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s: read blocked", filepath.Base(p))
+	}
+}

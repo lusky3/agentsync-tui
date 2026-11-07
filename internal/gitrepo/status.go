@@ -172,7 +172,13 @@ var (
 	errNoOrig     = errors.New("rename without its old path")
 	errAB         = errors.New("malformed branch.ab header")
 	errChanged    = errors.New("the file changed while it was opened")
-	errNotRegular = errors.New("not a regular file")
+	errNotRegular = ErrNotRegular
+)
+
+// The errors ReadRegular returns for what it refuses to read.
+var (
+	ErrSymlink    = errors.New("a symlink is not followed")
+	ErrNotRegular = errors.New("not a regular file")
 )
 
 // ParseStatus parses StatusArgv's output for r and classifies every file,
@@ -604,6 +610,31 @@ func regularOnly(f *os.File) (*os.File, error) {
 		return nil, errNotRegular
 	}
 	return f, nil
+}
+
+// ReadRegular reads at most limit bytes of the regular file name, never
+// through a symlink and never blocking on a FIFO: name is Lstat'ed, opened
+// with O_NOFOLLOW|O_NONBLOCK where the system has them, and the opened file
+// must be the regular file Lstat saw. A symlink is ErrSymlink, a directory
+// or special file (or one swapped in after the Lstat) ErrNotRegular, and a
+// missing file wraps os.ErrNotExist. Callers that need to know whether the
+// file was longer pass limit+1.
+func ReadRegular(name string, limit int64) ([]byte, error) {
+	f, kind, err := openRegular(name)
+	switch {
+	case errors.Is(err, errChanged), errors.Is(err, syscall.ELOOP):
+		return nil, fmt.Errorf("%w: %w", ErrNotRegular, err)
+	case err != nil:
+		return nil, err
+	case kind == fileLink:
+		return nil, ErrSymlink
+	case kind == fileSpecial:
+		return nil, ErrNotRegular
+	case f == nil:
+		return nil, &os.PathError{Op: "read", Path: name, Err: os.ErrNotExist}
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, max(limit, 0)))
 }
 
 // HasAgeIdentity reports whether the file named name holds
