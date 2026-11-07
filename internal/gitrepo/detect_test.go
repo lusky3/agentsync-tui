@@ -679,7 +679,7 @@ func TestInspectSequencerAfterManualCommit(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(gd, "CHERRY_PICK_HEAD")); err == nil {
 		t.Fatal("CHERRY_PICK_HEAD still there")
 	}
-	if got := InspectGitDir(gd).InProgress; got == "" {
+	if InspectGitDir(gd).InProgress == "" {
 		t.Fatal("sequence in progress not reported")
 	}
 }
