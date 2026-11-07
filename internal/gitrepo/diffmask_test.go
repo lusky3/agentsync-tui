@@ -321,6 +321,12 @@ func TestMaskPatchLineEnvTableHidesVisibleKeys(t *testing.T) {
 		"+x = { env = { command = '" + hunter + "' } }",
 		"+initialization_options = { env = { command = '" + hunter + "' } }",
 		"+initialization_options = { headers = { args = ['" + hunter + "'] } }",
+		"+env.command = '" + hunter + "'",
+		"+server.env.path = '" + hunter + "'",
+		"+\"headers\".url = '" + hunter + "'",
+		"+env.args = ['" + hunter + "']",
+		"+initialization_options = { env.command = '" + hunter + "' }",
+		"+initialization_options = { env.args = ['" + hunter + "'] }",
 	} {
 		if got := MaskPatchLine(scanMCP, l); strings.Contains(got, hunter) {
 			t.Errorf("%q -> %q", l, got)
@@ -329,6 +335,7 @@ func TestMaskPatchLineEnvTableHidesVisibleKeys(t *testing.T) {
 	for _, l := range []string{
 		"+env = { command = '${env:CMD}' }",
 		"+initialization_options = { env = { HOME = '$HOME' } }",
+		"+env.command = '${env:CMD}'",
 	} {
 		if got := MaskPatchLine(scanMCP, l); got != l {
 			t.Errorf("%q -> %q, want unchanged", l, got)

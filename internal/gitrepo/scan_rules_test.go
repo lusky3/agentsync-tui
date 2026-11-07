@@ -142,4 +142,11 @@ func TestNestedEnvValueHard(t *testing.T) {
 	wantFinding(t, "lsp/l.toml", "initialization_options = { headers = { X-Trace = '"+opaqueTok+"' } }", true)
 	wantFinding(t, scanMCP, "name = { environment = { path = '"+opaqueTok+"' } }", true)
 	wantNotHard(t, "lsp/l.toml", "initialization_options = { settings = { x = '"+opaqueTok+"' } }")
+	// A dotted key under an env or headers table is an env or header value,
+	// whatever its last part.
+	wantFinding(t, scanMCP, "env.command = '"+opaqueTok+"'", true)
+	wantFinding(t, scanMCP, "server.env.path = '"+opaqueTok+"'", true)
+	wantFinding(t, "lsp/l.toml", "initialization_options.headers.name = '"+opaqueTok+"'", true)
+	wantFinding(t, "lsp/l.toml", "initialization_options = { env.name = '"+opaqueTok+"' }", true)
+	wantNotHard(t, "lsp/l.toml", "initialization_options.settings.name = '"+opaqueTok+"'")
 }

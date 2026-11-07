@@ -2,6 +2,7 @@ package gitrepo
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -142,25 +143,39 @@ func maskPair(s string) string {
 // lastKey is the last part of the dotted key, unquoted.
 func (p kv) lastKey() string {
 	parts := keyPartRe.FindAllString(p.key, -1)
-	last := parts[len(parts)-1]
-	if len(last) >= 2 && (last[0] == '"' || last[0] == '\'') {
-		return last[1 : len(last)-1]
+	return unquoteKey(parts[len(parts)-1])
+}
+
+// unquoteKey drops the quotes around a quoted key part.
+func unquoteKey(k string) string {
+	if len(k) >= 2 && (k[0] == '"' || k[0] == '\'') {
+		return k[1 : len(k)-1]
 	}
-	return last
+	return k
+}
+
+// underEnvTable reports a pair whose dotted key names an env, environment
+// or headers table in any part (env.command, server.env.X): its value is
+// an env or header value, whatever its last part.
+func (p kv) underEnvTable() bool {
+	return slices.ContainsFunc(keyPartRe.FindAllString(p.key, -1), func(k string) bool {
+		return envTableKey(unquoteKey(k))
+	})
 }
 
 // masked rebuilds the pair with its key through mask.Text and its value
-// through maskValue; a visible key's value goes through maskVisible (args
-// through maskArgs).
+// through maskValue; a pair under an env or headers table goes through
+// maskStrict, and a visible key's value through maskVisible (args through
+// maskArgs).
 func (p kv) masked() string {
 	key := p.lastKey()
 	switch {
+	case p.underEnvTable():
+		return p.indent + mask.Text(p.key) + p.eq + maskStrict(p.value) + p.trail
 	case key == "args":
 		return p.indent + p.key + p.eq + maskArgs(p.value) + p.trail
 	case visibleKeys[key]:
 		return p.indent + p.key + p.eq + maskVisible(p.value, false) + p.trail
-	case envTableKey(key):
-		return p.indent + mask.Text(p.key) + p.eq + maskStrict(p.value) + p.trail
 	}
 	return p.indent + mask.Text(p.key) + p.eq + maskValue(p.value) + p.trail
 }
@@ -260,12 +275,10 @@ func maskVisiblePair(e string) string {
 	switch {
 	case !ok:
 		return maskVisible(e, true)
-	case p.lastKey() == "args":
+	case p.underEnvTable(), p.lastKey() == "args":
 		return p.masked()
 	case authKey(p), credential(e):
 		return p.indent + mask.Text(p.key) + p.eq + maskValue(p.value) + p.trail
-	case envTableKey(p.lastKey()):
-		return p.indent + mask.Text(p.key) + p.eq + maskStrict(p.value) + p.trail
 	}
 	return p.indent + mask.Text(p.key) + p.eq + maskVisible(p.value, true) + p.trail
 }
