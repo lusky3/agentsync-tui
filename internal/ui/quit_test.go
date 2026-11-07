@@ -16,6 +16,7 @@ import (
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/runner"
+	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
 )
 
 func TestQuitKey(t *testing.T) {
@@ -283,4 +284,81 @@ func TestQuitAfterInterruptedWriteSchedulesDeadline(t *testing.T) {
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Error("fallback cmd is not tea.Quit")
 	}
+}
+
+// ---- quit during a confirmed chain (R4) --------------------------------------
+
+// chainNotRun reports whether es is the first step's outcome followed by
+// one "not run" line for each remaining step.
+func chainNotRun(t *testing.T, es []entry, first string, rest ...actions.Action) {
+	t.Helper()
+	if len(es) != 1+len(rest) || es[0].Outcome != first {
+		t.Fatalf("log %+v, want %q then %d not-run lines", es, first, len(rest))
+	}
+	for i, s := range rest {
+		if e := es[1+i]; e.Outcome != "not run" || e.Display != s.Display() {
+			t.Errorf("entry %d = %+v, want %q not run", 1+i, e, s.Display())
+		}
+	}
+}
+
+// q while the first step of a chain is running: once it finishes it is
+// logged, the rest of the chain is logged as not run and never started,
+// and the program exits.
+func TestQuitDuringChainLogsDroppedSteps(t *testing.T) {
+	git := newFakeRunner()
+	d := gitDeps(runnertest.New(), nil)
+	d.Git = git
+	d.LogPath = filepath.Join(t.TempDir(), "activity.log")
+	h := start(t, d, newScreen("A", "a"))
+	add, commit, push := gitAdd(t, "a.txt"), gitCommit(t, "a.txt"), gitPush(t)
+	h.tm.Send(DoChain(runner.ScopeUser, add, commit, push)())
+	h.pressAndWait(key("y"))
+	select {
+	case <-git.started:
+	case <-time.After(timeout):
+		t.Fatal("the first step never started")
+	}
+	if o := h.pressAndWait(key("q")); !o.running {
+		t.Fatal("q ended the add")
+	}
+	git.respond <- fakeResp{}
+	h.tm.WaitFinished(t, teatest.WithFinalTimeout(timeout))
+	app := h.tm.FinalModel(t).(probe).App
+	chainNotRun(t, app.log.entries(), "exit 0", commit, push)
+	if n := git.nCalls(); n != 1 {
+		t.Errorf("git calls = %d, want only the add", n)
+	}
+	b, err := os.ReadFile(d.LogPath)
+	if err != nil || bytes.Count(b, []byte("\tnot run\t")) != 2 {
+		t.Errorf("log file %q err %v", b, err)
+	}
+}
+
+// The quit-deadline fallback and an external quit (Filter) also log the
+// chain's remaining steps as not run.
+func TestAbandonedChainLogsDroppedSteps(t *testing.T) {
+	add, commit := gitAdd(t, "a.txt"), gitCommit(t, "a.txt")
+	newChain := func() (*App, *fakeRunner) {
+		git := newFakeRunner()
+		d := gitDeps(runnertest.New(), nil)
+		d.Git = git
+		app := NewApp(d, newScreen("A", "a"))
+		app.Update(DoChain(runner.ScopeUser, add, commit)())
+		app.Update(key("y")) // the add is running; its cmd is never executed
+		if app.running == nil {
+			t.Fatal("precondition: add running")
+		}
+		return app, git
+	}
+	for _, m := range []tea.Msg{tea.QuitMsg{}, tea.InterruptMsg{}} {
+		app, _ := newChain()
+		app.Filter(app, m)
+		chainNotRun(t, app.log.entries(), "abandoned", commit)
+	}
+	app, _ := newChain()
+	app.Update(key("q"))
+	app.Update(key("ctrl+c"))
+	app.Update(quitDeadlineMsg{})
+	chainNotRun(t, app.log.entries(), "interrupted", commit)
 }

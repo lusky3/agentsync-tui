@@ -534,3 +534,31 @@ func TestEachScreenKeepsItsOwnList(t *testing.T) {
 		}
 	}
 }
+
+// The maintainer's real home is ~/.agentsync -> ~/git/agent-config: E must
+// still open the editor when AgentsyncHome is a symlink.
+func TestLibraryEditUnderSymlinkedHome(t *testing.T) {
+	tmp := t.TempDir()
+	target, link := filepath.Join(tmp, "real"), filepath.Join(tmp, "link")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	p := writeItem(t, link, Skill, "alpha")
+	ed, marker := fakeEditor(t)
+	setEditor(t, ed)
+	e := startE2E(t, link, stdoutRunner("alpha\n"), Skill)
+	e.waitLists(1)
+	e.sendKey("E")
+	e.wait("editDoneMsg", typeNamed("editDoneMsg"))
+	e.finish()
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("editor did not run under a symlinked home")
+	}
+	fileIs(t, p, "x\npwned\n")
+	if v := scrView(e.screens[Skill]); strings.Contains(v, "refused") {
+		t.Errorf("view:\n%s", v)
+	}
+}

@@ -38,3 +38,12 @@ func groupGone(cmd *exec.Cmd) bool {
 	}
 	return errors.Is(syscall.Kill(-cmd.Process.Pid, 0), syscall.ESRCH)
 }
+
+// setSession starts the child in a new session (R1). It is then the leader
+// of its own process group too, so signalGroup still reaches everything it
+// spawns, and it has no controlling terminal: ssh, a credential helper or
+// a hook that wants /dev/tty fails at once instead of stopping behind the
+// TUI. Setpgid is not set as well: a session leader cannot setpgid (EPERM).
+func setSession(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+}

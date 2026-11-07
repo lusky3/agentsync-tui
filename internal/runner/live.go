@@ -27,6 +27,7 @@ type child struct {
 	cmd     *exec.Cmd
 	args    []string
 	write   bool
+	program string // "" for agentsync, else the Program's name
 	started time.Time
 }
 
@@ -68,13 +69,17 @@ func killedAt(c *child) (time.Time, bool) {
 	return t, ok
 }
 
-func track(cmd *exec.Cmd, args []string, write bool) {
+// track records cmd, an agentsync child, as live.
+func track(cmd *exec.Cmd, args []string, write bool) { trackAs(cmd, args, write, "") }
+
+// trackAs records cmd as live under program ("" for agentsync).
+func trackAs(cmd *exec.Cmd, args []string, write bool, program string) {
 	live.mu.Lock()
 	defer live.mu.Unlock()
 	if live.cmds == nil {
 		live.cmds = map[*exec.Cmd]*child{}
 	}
-	live.cmds[cmd] = &child{cmd: cmd, args: args, write: write, started: time.Now()}
+	live.cmds[cmd] = &child{cmd: cmd, args: args, write: write, program: program, started: time.Now()}
 }
 
 func untrack(cmd *exec.Cmd) {
@@ -109,11 +114,14 @@ func snapshot() []*child {
 }
 
 // Ended is what became of one child at Shutdown: its argv (as given to
-// Run, without the global flags), whether it was a write, the Outcome
+// Run, without the global flags or a Program's pre-args), the Program that
+// ran it ("" for agentsync, else "git" or "chezmoi"), whether it was a
+// write, the Outcome
 // ("exited" on the signal within its wait, "killed" after it, "orphaned"
 // if even SIGKILL did not take within killGrace) and how long it took.
 type Ended struct {
 	Args    []string
+	Program string
 	Write   bool
 	Outcome string
 	Took    time.Duration
@@ -242,7 +250,7 @@ func (r *ending) orphanRest(now time.Time) {
 }
 
 func (r *ending) record(c *child, outcome string, now time.Time) {
-	r.out = append(r.out, Ended{Args: c.args, Write: c.write, Outcome: outcome, Took: now.Sub(r.start)})
+	r.out = append(r.out, Ended{Args: c.args, Program: c.program, Write: c.write, Outcome: outcome, Took: now.Sub(r.start)})
 }
 
 // KillAll sends SIGKILL to every live child's process group at once and

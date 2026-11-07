@@ -16,31 +16,43 @@ import (
 // maxConfirmInput caps the typed-confirmation buffer.
 const maxConfirmInput = 64
 
-// modal is the confirm dialog for one pending action.
+// modal is the confirm dialog for one pending action, or for a chain
+// (act, then then's steps in order) confirmed once as a whole.
 type modal struct {
 	act     actions.Action
-	verb    string // non-empty: destructive, must be typed
+	then    []actions.Action
+	verb    string // non-empty: destructive or TypedConfirm, must be typed
 	input   Field
 	hint    string
 	scope   runner.Scope // the scope the command will run under
 	project string       // Deps.ProjectDir, shown in project scope
 }
 
-func newModal(act actions.Action, scope runner.Scope, project string) *modal {
-	m := &modal{act: act, scope: scope, project: project, input: Field{Max: maxConfirmInput}}
-	if act.Destructive {
-		m.verb = act.ConfirmVerb()
-		if m.verb == "" {
-			m.verb = "yes"
+func newModal(act actions.Action, scope runner.Scope, project string, then ...actions.Action) *modal {
+	m := &modal{act: act, then: then, scope: scope, project: project, input: Field{Max: maxConfirmInput}}
+	// The first step that must be typed sets the verb (for add-then-commit
+	// with soft findings, the commit's "commit").
+	for _, s := range m.steps() {
+		if s.Destructive || s.TypedConfirm {
+			m.verb = s.ConfirmVerb()
+			if m.verb == "" {
+				m.verb = "yes"
+			}
+			break
 		}
 	}
 	return m
 }
 
-// cancelModal closes the dialog without running the action and drops any
-// queued follow-ups.
+// steps is every action the modal confirms, in run order.
+func (m *modal) steps() []actions.Action {
+	return append([]actions.Action{m.act}, m.then...)
+}
+
+// cancelModal closes the dialog without running the action (or any step of
+// its chain) and drops any queued follow-ups.
 func (a *App) cancelModal() {
-	a.setStatus(statusInfo, "not run: "+mask.Sanitize(a.modal.act.Title))
+	a.setStatus(statusInfo, "not run: "+titles(a.modal.steps()))
 	a.modal, a.queue = nil, nil
 }
 
@@ -59,7 +71,7 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		switch s {
 		case "y":
 			a.modal = nil
-			return a.start(m.act)
+			return a.start(m.act, m.then)
 		case "enter":
 			m.hint = "press y to run it"
 		case "n":
@@ -70,7 +82,7 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 	if s == "enter" {
 		if m.input.Value == m.verb {
 			a.modal = nil
-			return a.start(m.act)
+			return a.start(m.act, m.then)
 		}
 		m.hint = fmt.Sprintf("type %q exactly to confirm", m.verb)
 		return nil
@@ -83,8 +95,15 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 // for project scope, "user", or "n/a (user-level)" for a command that the
 // CLI refuses --scope/--project on (secret, marketplace, plugin except
 // upgrade, doctor, revert).
+// A git action shows the repository it runs in instead.
 func (m *modal) scopeLine() string {
 	switch {
+	case m.act.Program == actions.ProgramGit:
+		top := ""
+		if len(m.act.Argv) > 1 && m.act.Argv[0] == "-C" {
+			top = m.act.Argv[1]
+		}
+		return "repo: " + mask.Sanitize(top)
 	case runner.ScopeUnaware(m.act.Argv):
 		return "scope: n/a (user-level)"
 	case m.scope == runner.ScopeProject:
@@ -144,47 +163,95 @@ func clipMiddle(box string, height int) string {
 	return strings.Join(keep, "\n")
 }
 
-// render builds the box at inner width w in the given mode.
+// render builds the box at inner width w in the given mode: the title,
+// one $ line per step in run order, the scope (or repository) line, each
+// step's warning, the badges and the prompt.
 func (m *modal) render(w int, mode renderMode) string {
-	var b strings.Builder
 	gap := "\n"
 	if mode == renderCompact {
 		gap = ""
 	}
-	b.WriteString(styleBold.Render(mask.Sanitize(m.act.Title)) + "\n" + gap)
-	cmd := "  $ " + mask.Sanitize(m.act.Display())
-	if mode != renderFull {
-		cmd = ansi.Truncate(cmd, w-4, "…") // w includes the border and 1-column padding each side
+	steps := m.steps()
+	var b strings.Builder
+	b.WriteString(styleBold.Render(m.title(steps)) + "\n" + gap)
+	for _, s := range steps {
+		b.WriteString(commandLine(s, w, mode) + "\n")
 	}
-	b.WriteString(cmd + "\n")
 	b.WriteString("  " + styleDim.Render(m.scopeLine()) + "\n")
-	if m.act.Warning != "" {
-		b.WriteString(gap + styleError.Render("! "+mask.Sanitize(m.act.Warning)) + "\n")
-	}
-	var badges []string
-	if m.act.Destructive {
-		badges = append(badges, styleError.Render("[destructive]"))
-	}
-	if m.act.Network {
-		badges = append(badges, styleWarn.Render("[network]"))
-	}
-	if m.act.Interactive {
-		badges = append(badges, styleInfo.Render("[interactive]"))
-	}
-	if len(badges) > 0 {
-		b.WriteString(gap + strings.Join(badges, " ") + "\n")
-	}
-	b.WriteString(gap)
-	if m.verb == "" {
-		b.WriteString("Run it? y = yes, n/esc = no")
-		if m.hint != "" {
-			b.WriteString("\n" + styleWarn.Render(m.hint))
-		}
-	} else {
-		fmt.Fprintf(&b, "Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input.Value)
-		if m.hint != "" {
-			b.WriteString("\n" + styleWarn.Render(m.hint))
+	for _, s := range steps {
+		if s.Warning != "" {
+			b.WriteString(gap + styleError.Render("! "+mask.Sanitize(s.Warning)) + "\n")
 		}
 	}
+	if line := badgesOf(steps).render(); line != "" {
+		b.WriteString(gap + line + "\n")
+	}
+	b.WriteString(gap + m.prompt())
 	return styleModal.Width(w).Render(b.String())
+}
+
+// title is the modal's heading: the action's title, or every step's title
+// in run order for a chain.
+func (m *modal) title(steps []actions.Action) string {
+	if len(steps) > 1 {
+		return joinTitles(steps, ", then ")
+	}
+	return mask.Sanitize(m.act.Title)
+}
+
+// commandLine is the "$ …" line of one step. Outside renderFull it is cut to
+// one line; w includes the border and 1-column padding each side.
+func commandLine(s actions.Action, w int, mode renderMode) string {
+	cmd := "  $ " + mask.Sanitize(s.Display())
+	if mode != renderFull {
+		cmd = ansi.Truncate(cmd, w-4, "…")
+	}
+	return cmd
+}
+
+// badges is which badges a confirmation shows: each is set when any step
+// of the chain has the property. TypedConfirm asks for the verb but is not
+// destructive, so it has no badge.
+type badges struct {
+	destructive, network, interactive bool
+}
+
+// badgesOf collects the badges of steps. Only an agentsync command is
+// handed the terminal; git never is (R1).
+func badgesOf(steps []actions.Action) badges {
+	var bs badges
+	for _, s := range steps {
+		bs.destructive = bs.destructive || s.Destructive
+		bs.network = bs.network || s.Network
+		bs.interactive = bs.interactive || (s.Interactive && s.Program == "")
+	}
+	return bs
+}
+
+// render is the styled badges, space-separated, or "" when there are none.
+func (bs badges) render() string {
+	var out []string
+	if bs.destructive {
+		out = append(out, styleError.Render("[destructive]"))
+	}
+	if bs.network {
+		out = append(out, styleWarn.Render("[network]"))
+	}
+	if bs.interactive {
+		out = append(out, styleInfo.Render("[interactive]"))
+	}
+	return strings.Join(out, " ")
+}
+
+// prompt is the last line of the box: y/n, or the typed verb so far for a
+// TypedConfirm action, followed by any hint.
+func (m *modal) prompt() string {
+	p := "Run it? y = yes, n/esc = no"
+	if m.verb != "" {
+		p = fmt.Sprintf("Type %s to confirm (esc cancels): %s_", styleError.Render(m.verb), m.input.Value)
+	}
+	if m.hint != "" {
+		p += "\n" + styleWarn.Render(m.hint)
+	}
+	return p
 }

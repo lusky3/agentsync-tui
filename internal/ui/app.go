@@ -94,6 +94,15 @@ type Deps struct {
 	// Timeouts bounds the actions the shell runs and every screen read; nil
 	// means DefaultTimeouts. See Limits.
 	Timeouts *Timeouts
+	// Git runs the Actions whose Program is actions.ProgramGit (in
+	// production runner.NewGit); nil means git is unavailable and such an
+	// action fails with "git is not installed". It does not change with
+	// the scope: a git Action names its repository itself (-C <top>).
+	Git runner.Runner
+	// Chezmoi is the read-only chezmoi runner (runner.NewChezmoi) screens
+	// use for `chezmoi source-path`; nil means unavailable. The shell never
+	// runs an Action on it.
+	Chezmoi runner.Runner
 }
 
 // BaseCtx is the context a screen derives its reads from: Deps.Ctx, or
@@ -246,7 +255,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return a, a.handleKey(msg)
 	case DoMsg:
-		return a, a.request(msg.Action, msg.Scope)
+		return a, a.requestChain(msg.Action, msg.Then, msg.Scope)
+	case GotoMsg:
+		return a, a.goTo(msg.Title)
 	case RunMsg:
 		return a, a.finish(msg)
 	case EditFileMsg:

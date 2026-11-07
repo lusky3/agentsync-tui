@@ -3,6 +3,7 @@ package ui
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/lusky3/agentsync-tui/internal/mask"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 )
 
@@ -26,7 +27,8 @@ Lists and long views (every screen)
 
 Confirm dialog
   y                 run          n / esc   cancel (enter does not confirm)
-  destructive actions: type the verb shown, then enter`
+  destructive or guarded actions: type the verb shown, then enter
+  a chain (stage, then commit) is confirmed once; a failed step stops it`
 
 const noProjectText = "no project directory: start with --project <path>"
 
@@ -165,4 +167,25 @@ func (a *App) toggleScope() tea.Cmd {
 	}
 	a.markOthersStale()
 	return tea.Batch(chip, a.refreshActive())
+}
+
+// GotoMsg asks the shell to show the first screen titled Title (a screen's
+// offer to jump, such as Drift or Apply after a pull), refreshing it if its
+// data is stale. An unknown title only sets a warning, and so does a jump
+// while a modal is open or an action runs (the screen does not change).
+type GotoMsg struct{ Title string }
+
+// goTo handles a GotoMsg.
+func (a *App) goTo(title string) tea.Cmd {
+	if a.modal != nil || a.running != nil {
+		a.setStatus(statusWarn, "busy: another action is in progress")
+		return nil
+	}
+	for i, s := range a.screens {
+		if s.Title() == title {
+			return a.selectScreen(i)
+		}
+	}
+	a.setStatus(statusWarn, "no screen named "+mask.OneLine(title))
+	return nil
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/runner"
+	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
 )
 
 func TestPurgeActionIsDestructiveWithPurgeVerb(t *testing.T) {
@@ -360,3 +361,89 @@ func TestNonDestructiveModalSaysPressY(t *testing.T) {
 }
 
 // ---- interrupting a running write (production audit H1) -------------------
+
+// ---- git actions and chains --------------------------------------------
+
+// modalText renders the modal box a DoMsg opens.
+func modalText(t *testing.T, msg DoMsg) string {
+	t.Helper()
+	app := NewApp(gitDeps(runnertest.New(), runnertest.New()), newScreen("A", "a"))
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app.Update(msg)
+	if app.modal == nil {
+		t.Fatal("no modal")
+	}
+	return ansi.Strip(app.modal.view(app.width, app.bodyHeight())) // the box alone: the header shows the scope too
+}
+
+func TestModalShowsRepoLineForGit(t *testing.T) {
+	out := modalText(t, DoMsg{Action: gitCommit(t, "a.txt"), Scope: runner.ScopeUser})
+	if !strings.Contains(out, "repo: /tmp/repo") {
+		t.Errorf("no repo line:\n%s", out)
+	}
+	if strings.Contains(out, "scope: ") {
+		t.Errorf("a git modal shows an agentsync scope line:\n%s", out)
+	}
+	hostile := actions.Action{Program: actions.ProgramGit, Title: "t", Argv: []string{"-C", "/tmp/a\x1b[31m\u202eb", "push"}}
+	if out := modalText(t, DoMsg{Action: hostile}); strings.ContainsAny(out, "\x1b\u202e") {
+		t.Errorf("repo line not sanitised: %q", out)
+	}
+}
+
+func TestModalShowsEveryChainCommand(t *testing.T) {
+	add, commit := gitAdd(t, "a.txt"), gitCommit(t, "a.txt")
+	out := modalText(t, DoChain(runner.ScopeUser, add, commit)().(DoMsg))
+	var cmds []string
+	for _, l := range strings.Split(out, "\n") {
+		if i := strings.Index(l, "$ "); i >= 0 {
+			cmds = append(cmds, strings.TrimSpace(strings.Trim(l[i+2:], "│ ")))
+		}
+	}
+	want := []string{add.Display(), commit.Display()}
+	if strings.Join(cmds, "|") != strings.Join(want, "|") {
+		t.Errorf("command lines = %q, want %q\n%s", cmds, want, out)
+	}
+}
+
+// A step title that itself contains ", " is kept whole in the chain title.
+func TestChainTitleKeepsCommaInStepTitle(t *testing.T) {
+	add, commit := gitAdd(t, "a", "b"), gitCommit(t, "a", "b")
+	add.Title = "Add a, b"
+	out := modalText(t, DoChain(runner.ScopeUser, add, commit)().(DoMsg))
+	want := "Add a, b, then " + commit.Title
+	if !strings.Contains(out, want) {
+		t.Errorf("modal lacks %q:\n%s", want, out)
+	}
+}
+
+func TestTypedConfirmNeedsVerbNoDestructiveBadge(t *testing.T) {
+	git := runnertest.New()
+	h := start(t, gitDeps(runnertest.New(), git), newScreen("A", "a"))
+	push := gitPush(t)
+	push.TypedConfirm = true
+	h.tm.Send(DoMsg{Action: push})
+	h.waitMsg("DoMsg", func(m tea.Msg) bool { _, ok := m.(DoMsg); return ok })
+	if o := h.pressAndWait(key("y")); !o.modalOpen || o.running {
+		t.Fatalf("y ran a typed-confirm action: modal=%v running=%v", o.modalOpen, o.running)
+	}
+	h.erase(1) // the y went into the field
+	h.typeAndWait("push")
+	if n := len(git.Calls()); n != 0 {
+		t.Fatalf("ran before enter: %d", n)
+	}
+	h.pressAndWait(key("enter"))
+	h.waitRunMsg()
+	h.final()
+	if n := len(git.Calls()); n != 1 {
+		t.Errorf("git calls = %d", n)
+	}
+
+	m := newModal(push, runner.ScopeUser, "")
+	if m.verb != "push" {
+		t.Errorf("verb = %q, want push", m.verb)
+	}
+	out := ansi.Strip(m.view(100, 30))
+	if strings.Contains(out, "[destructive]") || !strings.Contains(out, "Type push to confirm") {
+		t.Errorf("modal:\n%s", out)
+	}
+}

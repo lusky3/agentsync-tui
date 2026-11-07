@@ -32,9 +32,11 @@ const wordKeyPat = `(?:^|[^A-Za-z0-9{])(?:auth|pat)`
 
 // rule is one Text rule: group 1 is kept, group 2 masked. bare marks the
 // bare-value KV rule, whose trailing closers belong to the surrounding text.
+// kind names what the rule finds, for Credential.
 type rule struct {
 	re   *regexp.Regexp
 	bare bool
+	kind string
 }
 
 // kvRules builds the three KV rules for a key pattern: a secret-named key
@@ -49,9 +51,9 @@ type rule struct {
 // "(token=x)" keeps its shape.
 func kvRules(keyPat string) []rule {
 	return []rule{
-		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*)(\$\{[^}\s]*\}(?:\$\{[^}\s]*\}|[^\s"',;)}\]])*|(?:[^\s"'$]|\$[^{\s])[^\s]*)`), bare: true},
-		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`)},
-		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`)},
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*)(\$\{[^}\s]*\}(?:\$\{[^}\s]*\}|[^\s"',;)}\]])*|(?:[^\s"'$]|\$[^{\s])[^\s]*)`), bare: true, kind: KindSecretAssignment},
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`), kind: KindSecretAssignment},
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`), kind: KindSecretAssignment},
 	}
 }
 
@@ -63,17 +65,17 @@ var (
 	// that group consists only of references.
 	textRules = append([]rule{
 		// Authorization-style headers with any scheme.
-		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"']+)`)},
-		{re: regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["']?)([^\s"']+)`)},
+		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"']+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["']?)([^\s"']+)`), kind: KindAuthHeader},
 		// Cookie headers: the whole cookie string is the secret.
-		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*:\s*["']?)([^\n"']+)`)},
-		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"']+)`)},
+		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*:\s*["']?)([^\n"']+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"']+)`), kind: KindAuthHeader},
 		// userinfo in URLs.
-		{re: regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)([^/\s@"']+)@`)},
+		{re: regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)([^/\s@"']+)@`), kind: KindURLUserinfo},
 		// credential-looking query parameters.
-		{re: regexp.MustCompile(`(?i)([?&;][A-Za-z0-9_.\-]*(?:token|key|secret|password|passwd|auth|sig|signature)=)([^&\s"'#]+)`)},
+		{re: regexp.MustCompile(`(?i)([?&;][A-Za-z0-9_.\-]*(?:token|key|secret|password|passwd|auth|sig|signature)=)([^&\s"'#]+)`), kind: KindSecretAssignment},
 		// key/token/secret/password followed by = or : and a long opaque run.
-		{re: regexp.MustCompile(`(?i)((?:token|key|secret|password)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-]{24,})`)},
+		{re: regexp.MustCompile(`(?i)((?:token|key|secret|password)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-]{24,})`), kind: KindSecretAssignment},
 	}, append(kvRules(secretKeyPat), kvRules(wordKeyPat)...)...)
 	// Known token shapes: the whole match is the secret.
 	shapeRes = []*regexp.Regexp{
@@ -81,7 +83,7 @@ var (
 		regexp.MustCompile(`ghp_[^\s"']+`),
 		regexp.MustCompile(`github_pat_[^\s"']+`),
 		regexp.MustCompile(`\bsk-[^\s"']+`),
-		regexp.MustCompile(`xox[bap]-[^\s"']+`),
+		regexp.MustCompile(`xox[a-z]-[^\s"']+`),
 		regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 		regexp.MustCompile(`eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*`),
 	}
