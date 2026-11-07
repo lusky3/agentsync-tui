@@ -599,3 +599,83 @@ func TestRenameSourceOfSensitiveNameNotCommitted(t *testing.T) {
 		}
 	}
 }
+
+func TestChangedKindSinceListedRefreshes(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	// Still listed, but now a deletion: what would be committed changed.
+	if err := os.Remove(filepath.Join(home, filepath.FromSlash(tomlX))); err != nil {
+		t.Fatal(err)
+	}
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if !strings.Contains(view(f.s), "changed since listed: refreshed") || f.s.mode != modeList {
+		t.Errorf("view:\n%s", view(f.s))
+	}
+	if i := rowOf(f.s, tomlX); i < 0 || f.s.status.Files[i].Kind.String() != "deleted" {
+		t.Errorf("not refreshed: %+v", f.s.status.Files)
+	}
+}
+
+func TestFindingWordingSeparatesKinds(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "bin", map[string]string{"skills/b/data.bin": "a\x00b\n"})
+	write(t, home, "skills/b/data.bin", "c\x00d\n")
+	f := open(t, home)
+	d := onlyDo(t, commit(f.s, commitMsg))
+	w := d.Then[0].Warning
+	if !strings.Contains(w, "1 file not scanned") || strings.Contains(w, "possible secret") {
+		t.Errorf("binary-only warning %q", w)
+	}
+	write(t, home, skillA, "id "+opaqueWord+"\n")
+	drive(f.s, f.s.Refresh())
+	press(f.s, "a")
+	if len(f.s.selectedPaths()) < 2 {
+		press(f.s, "a")
+	}
+	d = onlyDo(t, commit(f.s, ""))
+	if w := d.Then[0].Warning; !strings.Contains(w, "1 possible secret and 1 file not scanned") {
+		t.Errorf("mixed warning %q", w)
+	}
+}
+
+func TestHardRefusalNamesHardFindings(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"env = { API_KEY = \""+ghpToken+"\" }\n")
+	write(t, home, skillA, "id "+opaqueWord+"\n")
+	f := open(t, home)
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	v := view(f.s)
+	if !strings.Contains(v, "refused: 1 hard finding") || strings.Contains(v, "refused: 2") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+func TestStaleGuardIgnoredAfterEscAndScopeSwitch(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	press(f.s, "c")
+	typeText(f.s, commitMsg)
+	_, guard := f.s.Update(key("enter"))
+	press(f.s, "esc")
+	if _, next := f.s.Update(guard()); next != nil || f.s.pending != nil || f.s.commit.findings != nil {
+		t.Error("a guard result after esc was applied")
+	}
+	press(f.s, "c")
+	_, guard = f.s.Update(key("enter"))
+	f.s.SetScope(f.agent, runner.ScopeProject, t.TempDir())
+	if _, next := f.s.Update(guard()); next != nil || f.s.pending != nil {
+		t.Error("a guard result after a scope switch was applied")
+	}
+	load := f.s.Refresh()
+	f.s.SetScope(f.agent, runner.ScopeUser, home)
+	f.s.Update(load())
+	if f.s.loaded {
+		t.Error("an old-scope load was applied")
+	}
+}

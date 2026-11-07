@@ -218,7 +218,7 @@ func (s *Screen) findingLines() []string {
 	if len(fs) == 0 {
 		return nil
 	}
-	out := []string{theme.Bold.Render(secrets(len(fs)) + " (file:line, masked):")}
+	out := []string{theme.Bold.Render(countFindings(fs).summary() + " (file:line, masked):")}
 	for _, f := range fs[:min(len(fs), maxFindings)] {
 		out = append(out, "  "+findingLine(f))
 	}

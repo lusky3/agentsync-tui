@@ -62,7 +62,7 @@ type guardInput struct {
 	repo     gitrepo.Repo
 	run, git runner.Runner
 	limit    time.Duration
-	selected []string
+	selected []gitrepo.File // the records the user selected, as listed
 	msg      string
 }
 
@@ -121,7 +121,7 @@ func (s *Screen) submit() tea.Cmd {
 		s.commit.msgNote = mask.FirstLine(err.Error()) + ": reword the message"
 		return nil
 	}
-	selected := s.selectedPaths()
+	selected := s.selectedFiles()
 	if len(selected) == 0 {
 		s.commit.refusal = []string{whyNoChanges}
 		return nil
@@ -157,17 +157,19 @@ func runGuards(ctx context.Context, gen int, in guardInput) guardMsg {
 	return m
 }
 
-// pick returns the fresh records of the selected paths, or false when one
-// is no longer listed or no longer selectable.
-func pick(files []gitrepo.File, selected []string) ([]gitrepo.File, bool) {
+// pick returns the fresh records of the selected files, or false when one
+// is no longer listed, no longer selectable, or changed its kind or rename
+// source (a modified file deleted since, for instance): the user would
+// commit something other than what the list showed.
+func pick(files []gitrepo.File, selected []gitrepo.File) ([]gitrepo.File, bool) {
 	by := make(map[string]gitrepo.File, len(files))
 	for _, f := range files {
 		by[f.Path] = f
 	}
 	out := make([]gitrepo.File, 0, len(selected))
-	for _, p := range selected {
-		f, ok := by[p]
-		if !ok || !f.Selectable {
+	for _, was := range selected {
+		f, ok := by[was.Path]
+		if !ok || !f.Selectable || f.Kind != was.Kind || f.Orig != was.Orig {
 			return nil, false
 		}
 		out = append(out, f)
@@ -351,13 +353,14 @@ func (s *Screen) emit(m guardMsg) tea.Cmd {
 	if len(m.add) > 0 {
 		steps = []actions.Action{add, commit}
 	}
-	if hasHard(m.findings) {
-		s.commit.refusal = hardRefusal(len(m.findings), steps)
+	c := countFindings(m.findings)
+	if c.hard > 0 {
+		s.commit.refusal = hardRefusal(c.hard, steps)
 		return nil
 	}
-	if n := len(m.findings); n > 0 {
+	if len(m.findings) > 0 {
 		steps[len(steps)-1].TypedConfirm = true
-		steps[len(steps)-1].Warning = secrets(n) + " listed on the Source repo tab; type commit to proceed"
+		steps[len(steps)-1].Warning = c.soft() + " listed on the Source repo tab; type commit to proceed"
 	}
 	s.pending = &pendingCommit{
 		addKey: add.Key(), commitKey: commit.Key(), subject: mask.Sanitize(strings.TrimSpace(m.msg)),
@@ -370,27 +373,67 @@ func (s *Screen) emit(m guardMsg) tea.Cmd {
 	return ui.DoChain(s.scope, steps[0], steps[1:]...)
 }
 
-func hasHard(fs []gitrepo.Finding) bool {
-	for _, f := range fs {
-		if f.Hard {
-			return true
-		}
-	}
-	return false
+// counts splits findings: hard ones, soft possible secrets, and files
+// that were not scanned at all (binary, over 1 MiB, a cut patch).
+type counts struct{ hard, secrets, unscanned int }
+
+// unscannedKinds are the findings that report a file the scan skipped.
+var unscannedKinds = map[string]bool{
+	gitrepo.KindNotScannedBinary: true, gitrepo.KindNotScannedLarge: true, gitrepo.KindNotScannedPatch: true,
 }
 
-func secrets(n int) string {
-	if n == 1 {
-		return "1 possible secret"
+func countFindings(fs []gitrepo.Finding) counts {
+	var c counts
+	for _, f := range fs {
+		switch {
+		case f.Hard:
+			c.hard++
+		case unscannedKinds[f.Kind]:
+			c.unscanned++
+		default:
+			c.secrets++
+		}
 	}
-	return strconv.Itoa(n) + " possible secrets"
+	return c
+}
+
+// soft names the soft findings: "N possible secrets and M files not
+// scanned", either part left out when zero.
+func (c counts) soft() string {
+	var parts []string
+	if c.secrets > 0 {
+		parts = append(parts, plural(c.secrets, "possible secret"))
+	}
+	if c.unscanned > 0 {
+		parts = append(parts, plural(c.unscanned, "file")+" not scanned")
+	}
+	return strings.Join(parts, " and ")
+}
+
+// summary names every kind of finding, for the findings pane.
+func (c counts) summary() string {
+	parts := []string{}
+	if c.hard > 0 {
+		parts = append(parts, plural(c.hard, "hard finding"))
+	}
+	if s := c.soft(); s != "" {
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func plural(n int, one string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(n) + " " + one + "s"
 }
 
 // hardRefusal explains a hard finding and shows the commands that commit
 // a known false positive outside the TUI.
 func hardRefusal(n int, steps []actions.Action) []string {
 	out := []string{
-		refused + secrets(n) + " in the selected files (listed below); a commit would publish it",
+		refused + plural(n, "hard finding") + " (likely secrets) in the selected files, listed below; a commit would publish them",
 		"for a known false positive, commit outside the TUI:",
 	}
 	for _, a := range steps {

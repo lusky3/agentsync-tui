@@ -11,10 +11,6 @@ package sourcerepo
 
 import (
 	"context"
-	"errors"
-	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -84,24 +80,6 @@ type loadMsg struct {
 	repo   gitrepo.Repo
 	status gitrepo.Status
 	note   string
-}
-
-// diffPane is the masked diff of one file.
-type diffPane struct {
-	title  string
-	lines  []string // masked, sanitised
-	trunc  bool
-	note   string
-	loaded bool
-	scroll ui.Scroll
-}
-
-// diffMsg carries one diff read: lines are already masked.
-type diffMsg struct {
-	gen   int
-	lines []string
-	trunc bool
-	note  string
 }
 
 // New returns the Source repo screen.
@@ -308,17 +286,6 @@ func (s *Screen) keyPress(k tea.KeyPressMsg) tea.Cmd {
 	return s.listKey(k.String())
 }
 
-func (s *Screen) diffKey(k string) tea.Cmd {
-	if s.diff.scroll.Key(k, len(s.diff.lines)) {
-		return nil
-	}
-	if k == keyEsc {
-		s.diffs.Supersede()
-		s.mode, s.diff = modeList, diffPane{}
-	}
-	return nil
-}
-
 func (s *Screen) listKey(k string) tea.Cmd {
 	if s.list.Key(k, len(s.status.Files)) {
 		return nil
@@ -382,167 +349,22 @@ func (s *Screen) toggleAll() {
 	}
 }
 
-// selectedPaths is the selected File.Path values, in list order.
-func (s *Screen) selectedPaths() []string {
-	var out []string
+// selectedFiles is the selected records, in list order.
+func (s *Screen) selectedFiles() []gitrepo.File {
+	var out []gitrepo.File
 	for _, f := range s.status.Files {
 		if f.Selectable && s.sel[f.Path] {
-			out = append(out, f.Path)
+			out = append(out, f)
 		}
 	}
 	return out
 }
 
-// diffable reports whether a file's content may be shown: never a state
-// file, a sensitive one or an unusual name (a directory, a special file or
-// a name git cannot be given).
-func diffable(f gitrepo.File) bool {
-	switch f.Class {
-	case gitrepo.Owned, gitrepo.Other, gitrepo.Vault:
-		return true
+// selectedPaths is the selected File.Path values, in list order.
+func (s *Screen) selectedPaths() []string {
+	var out []string
+	for _, f := range s.selectedFiles() {
+		out = append(out, f.Path)
 	}
-	return false
-}
-
-// openDiff shows the diff of the file under the cursor, read in the
-// background.
-func (s *Screen) openDiff() tea.Cmd {
-	if why := s.blocked(); why != "" {
-		s.note = why
-		return nil
-	}
-	f, ok := s.current()
-	switch {
-	case !ok:
-		return nil
-	case !diffable(f):
-		s.note = notShown + mask.Sanitize(f.Note)
-		return nil
-	}
-	gen, ctx := s.diffs.Next(s.base)
-	s.mode, s.diff = modeDiff, diffPane{title: gitrepo.DisplayName(f.Path)}
-	git, repo, unborn, limit := s.git, s.repo, s.status.Branch.Unborn, s.limit
-	return func() tea.Msg { return readDiff(ctx, gen, git, repo, unborn, f, limit) }
-}
-
-// readDiff reads one file's diff: an untracked file's content as added
-// lines, anything else through git diff against HEAD. Every line goes
-// through MaskPatchLine and the whole is capped at ui.MaxOutput.
-func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo, unborn bool, f gitrepo.File, limit time.Duration) diffMsg {
-	if f.Kind == gitrepo.Untracked {
-		b, err := bounded(ctx, limit, func() (capped, error) { return readFile(repo.Top, f.Path, ui.MaxOutput) })
-		if err != nil {
-			return diffMsg{gen: gen, note: notShown + errNote(err)}
-		}
-		if strings.IndexByte(b.data, 0) >= 0 {
-			return diffMsg{gen: gen, note: "binary file: content not shown"}
-		}
-		return maskedDiff(gen, f.HomeRel, addedPatch(b.data), b.cut)
-	}
-	argv := gitrepo.DiffArgv(repo, unborn, f.Path, 3)
-	if argv == nil {
-		return diffMsg{gen: gen, note: notShown + "git cannot be given this path"}
-	}
-	res, err := ui.Read(ctx, git, limit, argv...)
-	if note := ui.ReadNote("git diff", res, err); note != "" {
-		return diffMsg{gen: gen, note: note}
-	}
-	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
-	return maskedDiff(gen, f.HomeRel, patch, cut)
-}
-
-// addedPatch shows content as the added lines of a new file.
-func addedPatch(content string) string {
-	content = strings.TrimSuffix(content, "\n")
-	if content == "" {
-		return ""
-	}
-	return "+" + strings.ReplaceAll(content, "\n", "\n+")
-}
-
-// maskedDiff masks every line of patch and caps the result at ui.MaxOutput.
-func maskedDiff(gen int, homeRel, patch string, cut bool) diffMsg {
-	m := diffMsg{gen: gen, trunc: cut}
-	if patch == "" {
-		m.note = "no changes to show"
-		return m
-	}
-	size := 0
-	for _, l := range strings.Split(strings.TrimSuffix(patch, "\n"), "\n") {
-		l = strings.ReplaceAll(gitrepo.MaskPatchLine(homeRel, strings.TrimSuffix(l, "\r")), "\t", "  ")
-		if size += len(l) + 1; size > ui.MaxOutput {
-			m.trunc = true
-			break
-		}
-		m.lines = append(m.lines, l)
-	}
-	return m
-}
-
-// capped is a file read cut at a size: data and whether more followed.
-type capped struct {
-	data string
-	cut  bool
-}
-
-// errSymlink and errNotRegular refuse a read through a symlink or of
-// anything that is not a regular file.
-var (
-	errSymlink    = errors.New("a symlink is not followed")
-	errNotRegular = errors.New("not a regular file")
-)
-
-// readFile reads at most limit bytes of the regular file rel under top,
-// never through a symlink: rel itself is Lstat'ed, its parent must resolve
-// inside top, and the opened file must be the one Lstat saw.
-func readFile(top, rel string, limit int) (capped, error) {
-	full := filepath.Join(top, filepath.FromSlash(rel))
-	dir, err := filepath.EvalSymlinks(filepath.Dir(full))
-	if err != nil {
-		return capped{}, err
-	}
-	if r, err := filepath.Rel(top, dir); err != nil || (r != "." && !filepath.IsLocal(r)) {
-		return capped{}, errSymlink
-	}
-	fi, err := os.Lstat(full)
-	switch {
-	case err != nil:
-		return capped{}, err
-	case fi.Mode()&os.ModeSymlink != 0:
-		return capped{}, errSymlink
-	case !fi.Mode().IsRegular():
-		return capped{}, errNotRegular
-	}
-	fh, err := os.Open(full)
-	if err != nil {
-		return capped{}, err
-	}
-	defer func() { _ = fh.Close() }()
-	if st, err := fh.Stat(); err != nil || !os.SameFile(fi, st) {
-		return capped{}, errNotRegular
-	}
-	b, err := io.ReadAll(io.LimitReader(fh, int64(limit)+1))
-	if err != nil {
-		return capped{}, err
-	}
-	if len(b) > limit {
-		return capped{data: string(b[:limit]), cut: true}, nil
-	}
-	return capped{data: string(b)}, nil
-}
-
-// errNote is a display-safe reason for a failed read: never the path's
-// bytes beyond what mask.FirstLine keeps.
-func errNote(err error) string {
-	switch {
-	case errors.Is(err, errSymlink):
-		return errSymlink.Error()
-	case errors.Is(err, errNotRegular):
-		return errNotRegular.Error()
-	case errors.Is(err, os.ErrNotExist):
-		return "the file is gone"
-	case errors.Is(err, context.DeadlineExceeded):
-		return "the read timed out"
-	}
-	return "the file could not be read"
+	return out
 }
