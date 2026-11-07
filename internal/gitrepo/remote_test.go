@@ -1,9 +1,13 @@
 package gitrepo
 
 import (
+	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/lusky3/agentsync-tui/internal/gitrepo/gittest"
 )
 
 func TestSourceRepoReadArgvPinned(t *testing.T) {
@@ -22,9 +26,9 @@ func TestSourceRepoReadArgvPinned(t *testing.T) {
 		{"upstream commit", BranchUpstreamCommitArgv(r, "main"), []string{"-C", "/h/top", "rev-parse", "--verify", "main@{upstream}^{commit}"}},
 		{"commits after", CommitsAfterArgv(r, a, "main"), []string{"-C", "/h/top", "rev-list", "--count", a + "..refs/heads/main", "--"}},
 		{"names", OutgoingNamesArgv(r, a, b), []string{"-C", "/h/top", "log", "--format=", "--name-only", "-z",
-			"--no-renames", "--diff-merges=first-parent", a + ".." + b, "--", "agentsync"}},
+			"--no-renames", "--full-history", "--diff-merges=first-parent", a + ".." + b, "--", "agentsync"}},
 		{"patch", OutgoingPatchArgv(r, a, b), []string{"-C", "/h/top", "log", "-p", "--no-ext-diff", "--no-textconv",
-			"--no-color", "-U0", "--no-renames", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
+			"--no-color", "-U0", "--no-renames", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
 			"--format=%H", a + ".." + b, "--", "agentsync"}},
 	}
 	for _, c := range cases {
@@ -58,5 +62,42 @@ func TestSourceRepoReadArgvRefusesBadArguments(t *testing.T) {
 		if argv != nil {
 			t.Errorf("%s: built %q", name, argv)
 		}
+	}
+}
+
+// A `merge -s ours` is TREESAME to its first parent, so git's history
+// simplification may drop the side branch from a path-limited log; the
+// push publishes it all the same. Both outgoing reads list every commit
+// in base..tip: the side commit that added the token, and the one that
+// deleted it again.
+func TestOutgoingReadsListOursMergedSideCommits(t *testing.T) {
+	top := filepath.Join(t.TempDir(), "w")
+	gittest.Init(t, top)
+	gittest.Commit(t, top, "base", map[string]string{"readme": "a\n"})
+	base := strings.TrimSpace(gittest.Git(t, top, "rev-parse", "HEAD"))
+	gittest.Git(t, top, "checkout", "-q", "-b", "side")
+	gittest.Commit(t, top, "side add", map[string]string{"mcp/x.toml": "token = \"ghp_" + strings.Repeat("a", 36) + "\"\n"})
+	sideAdd := strings.TrimSpace(gittest.Git(t, top, "rev-parse", "HEAD"))
+	gittest.Git(t, top, "rm", "-q", "mcp/x.toml")
+	gittest.Git(t, top, "commit", "-q", "-m", "side del")
+	gittest.Git(t, top, "checkout", "-q", "main")
+	gittest.Commit(t, top, "main", map[string]string{"readme": "a\nb\n"})
+	gittest.Git(t, top, "merge", "-q", "-s", "ours", "--no-edit", "side")
+	tip := strings.TrimSpace(gittest.Git(t, top, "rev-parse", "HEAD"))
+	r := Repo{Top: top, Pathspec: "."}
+	git := gittest.NewGit(t)
+	names, err := git.Run(context.Background(), OutgoingNamesArgv(r, base, tip)...)
+	if err != nil || names.ExitCode != 0 {
+		t.Fatalf("names: %+v %v", names, err)
+	}
+	if !slices.Contains(strings.Split(names.Stdout, "\x00"), "mcp/x.toml") {
+		t.Errorf("names read lacks the side branch's mcp/x.toml: %q", names.Stdout)
+	}
+	patch, err := git.Run(context.Background(), OutgoingPatchArgv(r, base, tip)...)
+	if err != nil || patch.ExitCode != 0 {
+		t.Fatalf("patch: %+v %v", patch, err)
+	}
+	if !strings.Contains(patch.Stdout, sideAdd+"\n") || !strings.Contains(patch.Stdout, "+token = ") {
+		t.Errorf("patch read lacks the side commit %s:\n%s", sideAdd, patch.Stdout)
 	}
 }

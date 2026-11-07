@@ -68,26 +68,29 @@ func CommitsAfterArgv(r Repo, sha, branch string) []string {
 // OutgoingNamesArgv lists, NUL-separated, every path any commit in
 // base..tip touches under the home pathspec, not only the net diff;
 // merges against their first parent, renames split into a deletion and an
-// addition so both names are listed. base and tip must be object ids.
+// addition so both names are listed. --full-history keeps every commit of
+// the range: without it a path-limited log may simplify away the side of
+// a merge that is TREESAME to its first parent (`merge -s ours`), whose
+// commits a push still publishes. base and tip must be object ids.
 func OutgoingNamesArgv(r Repo, base, tip string) []string {
 	if actions.ValidObjectID(base) != nil || actions.ValidObjectID(tip) != nil {
 		return nil
 	}
 	return []string{"-C", r.Top, "log", "--format=", "--name-only", "-z", "--no-renames",
-		"--diff-merges=first-parent", base + ".." + tip, "--", r.Pathspec}
+		"--full-history", "--diff-merges=first-parent", base + ".." + tip, "--", r.Pathspec}
 }
 
 // OutgoingPatchArgv is every commit's own patch in base..tip with no
 // context: git's own bytes (no external diff, no textconv, no colour),
 // fixed a/ b/ prefixes and no rename sections, so each file section's
 // header names one path twice. Merges diff against their first parent,
-// never a combined diff (AddedLines does not parse one). base and tip
-// must be object ids.
+// never a combined diff (AddedLines does not parse one); --full-history
+// as in OutgoingNamesArgv. base and tip must be object ids.
 func OutgoingPatchArgv(r Repo, base, tip string) []string {
 	if actions.ValidObjectID(base) != nil || actions.ValidObjectID(tip) != nil {
 		return nil
 	}
 	return []string{"-C", r.Top, "log", "-p", "--no-ext-diff", "--no-textconv", "--no-color", "-U0",
-		"--no-renames", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
+		"--no-renames", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
 		"--format=%H", base + ".." + tip, "--", r.Pathspec}
 }

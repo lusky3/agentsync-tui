@@ -635,6 +635,22 @@ func TestPushScansMergeCommits(t *testing.T) {
 	wantView(t, f.s, "refused: 2 hard findings", "mcp/x.toml:3")
 }
 
+// A `merge -s ours` of a side branch that added (then deleted) a token
+// is TREESAME to main, but the push publishes the side history: it is
+// scanned, so the push is refused.
+func TestPushRefusedOursMergeOfSecretSideBranch(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Git(t, home, "checkout", "-q", "-b", "side")
+	gittest.Commit(t, home, "side", map[string]string{tomlX: baseTOML + "env = { API_KEY = \"" + ghpToken + "\" }\n"})
+	gittest.Commit(t, home, "side drop", map[string]string{tomlX: baseTOML})
+	gittest.Git(t, home, "checkout", "-q", "main")
+	gittest.Commit(t, home, "main", map[string]string{skillA: "# a\n"})
+	gittest.Git(t, home, "merge", "-q", "-s", "ours", "--no-edit", "side")
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3")
+}
+
 // Ruling 32: a commit made on the branch after the guard scanned (while
 // the confirm modal is open) never reaches the remote.
 func TestPushSendsOnlyTheScannedCommit(t *testing.T) {
