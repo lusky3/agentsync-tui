@@ -33,6 +33,7 @@ const (
 	maxBranchBytes  = 255
 	// displayPaths is how many paths Display lists before "… (+N more)".
 	displayPaths = 10
+	sshScheme    = "ssh://"
 )
 
 var (
@@ -226,7 +227,7 @@ func ValidCloneURL(u string) error {
 	switch {
 	case strings.HasPrefix(u, "https://"):
 		return checkSchemeURL(u, false)
-	case strings.HasPrefix(u, "ssh://"):
+	case strings.HasPrefix(u, sshScheme):
 		return checkSchemeURL(u, true)
 	case strings.Contains(u, "://"):
 		return bad("use https:// or ssh://")
@@ -414,6 +415,26 @@ func InitFromURL(u string) (Action, error) {
 	if err := ValidCloneURL(u); err != nil {
 		return Action{}, err
 	}
-	argv := []string{"init", u}
-	return Action{Title: "Clone agentsync home", Argv: argv, Network: true, display: append([]string(nil), argv...)}, nil
+	return Action{Title: "Clone agentsync home", Argv: []string{"init", u}, Network: true,
+		display: []string{"init", cloneURLDisplay(u)}, premasked: true}, nil
+}
+
+// cloneURLDisplay is a valid clone URL masked for display, an ssh:// user
+// name kept visible: ValidCloneURL allows a user name but no password
+// there, and a plain name (git, deploy.bot) is not a secret. A user name
+// mask.Text would change (a token shape) stays masked, as does anything
+// else mask.Text masks. The scp form user@host:path has no userinfo for
+// mask.Text to mask.
+func cloneURLDisplay(u string) string {
+	masked := mask.Text(u)
+	rest, ok := strings.CutPrefix(u, sshScheme)
+	if !ok {
+		return masked
+	}
+	user, _, hasUser := strings.Cut(rest, "@")
+	hidden := sshScheme + mask.Mask + "@"
+	if !hasUser || !urlUserRe.MatchString(user) || mask.Text(user) != user || !strings.HasPrefix(masked, hidden) {
+		return masked
+	}
+	return sshScheme + user + "@" + masked[len(hidden):]
 }

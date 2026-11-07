@@ -519,3 +519,23 @@ func TestStatePathRefusedAnyCaseOrSeparator(t *testing.T) {
 		}
 	}
 }
+
+// A plain ssh user name is not a secret: the clone URL's display keeps it
+// in both the ssh:// and the scp form, and an https URL is unchanged.
+func TestInitFromURLDisplayKeepsPlainUser(t *testing.T) {
+	for u, want := range map[string]string{
+		"ssh://git@github.com/o/r.git":   "agentsync init ssh://git@github.com/o/r.git",
+		"ssh://deploy.bot@h:2222/o/r":    "agentsync init ssh://deploy.bot@h:2222/o/r",
+		"git@github.com:o/r.git":         "agentsync init git@github.com:o/r.git",
+		"https://github.com/o/r.git":     "agentsync init https://github.com/o/r.git",
+		"ssh://git@h/o/ghp_abcdefghijkl": "agentsync init 'ssh://git@h/o/••••'",
+	} {
+		if got := mustAction(t)(InitFromURL(u)).Display(); got != want {
+			t.Errorf("Display(%q) = %q, want %q", u, got, want)
+		}
+	}
+	// A user name that is a token shape stays masked.
+	if got := mustAction(t)(InitFromURL("ssh://ghp_abcdefghijkl@h/o/r")).Display(); strings.Contains(got, "ghp_") {
+		t.Errorf("token-shaped user shown: %q", got)
+	}
+}
