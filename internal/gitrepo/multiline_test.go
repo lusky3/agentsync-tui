@@ -67,3 +67,27 @@ func TestScanAddedUnchangedBodyNotReported(t *testing.T) {
 		t.Errorf("findings %+v", fs)
 	}
 }
+
+// In a basic multi-line string a backslash-escaped quote is no delimiter:
+// \""" neither closes the string nor stops an opener from opening one.
+func TestScanAddedEscapedDelimiter(t *testing.T) {
+	cases := []struct {
+		name, post string
+		line       Line
+	}{
+		{"escaped quotes on the opener line", "API_KEY = \"\"\"x\\\"\"\"\nhunter2\n\"\"\"\n", Line{2, "hunter2"}},
+		{"escaped quotes in the body", "API_KEY = \"\"\"\nab\\\"\"\"\nhunter2\n\"\"\"\n", Line{3, "hunter2"}},
+		{"escaped backslash then a real close is still a close", "API_KEY = \"\"\"\nab\\\\\nhunter2\n\"\"\"\n", Line{3, "hunter2"}},
+	}
+	for _, c := range cases {
+		fs := ScanAdded(scanMCP, []Line{c.line}, c.post)
+		if len(fs) != 1 || !fs[0].Hard {
+			t.Errorf("%s: findings %+v, want one hard", c.name, fs)
+		}
+	}
+	// An even run of backslashes leaves the quotes a delimiter: closed.
+	post := "API_KEY = \"\"\"\nab\\\\\"\"\"\nhunter2\n"
+	if fs := ScanAdded(scanMCP, []Line{{3, "hunter2"}}, post); len(fs) != 0 {
+		t.Errorf("closed string: findings %+v", fs)
+	}
+}

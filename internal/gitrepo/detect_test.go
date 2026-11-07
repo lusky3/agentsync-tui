@@ -617,3 +617,34 @@ func TestControlCharInTopRefused(t *testing.T) {
 	newHome(t, home)
 	wantControlRefused(t, home)
 }
+
+// A stow-style agentsync.toml, a symlink to a regular file inside the
+// resolved home, is read through the link.
+func TestBackupAuthorThroughSymlink(t *testing.T) {
+	home := t.TempDir()
+	body := "[destination_directory_git_backup]\nauthor_email = \"stow@example.invalid\"\n"
+	if err := os.MkdirAll(filepath.Join(home, "stow"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "stow", tomlName), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("stow", tomlName), filepath.Join(home, tomlName)); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	if got := BackupAuthor(home); got != "stow@example.invalid" {
+		t.Errorf("BackupAuthor = %q", got)
+	}
+	// A link leaving the home is not followed.
+	out := filepath.Join(t.TempDir(), tomlName)
+	if err := os.WriteFile(out, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	if err := os.Symlink(out, filepath.Join(other, tomlName)); err != nil {
+		t.Fatal(err)
+	}
+	if got := BackupAuthor(other); got != DefaultBackupAuthor {
+		t.Errorf("outside link: %q", got)
+	}
+}

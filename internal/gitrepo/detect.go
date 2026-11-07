@@ -391,11 +391,18 @@ const maxConfigBytes = 1 << 20
 // BackupAuthor is the email agentsync's destination backups commit as:
 // [destination_directory_git_backup].author_email in <home>/agentsync.toml,
 // or DefaultBackupAuthor when that is unset, empty or unreadable. The file
-// is read with ReadRegular (no symlink, never blocking on a FIFO) and at
-// most maxConfigBytes; a longer one is unreadable too. The default is the
-// fail-safe answer: Detect's marker rule still applies.
+// is read with ReadRegular (never blocking on a FIFO) and at most
+// maxConfigBytes; a longer one counts as unreadable. A symlinked
+// agentsync.toml (a stow-style home) is followed only to a regular file
+// inside the resolved home (configPath). Falling back to the default can
+// miss a custom author, so a backup repository committing as one is then
+// recognised only by Detect's other rules (the agentsync.managed marker).
 func BackupAuthor(home string) string {
-	b, err := ReadRegular(filepath.Join(home, "agentsync.toml"), maxConfigBytes+1)
+	name, ok := configPath(home)
+	if !ok {
+		return DefaultBackupAuthor
+	}
+	b, err := ReadRegular(name, maxConfigBytes+1)
 	if err != nil || len(b) > maxConfigBytes {
 		return DefaultBackupAuthor
 	}
@@ -408,4 +415,29 @@ func BackupAuthor(home string) string {
 		return DefaultBackupAuthor
 	}
 	return cfg.Backup.AuthorEmail
+}
+
+// configPath is the file BackupAuthor reads: <home>/agentsync.toml, or,
+// when that is a symlink, its target once the target resolves to a path
+// inside the resolved home. false when the link cannot be resolved or
+// leaves the home; ReadRegular then checks the file is regular.
+func configPath(home string) (string, bool) {
+	name := filepath.Join(home, "agentsync.toml")
+	fi, err := os.Lstat(name)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return name, true
+	}
+	target, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return "", false
+	}
+	root, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return target, true
 }

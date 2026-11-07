@@ -30,6 +30,9 @@ const (
 	// KindMultiLineSecret: a secret-named key or header whose value opens
 	// a multi-line string, which the line scan cannot follow.
 	KindMultiLineSecret = "multi-line secret value"
+	// KindContextNotChecked: an added line past the 1 MiB of its file read for
+	// context, so whether it sits in a multi-line value is not known.
+	KindContextNotChecked = "multi-line context not checked beyond 1 MiB"
 )
 
 const (
@@ -397,15 +400,7 @@ func multiLineOpener(pairs []kv) (found, auth bool) {
 	return found, false
 }
 
-func opensMultiLine(v string) bool {
-	v = strings.TrimSpace(v)
-	for _, q := range []string{`"""`, "'''"} {
-		if strings.HasPrefix(v, q) && strings.Count(v, q) == 1 {
-			return true
-		}
-	}
-	return false
-}
+func opensMultiLine(v string) bool { return openedDelim(strings.TrimSpace(v)) != "" }
 
 var (
 	// wordRe splits a line into words: a ${reference} is one word.
