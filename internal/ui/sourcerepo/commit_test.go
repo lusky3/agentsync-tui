@@ -800,6 +800,36 @@ func TestCommitRefusedMultiLineSecretBodyEdit(t *testing.T) {
 	}
 }
 
+// Ruling 43: an edit of a multi-line env value's body is hard whatever the
+// key; the -U0 patch holds only the body, so the worktree post-image gives
+// the context. The diff pane keeps the value masked.
+func TestCommitRefusedEnvMultiLineBodyEdit(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "ref", map[string]string{tomlX: baseTOML + "[servers.x.env]\nFOO = '''\n${TOKEN}\n'''\n"})
+	write(t, home, tomlX, baseTOML+"[servers.x.env]\nFOO = '''\n"+opaqueWord+"\n'''\n")
+	f := open(t, home)
+	before := logCount(t, home)
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if logCount(t, home) != before {
+		t.Error("a commit was made")
+	}
+	wantView(t, f.s, "refused", "mcp/x.toml:5")
+	if strings.Contains(view(f.s), opaqueWord) {
+		t.Error("the value is shown")
+	}
+	f = open(t, home)
+	f.s.list.Cursor = rowOf(f.s, tomlX)
+	press(f.s, "enter")
+	if f.s.mode != modeDiff {
+		t.Fatalf("mode %v, want diff", f.s.mode)
+	}
+	if d := strings.Join(f.s.diff.lines, "\n"); strings.Contains(d, opaqueWord) || !strings.Contains(d, "FOO") {
+		t.Errorf("diff pane:\n%s", d)
+	}
+}
+
 // The same body edit under a key that is not secret-named is no finding.
 func TestCommitMultiLineBodyEditUnderPlainKey(t *testing.T) {
 	home := newRepo(t)

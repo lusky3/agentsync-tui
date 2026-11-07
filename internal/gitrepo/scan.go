@@ -191,7 +191,8 @@ func ScanLines(homeRel string, lines []Line) []Finding { return ScanAdded(homeRe
 
 // ScanAdded is ScanLines with the file's post-image post (the whole new
 // file, "" when unknown) as context: an added line inside the body of a
-// TOML multi-line string opened by a secret-named or header key, whose
+// TOML multi-line string opened by a secret-named or header key or under
+// an env or headers table (Ruling 43), whose
 // opener the -U0 patch does not hold when only the body changed, is also
 // classified as that key's value (multiLineBodies, classifyBody). Its
 // Shown is mask.Mask: the body line is the secret.
@@ -235,7 +236,8 @@ func scanLine(l Line, config bool, bodies map[int]mlOpener) (Finding, bool) {
 
 // ScanNewFile scans a whole new (untracked) file. A binary file (a NUL in
 // its first 8 KiB) or one over 1 MiB is not scanned and gives one soft
-// finding saying so. CRLF line ends are understood.
+// finding saying so. CRLF line ends are understood. The file is its own
+// post-image, so a multi-line value's body is judged by its opener.
 func ScanNewFile(homeRel string, content []byte) []Finding {
 	notScanned := func(kind string) []Finding {
 		return []Finding{{Path: mask.OneLine(mask.Text(homeRel)), Kind: kind}}
@@ -251,7 +253,7 @@ func ScanNewFile(homeRel string, content []byte) []Finding {
 	for i, l := range split {
 		lines = append(lines, Line{N: i + 1, Text: strings.TrimSuffix(l, "\r")})
 	}
-	return ScanLines(homeRel, lines)
+	return ScanAdded(homeRel, lines, string(content))
 }
 
 // IsConfigFile reports whether the home-relative path is one of agentsync's

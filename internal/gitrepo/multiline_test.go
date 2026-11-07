@@ -91,3 +91,59 @@ func TestScanAddedEscapedDelimiter(t *testing.T) {
 		t.Errorf("closed string: findings %+v", fs)
 	}
 }
+
+// Ruling 43: a multi-line string opened under an env, environment or
+// headers table is an env or header value, so a token-shaped or credential
+// line in its body is hard in a config file, whatever the opener's own key.
+func TestScanAddedEnvMultiLineBody(t *testing.T) {
+	tok := opaqueTok
+	digest := "sha256:" + strings.Repeat("a", 64)
+	cases := []struct {
+		name, post string
+		line       Line
+		want       int // -1 hard, 1 soft, 0 none
+	}{
+		{"dotted env key", "env.FOO = \"\"\"\n" + tok + "\n\"\"\"\n", Line{2, tok}, -1},
+		{"dotted visible key", "server.env.command = '''\n" + tok + "\n'''\n", Line{2, tok}, -1},
+		{"env table", "[servers.x.env]\nFOO = '''\n" + tok + "\n'''\n", Line{3, tok}, -1},
+		{"env table, visible key", "[servers.x.env]\ncommand = '''\n" + tok + "\n'''\n", Line{3, tok}, -1},
+		{"quoted env table", "[servers.x.\"environment\"]\nFOO = '''\n" + tok + "\n'''\n", Line{3, tok}, -1},
+		{"array of tables", "[[x.headers]]\nX-Trace = '''\n" + tok + "\n'''\n", Line{3, tok}, -1},
+		{"headers table", "[servers.x.headers]\nX-Trace = '''\n  " + tok + "\n'''\n", Line{3, "  " + tok}, -1},
+		{"dotted auth header", "headers.Authorization = \"\"\"\nBearer abc123def\n\"\"\"\n", Line{2, "Bearer abc123def"}, -1},
+		{"inline env table", "env = { FOO = '''\n" + tok + "\n''' }\n", Line{2, tok}, -1},
+		{"nested inline env table", "initialization_options = { env = { FOO = '''\n" + tok + "\n''' } }\n", Line{2, tok}, -1},
+		{"env credential", "[servers.x.env]\nFOO = '''\n" + ghpTok + "\n'''\n", Line{3, ghpTok}, -1},
+		{"env reference", "[servers.x.env]\nFOO = '''\n${TOKEN}\n'''\n", Line{3, "${TOKEN}"}, 0},
+		{"env prose", "[servers.x.env]\nFOO = '''\nhello world\n'''\n", Line{3, "hello world"}, 0},
+		{"env digest", "[servers.x.env]\nFOO = '''\n" + digest + "\n'''\n", Line{3, digest}, 0},
+		{"plain key", "[servers.x]\ndescription = '''\n" + tok + "\n'''\n", Line{3, tok}, 1},
+		{"table after an env table", "[servers.x.env]\n[servers.x]\ndescription = '''\n" + tok + "\n'''\n", Line{4, tok}, 1},
+		{"after the env string", "[servers.x.env]\nFOO = '''\nx\n'''\n[servers.y]\n" + tok + "\n", Line{6, tok}, 1},
+	}
+	for _, c := range cases {
+		fs := ScanAdded(scanMCP, []Line{c.line}, c.post)
+		got := len(fs)
+		if got == 1 && fs[0].Hard {
+			got = -1
+		}
+		if got != c.want {
+			t.Errorf("%s: findings %+v, want %d", c.name, fs, c.want)
+		}
+		if got == -1 && strings.Contains(fs[0].Shown, tok) {
+			t.Errorf("%s: the body is shown: %q", c.name, fs[0].Shown)
+		}
+	}
+	// Outside a config file the same body stays soft.
+	if fs := ScanAdded(scanSkill, []Line{{2, tok}}, "env.FOO = '''\n"+tok+"\n'''\n"); len(fs) != 1 || fs[0].Hard {
+		t.Errorf("skill: findings %+v, want one soft", fs)
+	}
+}
+
+// A new file is its own post-image: its env multi-line bodies are hard.
+func TestScanNewFileEnvMultiLineBody(t *testing.T) {
+	fs := ScanNewFile(scanMCP, []byte("[servers.x.env]\r\nFOO = '''\r\n"+opaqueTok+"\r\n'''\r\n"))
+	if len(fs) != 1 || !fs[0].Hard || fs[0].Line != 3 {
+		t.Errorf("findings %+v, want one hard at line 3", fs)
+	}
+}

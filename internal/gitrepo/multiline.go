@@ -1,35 +1,46 @@
 package gitrepo
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
 // mlOpener is a TOML multi-line string that a pair opened: the pair, its
-// closing quotes, and whether its key is a header (auth) or secret-named.
+// closing quotes, whether its key is a header (auth) or secret-named, and
+// whether it is an env or header value (env: under an env, environment or
+// headers table, Ruling 43).
 type mlOpener struct {
-	pair         kv
-	delim        string
-	auth, secret bool
+	pair              kv
+	delim             string
+	auth, secret, env bool
 }
 
 // multiLineBodies maps each line number of post (a whole file, its
 // post-image) that lies in the body of a TOML multi-line string (triple
-// single or double quotes) opened by a secret-named or header key to that
-// opener. The opener line itself is not a body line; the closing line is.
-// A string that never closes runs to the end of the file. A string that
-// is an array element is not followed (README, known limits).
+// single or double quotes) opened by a secret-named or header key, or
+// under an env, environment or headers table (the current [table], a
+// dotted key or an inline table), to that opener. The opener line itself
+// is not a body line; the closing line is. A string that never closes runs
+// to the end of the file. A string that is an array element is not
+// followed (README, known limits).
 func multiLineBodies(post string) map[int]mlOpener {
 	out := map[int]mlOpener{}
 	var cur *mlOpener
+	envTable := false
 	for i, l := range strings.Split(post, "\n") {
 		l = strings.TrimSuffix(l, "\r")
 		if cur == nil {
-			cur = openerOf(l)
+			if tableRe.MatchString(l) {
+				// Every key-like word on the header line counts, a
+				// comment's included (fail closed).
+				envTable = kv{key: l}.underEnvTable()
+			}
+			cur = openerOf(l, envTable)
 			continue
 		}
-		if cur.auth || cur.secret {
+		if cur.auth || cur.secret || cur.env {
 			out[i+1] = *cur
 		}
 		if delimIndex(l, cur.delim) >= 0 {
@@ -40,12 +51,16 @@ func multiLineBodies(post string) map[int]mlOpener {
 }
 
 // openerOf is the multi-line string the line opens and does not close, or
-// nil: the first such pair at any depth (allPairs).
-func openerOf(l string) *mlOpener {
-	for _, p := range allPairs(l) {
+// nil: the first such pair at any depth (allPairs). It is an env or header
+// value when the line is under an env table (envTable) or the pair or one
+// enclosing it on the line is under one.
+func openerOf(l string, envTable bool) *mlOpener {
+	pairs := allPairs(l)
+	for i, p := range pairs {
 		if q := openedDelim(strings.TrimSpace(p.value)); q != "" {
 			_, secret := mask.Credential(p.lastKey() + " = x")
-			return &mlOpener{pair: p, delim: q, auth: authKey(p), secret: secret}
+			env := envTable || slices.ContainsFunc(pairs[:i+1], kv.underEnvTable)
+			return &mlOpener{pair: p, delim: q, auth: authKey(p), secret: secret, env: env}
 		}
 	}
 	return nil
@@ -83,8 +98,10 @@ func delimIndex(s, q string) int {
 
 // classifyBody decides a body line of o's string as the value of o's key:
 // a header value with a literal is hard everywhere, a secret-named key's
-// literal is hard in a config file and soft elsewhere (R5). References
-// and blank lines are not findings.
+// literal is hard in a config file and soft elsewhere (R5), and so is a
+// credential or token-shaped word (outside the exempt digests) in an env
+// or header value (Ruling 43). References and blank lines are not
+// findings.
 func (o mlOpener) classifyBody(text string, config bool) (kind string, hard, found bool) {
 	body := text
 	if i := delimIndex(text, o.delim); i >= 0 {
@@ -98,5 +115,11 @@ func (o mlOpener) classifyBody(text string, config bool) (kind string, hard, fou
 		return mask.KindAuthHeader, true, authLiteral(kv{key: o.pair.key, value: body})
 	}
 	kind, found = mask.Credential(o.pair.lastKey() + " = '''" + body + "'''")
-	return kind, config, found
+	if found || !o.env {
+		return kind, config, found
+	}
+	if hasTokenWord(exemptRe.ReplaceAllString(mask.Sanitize(body), " ")) {
+		return KindTokenShapedWord, config, true
+	}
+	return "", false, false
 }

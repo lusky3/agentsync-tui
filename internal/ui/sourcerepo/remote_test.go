@@ -669,6 +669,22 @@ func TestPushRefusedMultiLineSecretBodyEdit(t *testing.T) {
 	}
 }
 
+// Ruling 43: the same for a push: the body of a multi-line env value is
+// classified by the blob's context, so it is hard whatever the key.
+func TestPushRefusedEnvMultiLineBodyEdit(t *testing.T) {
+	home, _ := newTracked(t)
+	ref := baseTOML + "env.command = \"\"\"\n${TOKEN}\n\"\"\"\n"
+	gittest.Commit(t, home, "ref", map[string]string{tomlX: ref})
+	gittest.Git(t, home, "push", "-q", "origin", "main")
+	gittest.Commit(t, home, "literal", map[string]string{tomlX: strings.Replace(ref, "${TOKEN}", opaqueWord, 1)})
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:4")
+	if strings.Contains(view(f.s), opaqueWord) {
+		t.Error("the value is shown")
+	}
+}
+
 // The same body edit under a key that is not secret-named needs no typed
 // push.
 func TestPushMultiLineBodyEditUnderPlainKey(t *testing.T) {
