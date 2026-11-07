@@ -15,6 +15,8 @@ func TestCredentialHardKinds(t *testing.T) {
 		{"use xoxe-12345678901234", "token-shape"},
 		{"aws AKIAABCDEFGHIJKLMNOP", "token-shape"},
 		{"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig", "token-shape"},
+		// A token shape inside a reference's name is still token text.
+		{"${env:ghp_abcdefghijklmnop}", "token-shape"},
 		{"Authorization: Basic dXNlcjpwYXNz", "auth-header"},
 		{"Proxy-Authorization: Digest abc", "auth-header"},
 		{"curl -H 'Bearer hunter2'", "auth-header"},

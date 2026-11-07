@@ -25,7 +25,10 @@ var (
 // Authorization-style headers, URL userinfo, secret-named assignments),
 // plus PEM private keys and age identities, but not Text's URL-structure
 // pass: a plain URL's path and query are not a finding on their own. A
-// value that is only references (${secret:X}, ${env:T}) is never one. s is
+// header or assignment value that is only references (${secret:X},
+// ${env:T}) is not one, but a known token shape is found wherever it
+// appears, a reference's name included (R5; Text masks it there too): a
+// name such as ${env:ghp_...} still puts the token's text in the file. s is
 // sanitised first so a control character cannot split a token past the
 // rules.
 func Credential(s string) (kind string, found bool) {
