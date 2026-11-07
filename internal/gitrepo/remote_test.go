@@ -31,6 +31,10 @@ func TestSourceRepoReadArgvPinned(t *testing.T) {
 			"--no-color", "-U0", "--no-renames", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
 			"--format=%H", a + ".." + b, "--", "agentsync"}},
 		{"messages", OutgoingMessagesArgv(r, a, b), []string{"-C", "/h/top", "log", "--format=%H%x00%B%x00", a + ".." + b, "--"}},
+		{"fetch url", FetchURLArgv(r, "origin"), []string{"-C", "/h/top", "remote", "get-url", "origin"}},
+		{"names whole history", OutgoingNamesArgv(r, "", b), []string{"-C", "/h/top", "log", "--format=", "--name-only", "-z",
+			"--no-renames", "--full-history", "--diff-merges=first-parent", b, "--", "agentsync"}},
+		{"messages whole history", OutgoingMessagesArgv(r, "", b), []string{"-C", "/h/top", "log", "--format=%H%x00%B%x00", b, "--"}},
 		{"blob", BlobArgv(r, a, "mcp/x.toml"), []string{"-C", "/h/top", "cat-file", "blob", a + ":mcp/x.toml"}},
 	}
 	for _, c := range cases {
@@ -56,6 +60,8 @@ func TestSourceRepoReadArgvRefusesBadArguments(t *testing.T) {
 		"names glued option": OutgoingNamesArgv(r, sha+"..x", sha),
 		"messages bad base":  OutgoingMessagesArgv(r, "HEAD", sha),
 		"messages bad tip":   OutgoingMessagesArgv(r, sha, "--all"),
+		"patch no tip":       OutgoingPatchArgv(r, "", ""),
+		"fetch url option":   FetchURLArgv(r, "--x"),
 		"branch commit bad":  BranchCommitArgv(r, "-x"),
 		"branch commit HEAD": BranchCommitArgv(r, "HEAD"),
 		"upstream bad":       BranchUpstreamCommitArgv(r, "a@{u}"),

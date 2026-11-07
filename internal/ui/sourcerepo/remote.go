@@ -235,13 +235,18 @@ type netMsg struct {
 }
 
 // pushPlan is what the push guard found: the commit it scanned (the push
-// sends exactly that commit, Ruling 32), the push URLs (unmasked) and the
-// scan's findings.
+// sends exactly that commit, Ruling 32), the push URLs (unmasked), the
+// scan's findings, and whether the scan covered tip's whole history (wide:
+// a push URL is not the fetch URL).
 type pushPlan struct {
 	sha      string
 	urls     []string
 	findings []gitrepo.Finding
+	wide     bool
 }
+
+// whyWide says why a push scan covered the branch's whole history.
+const whyWide = "a push URL is not the fetch URL, so it may lack more than the fetched upstream does: the branch's whole history was scanned"
 
 // startNet checks what the last refresh read, then starts the guard round
 // of a pull or push in the background.
@@ -306,8 +311,29 @@ func pushGuard(ctx context.Context, in netInput, b gitrepo.Branch, r remoteInfo)
 	if why != "" {
 		return pushPlan{}, []string{why}
 	}
+	wide := !onlyFetchURL(ctx, in, r.name, urls)
+	if wide {
+		base = ""
+	}
 	fs, refusal := scanOutgoing(ctx, in, base, tip)
-	return pushPlan{sha: tip, urls: urls, findings: fs}, refusal
+	if wide && refusal != nil {
+		refusal = append(refusal, whyWide)
+	}
+	return pushPlan{sha: tip, urls: urls, findings: fs, wide: wide}, refusal
+}
+
+// onlyFetchURL reports whether urls, every URL a push to remote goes to,
+// is exactly the URL a fetch from remote uses: only then does the fetched
+// upstream tell what the destination already holds (a pushurl, a
+// pushInsteadOf or a second url may point at a repository that lags it).
+// A read that fails counts as not, which widens the scan.
+func onlyFetchURL(ctx context.Context, in netInput, remote string, urls []string) bool {
+	argv := gitrepo.FetchURLArgv(in.repo, remote)
+	if argv == nil || len(urls) != 1 {
+		return false
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
+	return err == nil && res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == urls[0]
 }
 
 // pushBranchRefusal is why the branch's state forbids a push, or "".
@@ -417,11 +443,14 @@ func (s *Screen) onNet(m netMsg) tea.Cmd {
 	}
 	c := countFindings(m.push.findings)
 	if c.hard > 0 {
-		s.note = strings.Join(pushHardRefusal(c.hard, s.repo.Top), "\n")
+		s.note = strings.Join(pushHardRefusal(c.hard, s.repo.Top, m.push.wide), "\n")
 		return nil
 	}
 	warn := append(pushWarnings(m.push.urls), "scanned against "+mask.Sanitize(m.remote)+"/"+mask.Sanitize(m.head)+
 		" as last fetched; fetch (f) first if the remote may have been rewritten")
+	if m.push.wide {
+		warn = append(warn, whyWide)
+	}
 	if len(m.push.findings) > 0 {
 		act.TypedConfirm = true
 		warn = append(warn, c.soft()+" in the outgoing commits, listed on the Source repo tab; type push to proceed")
@@ -430,13 +459,21 @@ func (s *Screen) onNet(m netMsg) tea.Cmd {
 	return s.emitNet(act, nil, p)
 }
 
-// pushHardRefusal explains hard findings in the outgoing commits.
-func pushHardRefusal(n int, top string) []string {
-	return []string{
+// pushHardRefusal explains hard findings in the outgoing commits (wide:
+// in the branch's whole history, which a push URL other than the fetch
+// URL may lack).
+func pushHardRefusal(n int, top string, wide bool) []string {
+	out := []string{
 		refused + plural(n, "hard finding") + " (likely secrets) in the outgoing commits, listed below; a push would publish them in history",
 		"to inspect them" + runOutside,
 		"  " + inspectCommand(top),
 	}
+	if wide {
+		out[0] = refused + plural(n, "hard finding") + " (likely secrets) in the branch's history, listed below; a push would publish them in history"
+		out[2] = "  " + gitC + shellQuote(top) + " log -p HEAD"
+		out = append(out, whyWide)
+	}
+	return out
 }
 
 func inspectCommand(top string) string {

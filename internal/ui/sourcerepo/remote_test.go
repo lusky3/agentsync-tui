@@ -342,7 +342,7 @@ func TestPushWarnsPublicHost(t *testing.T) {
 	w := d.Action.Warning
 	for _, want := range []string{"https://github.com/o/r.git",
 		"pushes to github.com: make sure the repository is private; the TUI cannot see its visibility",
-		"scanned against origin/main as last fetched; fetch (f) first if the remote may have been rewritten"} {
+		"scanned against origin/main as last fetched; fetch (f) first if the remote may have been rewritten", whyWide} {
 		if !strings.Contains(w, want) {
 			t.Errorf("warning lacks %q: %q", want, w)
 		}
@@ -923,4 +923,35 @@ func TestPushRefusesOutgoingPathWithLeadingNewline(t *testing.T) {
 	f := open(t, home)
 	wantNothing(t, press(f.s, "P"))
 	wantView(t, f.s, "refused: an outgoing commit touches", "unusual name")
+}
+
+// A push URL other than the fetch URL may lack more than the fetched
+// upstream does: here it holds only the first commit, the upstream also a
+// commit with a token, and pushing the next commit there would publish
+// that token too. The guard then scans the branch's whole history.
+func TestPushToOtherURLScansWholeHistory(t *testing.T) {
+	home, bare := newTracked(t)
+	mirror := filepath.Join(t.TempDir(), "mirror.git")
+	gittest.Git(t, "", "clone", "-q", "--bare", bare, mirror)
+	pushFromOther(t, bare, map[string]string{tomlX: baseTOML + "env = { API_KEY = \"" + ghpToken + "\" }\n"})
+	gittest.Git(t, home, "pull", "-q", "--ff-only")
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	gittest.Git(t, home, "config", "remote.origin.pushurl", mirror)
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3")
+}
+
+// With the push URL the fetch URL, the scan stays base..tip: the same
+// history pushed to its own remote passes.
+func TestPushToFetchURLScansOutgoingOnly(t *testing.T) {
+	home, bare := newTracked(t)
+	pushFromOther(t, bare, map[string]string{tomlX: baseTOML + "env = { API_KEY = \"" + ghpToken + "\" }\n"})
+	gittest.Git(t, home, "pull", "-q", "--ff-only")
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "P"))
+	if d.Action.TypedConfirm {
+		t.Errorf("push needs typing: %q", d.Action.Warning)
+	}
 }

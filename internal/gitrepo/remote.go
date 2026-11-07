@@ -36,6 +36,16 @@ func PushURLsArgv(r Repo, remote string) []string {
 	return []string{"-C", r.Top, "remote", "get-url", "--push", "--all", remote}
 }
 
+// FetchURLArgv prints the URL a fetch from remote uses: its first url,
+// with insteadOf applied. A push goes there too only when PushURLsArgv
+// lists exactly this URL.
+func FetchURLArgv(r Repo, remote string) []string {
+	if actions.ValidRemoteName(remote) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "remote", "get-url", remote}
+}
+
 // BranchCommitArgv prints the object id of the commit branch points at,
 // named in full (refs/heads/<branch>), so neither HEAD moving to another
 // branch nor a tag of the same name changes what it reads.
@@ -65,19 +75,37 @@ func CommitsAfterArgv(r Repo, sha, branch string) []string {
 	return []string{"-C", r.Top, "rev-list", "--count", sha + "..refs/heads/" + branch, "--"}
 }
 
+// outgoingRange is the revision range of the Outgoing*Argv reads:
+// base..tip, or, when base is "", tip's whole history (a push destination
+// whose state is not known may lack any of it). ok is false when tip, or
+// a base that is not "", is not an object id.
+func outgoingRange(base, tip string) (string, bool) {
+	switch {
+	case actions.ValidObjectID(tip) != nil:
+		return "", false
+	case base == "":
+		return tip, true
+	case actions.ValidObjectID(base) != nil:
+		return "", false
+	}
+	return base + ".." + tip, true
+}
+
 // OutgoingNamesArgv lists, NUL-separated, every path any commit in
 // base..tip touches under the home pathspec, not only the net diff;
 // merges against their first parent, renames split into a deletion and an
 // addition so both names are listed. --full-history keeps every commit of
 // the range: without it a path-limited log may simplify away the side of
 // a merge that is TREESAME to its first parent (`merge -s ours`), whose
-// commits a push still publishes. base and tip must be object ids.
+// commits a push still publishes. base and tip are as outgoingRange
+// takes them.
 func OutgoingNamesArgv(r Repo, base, tip string) []string {
-	if actions.ValidObjectID(base) != nil || actions.ValidObjectID(tip) != nil {
+	rng, ok := outgoingRange(base, tip)
+	if !ok {
 		return nil
 	}
 	return []string{"-C", r.Top, "log", "--format=", "--name-only", "-z", "--no-renames",
-		"--full-history", "--diff-merges=first-parent", base + ".." + tip, "--", r.Pathspec}
+		"--full-history", "--diff-merges=first-parent", rng, "--", r.Pathspec}
 }
 
 // OutgoingPatchArgv is every commit's own patch in base..tip with no
@@ -85,26 +113,28 @@ func OutgoingNamesArgv(r Repo, base, tip string) []string {
 // fixed a/ b/ prefixes and no rename sections, so each file section's
 // header names one path twice. Merges diff against their first parent,
 // never a combined diff (AddedLines does not parse one); --full-history
-// as in OutgoingNamesArgv. base and tip must be object ids.
+// as in OutgoingNamesArgv; base and tip as outgoingRange takes them.
 func OutgoingPatchArgv(r Repo, base, tip string) []string {
-	if actions.ValidObjectID(base) != nil || actions.ValidObjectID(tip) != nil {
+	rng, ok := outgoingRange(base, tip)
+	if !ok {
 		return nil
 	}
 	return []string{"-C", r.Top, "log", "-p", "--no-ext-diff", "--no-textconv", "--no-color", "-U0",
 		"--no-renames", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
-		"--format=%H", base + ".." + tip, "--", r.Pathspec}
+		"--format=%H", rng, "--", r.Pathspec}
 }
 
 // OutgoingMessagesArgv prints the raw message of every commit in
 // base..tip as "<sha> NUL <message> NUL", each record ended by a newline.
 // It has no pathspec: a push publishes every commit of the range, and
-// its message, whatever the commit touches. base and tip must be object
-// ids.
+// its message, whatever the commit touches. base and tip are as
+// outgoingRange takes them.
 func OutgoingMessagesArgv(r Repo, base, tip string) []string {
-	if actions.ValidObjectID(base) != nil || actions.ValidObjectID(tip) != nil {
+	rng, ok := outgoingRange(base, tip)
+	if !ok {
 		return nil
 	}
-	return []string{"-C", r.Top, "log", "--format=%H%x00%B%x00", base + ".." + tip, "--"}
+	return []string{"-C", r.Top, "log", "--format=%H%x00%B%x00", rng, "--"}
 }
 
 // BlobArgv prints the content of path (relative to the toplevel) as
