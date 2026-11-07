@@ -309,3 +309,29 @@ func TestMaskPatchLineHeaderPairsInProse(t *testing.T) {
 		}
 	}
 }
+
+// An env or headers table holds values, whatever their keys are called:
+// a nested key that is visible elsewhere (command, url, name) does not
+// show its value there (CodeRabbit, PR #4).
+func TestMaskPatchLineEnvTableHidesVisibleKeys(t *testing.T) {
+	for _, l := range []string{
+		"+env = { command = '" + hunter + "' }",
+		"+headers = { url = '" + hunter + "' }",
+		"+environment = { name = '" + hunter + "', path = '" + hunter + "' }",
+		"+x = { env = { command = '" + hunter + "' } }",
+		"+initialization_options = { env = { command = '" + hunter + "' } }",
+		"+initialization_options = { headers = { args = ['" + hunter + "'] } }",
+	} {
+		if got := MaskPatchLine(scanMCP, l); strings.Contains(got, hunter) {
+			t.Errorf("%q -> %q", l, got)
+		}
+	}
+	for _, l := range []string{
+		"+env = { command = '${env:CMD}' }",
+		"+initialization_options = { env = { HOME = '$HOME' } }",
+	} {
+		if got := MaskPatchLine(scanMCP, l); got != l {
+			t.Errorf("%q -> %q, want unchanged", l, got)
+		}
+	}
+}

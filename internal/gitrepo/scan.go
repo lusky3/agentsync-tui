@@ -439,10 +439,11 @@ func hasTokenWord(s string) bool {
 func softKey(k string) bool { return visibleKeys[k] }
 
 // hardTokenWord reports a config line's hard token-shaped word: in the
-// value of a key that is not a softKey (an env or header value), or a URL query
-// value anywhere on the line.
+// value of a key that is not a softKey (an env or header value), in the
+// value of a softKey that holds an env or headers table (nestedEnvTable),
+// or a URL query value anywhere on the line.
 func hardTokenWord(text string) bool {
-	if kv, ok := parseKV(text); ok && !softKey(kv.lastKey()) && hasTokenWord(kv.value) {
+	if kv, ok := parseKV(text); ok && (!softKey(kv.lastKey()) || nestedEnvTable(text)) && hasTokenWord(kv.value) {
 		return true
 	}
 	for _, u := range urlRe.FindAllString(text, -1) {
@@ -458,6 +459,15 @@ func hardTokenWord(text string) bool {
 		}
 	}
 	return false
+}
+
+// nestedEnvTable reports a line whose value holds an env, environment or
+// headers table at any depth (initialization_options = { env = { ... } }):
+// a token-shaped word there is an env or header value. The value is not
+// parsed, so a token-shaped word anywhere in it then counts (fail closed).
+func nestedEnvTable(text string) bool {
+	pairs := allPairs(text)
+	return len(pairs) > 1 && slices.ContainsFunc(pairs[1:], func(p kv) bool { return envTableKey(p.lastKey()) })
 }
 
 // shown is a finding's display line: mask.Text, then every token-shaped

@@ -159,8 +159,47 @@ func (p kv) masked() string {
 		return p.indent + p.key + p.eq + maskArgs(p.value) + p.trail
 	case visibleKeys[key]:
 		return p.indent + p.key + p.eq + maskVisible(p.value, false) + p.trail
+	case envTableKey(key):
+		return p.indent + mask.Text(p.key) + p.eq + maskStrict(p.value) + p.trail
 	}
 	return p.indent + mask.Text(p.key) + p.eq + maskValue(p.value) + p.trail
+}
+
+// envTableKey names a table of values handed to a program: env,
+// environment, headers. Every scalar under it, at any depth and whatever
+// its own key, is a value (maskStrict, and hard when token-shaped).
+func envTableKey(k string) bool {
+	switch strings.ToLower(k) {
+	case "env", "environment", "headers":
+		return true
+	}
+	return false
+}
+
+// maskStrict masks a value under an env or headers key: arrays and inline
+// tables element by element, every pair's value through maskStrict
+// whatever its key (no visible key shows a value here), and anything else
+// as maskValue does.
+func maskStrict(v string) string {
+	t := strings.TrimSpace(v)
+	lead := v[:strings.Index(v, t)]
+	trail := v[len(lead)+len(t):]
+	switch {
+	case container(t, '[', ']'):
+		return lead + "[" + mapElems(t[1:len(t)-1], maskStrict) + "]" + trail
+	case container(t, '{', '}'):
+		return lead + "{" + mapElems(t[1:len(t)-1], strictPair) + "}" + trail
+	}
+	return lead + maskTrimmed(t) + trail
+}
+
+// strictPair is maskStrict for one element of an inline table.
+func strictPair(e string) string {
+	p, ok := parseKV(e)
+	if !ok {
+		return maskStrict(e)
+	}
+	return p.indent + mask.Text(p.key) + p.eq + maskStrict(p.value) + p.trail
 }
 
 // maskVisible shows the value of a visible key. An inline table is shown
@@ -225,6 +264,8 @@ func maskVisiblePair(e string) string {
 		return p.masked()
 	case authKey(p), credential(e):
 		return p.indent + mask.Text(p.key) + p.eq + maskValue(p.value) + p.trail
+	case envTableKey(p.lastKey()):
+		return p.indent + mask.Text(p.key) + p.eq + maskStrict(p.value) + p.trail
 	}
 	return p.indent + mask.Text(p.key) + p.eq + maskVisible(p.value, true) + p.trail
 }

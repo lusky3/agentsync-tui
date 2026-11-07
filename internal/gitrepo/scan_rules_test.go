@@ -133,3 +133,13 @@ func TestStructuralKeysSoft(t *testing.T) {
 	// Secret-named keys stay hard whatever the table.
 	wantFinding(t, scanMCP, "initialization_options = { token = 'x' }", true)
 }
+
+// A token-shaped word in an env or headers table nested under a
+// structural key is an env or header value: hard, while other nested
+// values under that key stay soft (Ruling 21).
+func TestNestedEnvValueHard(t *testing.T) {
+	wantFinding(t, "lsp/l.toml", "initialization_options = { env = { FOO = '"+opaqueTok+"' } }", true)
+	wantFinding(t, "lsp/l.toml", "initialization_options = { headers = { X-Trace = '"+opaqueTok+"' } }", true)
+	wantFinding(t, scanMCP, "name = { environment = { path = '"+opaqueTok+"' } }", true)
+	wantNotHard(t, "lsp/l.toml", "initialization_options = { settings = { x = '"+opaqueTok+"' } }")
+}
