@@ -105,13 +105,19 @@ func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo
 }
 
 // worktreePost is the post-image of a tracked file's diff against HEAD:
-// its first maxScanned bytes in the worktree, or "" when it cannot be read
-// (deleted, replaced by a symlink, timed out): the diff's own table
-// headers are then the only context (gitrepo.PatchMasker).
+// its first maxScanned bytes in the worktree, cut to whole lines, or ""
+// when it cannot be read (deleted, replaced by a symlink, timed out).
+// Without it gitrepo.PatchMasker follows only the diff's own table
+// headers and masks removed lines past the file's start as env values.
 func worktreePost(ctx context.Context, repo gitrepo.Repo, f gitrepo.File, limit time.Duration) string {
 	b, err := bounded(ctx, limit, func() (capped, error) { return readFile(repo.Top, f.Path, maxScanned) })
 	if err != nil {
 		return ""
+	}
+	if b.cut {
+		// gitrepo.PatchMasker needs whole lines: drop the cut one.
+		i := strings.LastIndexByte(b.data, '\n')
+		return b.data[:i+1]
 	}
 	return b.data
 }

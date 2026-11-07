@@ -81,3 +81,47 @@ func TestPatchMaskerEnvTable(t *testing.T) {
 		t.Errorf("MaskPatchLine changed %q", l)
 	}
 }
+
+// Removed lines fail closed on their table: the pre-image's table is
+// followed across hunks (the unchanged lines between hunks read from the
+// post-image), a header-like line inside a multi-line string is no header,
+// and when the pre-image's table is not known a removed value is masked.
+func TestPatchMaskerRemovedLinesFailClosed(t *testing.T) {
+	tok := opaqueTok
+	fill := "A = '1'\nB = '2'\nC = '3'\nD = '4'\nE = '5'\nF = '6'\nG = '7'\nH = '8'\n"
+	cases := []struct {
+		name, post, patch, hidden string
+	}{
+		// (a) the env header became a plain one in the first hunk; the
+		// second hunk removes a value that was under the env table.
+		{"header changed in an earlier hunk", "[x]\n" + fill + "Z = '9'\n",
+			"@@ -1 +1 @@\n-[x.env]\n+[x]\n@@ -10,2 +10 @@\n Z = '9'\n-name = '" + tok + "'", "-name = '" + tok + "'"},
+		// (b) a body line that looks like a header does not end the env table.
+		{"header-like body line", "[x.env]\ndescription = '''\n[ok]\n'''\n" + fill,
+			"@@ -1,5 +1,4 @@\n [x.env]\n description = '''\n [ok]\n '''\n-name = '" + tok + "'", "-name = '" + tok + "'"},
+		// The same body line in the unchanged gap between hunks.
+		{"header-like body line between hunks", "[x.env]\ndescription = '''\n[ok]\n'''\n" + fill,
+			"@@ -1,0 +2,0 @@\n@@ -13 +12,0 @@\n-name = '" + tok + "'", "-name = '" + tok + "'"},
+		// No post-image and the hunk starts mid-file: the table is not known.
+		{"unknown table", "", "@@ -40 +39,0 @@\n-name = '" + tok + "'", "-name = '" + tok + "'"},
+		// A post-image cut before the hunk: the table is not known either.
+		{"post-image too short", "[x]\nA = '1'\n", "@@ -40 +39,0 @@\n-name = '" + tok + "'", "-name = '" + tok + "'"},
+	}
+	for _, c := range cases {
+		got := maskAll(NewPatchMasker(scanMCP, c.post), c.patch)
+		if strings.Contains(got, c.hidden) {
+			t.Errorf("%s: shown:\n%s", c.name, got)
+		}
+	}
+	// Known plain tables still show a visible key's value (Rulings 20, 21).
+	for _, c := range []struct{ name, post, patch string }{
+		{"plain table before the hunk", "[x]\n" + fill, "@@ -10 +9,0 @@\n-name = '" + tok + "'"},
+		{"start of the file", "", "@@ -1,2 +0,0 @@\n-[x]\n-name = '" + tok + "'"},
+		{"env header replaced earlier, then a plain one in the gap", "[x]\nA = '1'\n[y]\n" + fill,
+			"@@ -1 +1 @@\n-[x.env]\n+[x]\n@@ -12 +11,0 @@\n-name = '" + tok + "'"},
+	} {
+		if got := maskAll(NewPatchMasker(scanMCP, c.post), c.patch); !strings.Contains(got, "-name = '"+tok+"'") {
+			t.Errorf("%s: masked:\n%s", c.name, got)
+		}
+	}
+}

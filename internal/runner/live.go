@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,13 +134,13 @@ func startedSnapshot() []*child {
 	return snapshot()
 }
 
-// Live reports the argv of every child still running. Tests use it to
-// check that nothing was left behind without ending the registry, as a
-// Shutdown would.
+// Live reports the argv of every child still running, as copies the
+// caller may change. Tests use it to check that nothing was left behind
+// without ending the registry, as a Shutdown would.
 func Live() [][]string {
 	var out [][]string
 	for _, c := range snapshot() {
-		out = append(out, c.args)
+		out = append(out, slices.Clone(c.args))
 	}
 	return out
 }

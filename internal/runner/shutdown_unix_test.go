@@ -266,3 +266,22 @@ func TestKillAllEscalatesGroupOfReapedLeader(t *testing.T) {
 		t.Error("group survived KillAll")
 	}
 }
+
+// Live returns copies: changing what it returned changes neither a later
+// Live nor what Shutdown reports.
+func TestLiveReturnsCopies(t *testing.T) {
+	t.Cleanup(reopen)
+	spawnKind(t, false)
+	first := Live()
+	if len(first) != 1 || len(first[0]) == 0 || first[0][0] != "plugin" {
+		t.Fatalf("Live() = %q", first)
+	}
+	first[0][0] = "changed"
+	if again := Live(); len(again) != 1 || again[0][0] != "plugin" {
+		t.Errorf("a later Live() = %q", again)
+	}
+	ended := Shutdown(os.Interrupt, 100*time.Millisecond, 100*time.Millisecond)
+	if len(ended) != 1 || ended[0].Args[0] != "plugin" {
+		t.Errorf("Ended = %+v", ended)
+	}
+}
