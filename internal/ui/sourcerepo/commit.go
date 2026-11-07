@@ -2,6 +2,8 @@ package sourcerepo
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -275,11 +277,38 @@ func commitPaths(repo gitrepo.Repo, files []gitrepo.File) (add, commit []string)
 		if _, err := os.Lstat(filepath.Join(repo.Top, filepath.FromSlash(f.Path))); err == nil {
 			add = append(add, f.Path)
 		}
-		if f.Kind == gitrepo.Renamed && inHome(repo.Pathspec, f.Orig) && actions.ValidGitPath(f.Orig) == nil {
+		if f.Kind == gitrepo.Renamed && commitSource(repo, f.Orig) {
 			commit = append(commit, f.Orig)
 		}
 	}
 	return add, commit
+}
+
+// commitSource reports whether a rename's source may join the commit
+// paths. `git commit -- <path>` records the worktree's current content at
+// the path, so a source that exists again (recreated after the move) would
+// be committed unselected and unscanned: it is left out, its staged
+// removal stays staged, and the rename's new side commits on its own. A
+// source outside the home, one git cannot be given, or one whose name is a
+// state, sensitive or unusual path is never included either.
+func commitSource(repo gitrepo.Repo, orig string) bool {
+	if !inHome(repo.Pathspec, orig) || actions.ValidGitPath(orig) != nil {
+		return false
+	}
+	switch class, _ := gitrepo.Classify(homeRel(repo.Pathspec, orig), nil, false); class {
+	case gitrepo.StateDir, gitrepo.Sensitive, gitrepo.Unusual:
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(repo.Top, filepath.FromSlash(orig)))
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// homeRel is the toplevel-relative p relative to the home.
+func homeRel(pathspec, p string) string {
+	if pathspec == "." {
+		return p
+	}
+	return strings.TrimPrefix(p, pathspec+"/")
 }
 
 // inHome reports whether the toplevel-relative p lies below the home.

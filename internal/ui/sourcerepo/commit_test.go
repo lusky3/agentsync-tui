@@ -533,3 +533,69 @@ func TestCommitOutcomeMatchedOnCommitKey(t *testing.T) {
 		t.Errorf("note after add failure %q", f.s.note)
 	}
 }
+
+func TestRecreatedSensitiveRenameSourceNeverCommitted(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "env", map[string]string{"skills/x/.env": "TOKEN=${TOKEN}\n"})
+	gittest.Git(t, home, "mv", "skills/x/.env", "skills/x/env.example")
+	write(t, home, "skills/x/.env", "TOKEN="+ghpToken+"\n")
+	f := open(t, home)
+	if i := rowOf(f.s, "skills/x/.env"); i < 0 || f.s.status.Files[i].Selectable {
+		t.Fatalf("recreated .env must be listed and not selectable: %v", paths(f.s))
+	}
+	if v := view(f.s); !strings.Contains(v, "old path exists again; its removal is not part of this commit") {
+		t.Errorf("row note missing:\n%s", v)
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	wantChain(t, f.s, d, []string{"skills/x/env.example"}, []string{"skills/x/env.example"})
+
+	// Through the shell and real git: HEAD never holds the recreated file.
+	sh := startShell(t, home, "")
+	if r := sh.commitThrough(); r.Err != nil || r.Result.ExitCode != 0 {
+		t.Fatalf("commit failed: %+v", r)
+	}
+	sh.finish()
+	tree := gittest.Git(t, home, "ls-tree", "-r", "--name-only", "HEAD")
+	if !strings.Contains(tree, "skills/x/env.example") {
+		t.Errorf("the rename's new side was not committed:\n%s", tree)
+	}
+	// The old path's staged removal stays staged: HEAD keeps the old
+	// content, never the recreated file.
+	if got := gittest.Git(t, home, "show", "HEAD:skills/x/.env"); got != "TOKEN=${TOKEN}\n" {
+		t.Errorf("HEAD:skills/x/.env = %q", got)
+	}
+	if out := gittest.Git(t, home, "log", "-p", "-1"); strings.Contains(out, "ghp_") {
+		t.Error("HEAD holds the secret")
+	}
+}
+
+func TestRecreatedStateRenameSourceNeverInArgv(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "state", map[string]string{"skills/.state/a.json": "{}\n"})
+	gittest.Git(t, home, "mv", "skills/.state/a.json", "skills/a.json")
+	write(t, home, "skills/.state/a.json", "{\"k\":1}\n")
+	f := open(t, home)
+	selectRow(t, f.s, "skills/a.json")
+	if !f.s.sel["skills/a.json"] {
+		selectRow(t, f.s, "skills/a.json")
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	wantChain(t, f.s, d, []string{"skills/a.json"}, []string{"skills/a.json"})
+}
+
+func TestRenameSourceOfSensitiveNameNotCommitted(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "pem", map[string]string{"skills/k.pem": "x\n"})
+	gittest.Git(t, home, "mv", "skills/k.pem", "skills/k.txt")
+	f := open(t, home)
+	selectRow(t, f.s, "skills/k.txt")
+	if !f.s.sel["skills/k.txt"] {
+		selectRow(t, f.s, "skills/k.txt")
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	for _, p := range argvPaths(d.Then[0].Argv) {
+		if p == "skills/k.pem" {
+			t.Errorf("a sensitive-named rename source reached argv: %q", d.Then[0].Argv)
+		}
+	}
+}

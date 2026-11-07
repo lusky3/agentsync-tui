@@ -66,6 +66,7 @@ type Screen struct {
 	status   gitrepo.Status
 	loadNote string          // why the last load failed, display-safe
 	sel      map[string]bool // selected file paths (File.Path)
+	listed   map[string]bool // every listed File.Path
 	list     ui.List
 
 	mode    mode
@@ -260,7 +261,11 @@ func (s *Screen) applyStatus(st gitrepo.Status) {
 			sel[f.Path] = f.Default
 		}
 	}
-	s.status, s.sel = st, sel
+	listed := make(map[string]bool, len(st.Files))
+	for _, f := range st.Files {
+		listed[f.Path] = true
+	}
+	s.status, s.sel, s.listed = st, sel, listed
 	s.list.Clamp(len(st.Files))
 }
 

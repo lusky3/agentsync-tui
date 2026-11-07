@@ -22,6 +22,7 @@ const (
 	// maxFindings is how many findings the pane lists.
 	maxFindings = 20
 	stateWarn   = ".state/ is not ignored: add /.state/ to .gitignore"
+	sourceBack  = "old path exists again; its removal is not part of this commit"
 )
 
 // chezmoiCommands are the commands a chezmoi-managed home is versioned
@@ -189,8 +190,12 @@ func (s *Screen) row(f gitrepo.File) string {
 		name += " ← " + gitrepo.DisplayName(f.Orig)
 	}
 	line := fmt.Sprintf("%s %-12s %s  [%s]", box, f.Kind, name, f.Class)
-	if f.Note != "" {
-		line += "  " + theme.Dim.Render(mask.Sanitize(f.Note))
+	note := f.Note
+	if f.Kind == gitrepo.Renamed && inHome(s.repo.Pathspec, f.Orig) && s.listed[f.Orig] {
+		note = joinNote(note, sourceBack)
+	}
+	if note != "" {
+		line += "  " + theme.Dim.Render(mask.Sanitize(note))
 	}
 	return line
 }
@@ -278,4 +283,11 @@ func (s *Screen) commitView() []string {
 	}
 	out = append(out, s.findingLines()...)
 	return append(out, ui.KeyLines(commitKeys, s.width)...)
+}
+
+func joinNote(a, b string) string {
+	if a == "" {
+		return b
+	}
+	return a + "; " + b
 }
