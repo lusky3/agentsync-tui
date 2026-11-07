@@ -133,10 +133,13 @@ func Commit(t testing.TB, dir, msg string, files map[string]string) {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
+	args := []string{"commit", "-q", "--allow-empty", "--message=" + msg}
 	if len(paths) > 0 {
 		Git(t, dir, append([]string{"add", "--"}, paths...)...)
+		// commit -- <paths> (--only): another staged change stays staged.
+		args = append(append(args, "--"), paths...)
 	}
-	Git(t, dir, "commit", "-q", "--allow-empty", "--message="+msg)
+	Git(t, dir, args...)
 }
 
 // NewGit returns the production git Program (runner.NewGit, with its

@@ -88,3 +88,23 @@ func TestEnvSetsCeiling(t *testing.T) {
 		t.Fatalf("env lacks %s", want)
 	}
 }
+
+// Commit records exactly the files it was given: a change the test staged
+// before stays staged and out of the commit.
+func TestCommitOnlyItsFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "w")
+	Init(t, dir)
+	Commit(t, dir, "base", map[string]string{"a": "1\n", "b": "1\n"})
+	if err := os.WriteFile(filepath.Join(dir, "b"), []byte("2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	Git(t, dir, "add", "--", "b")
+	Commit(t, dir, "a only", map[string]string{"a": "2\n"})
+	if got := Git(t, dir, "show", "--name-only", "--format=", "HEAD"); got != "a\n" {
+		t.Errorf("commit holds %q, want only a", got)
+	}
+	if got := Git(t, dir, "diff", "--cached", "--name-only"); got != "b\n" {
+		t.Errorf("staged %q, want b still staged", got)
+	}
+	Commit(t, dir, "empty", nil)
+}
