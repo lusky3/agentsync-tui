@@ -176,9 +176,13 @@ func runCore(ctx context.Context, cmd *exec.Cmd, args []string, grace time.Durat
 	cmd.WaitDelay = grace
 	out, errb := &capWriter{n: MaxStream}, &capWriter{n: MaxStream}
 	cmd.Stdout, cmd.Stderr = out, errb
+	live.starting.RLock() // a Shutdown snapshot waits until the child is tracked
 	err := cmd.Start()
 	if err == nil {
 		trackAs(cmd, args, IsWrite(ctx), program) // Shutdown can reach the group until Wait returns
+	}
+	live.starting.RUnlock()
+	if err == nil {
 		err = cmd.Wait()
 		untrack(cmd)
 	}

@@ -42,6 +42,12 @@ var live struct {
 	mu     sync.Mutex
 	cmds   map[*exec.Cmd]*child
 	killed map[*child]time.Time
+	// starting is read-held by runCore from just before Start until the
+	// child is tracked. The child runs (and can be seen running) before
+	// Start returns, so without it a Shutdown or KillAll that takes its
+	// snapshot in between would miss a child that is already running and
+	// leave it behind. Shutdown and KillAll hold it for their snapshot.
+	starting sync.RWMutex
 }
 
 // escalated is set by KillAll during a Shutdown, which then kills at once;
@@ -49,10 +55,16 @@ var live struct {
 // before any Shutdown, does not shorten a later one.
 var escalated atomic.Bool
 
-// markKilled notes that c's group was sent SIGKILL.
-func markKilled(c *child) {
+// killGroup sends SIGKILL to c's group and, if it was sent, marks c as
+// killed. Both happen under live.mu, so a Shutdown that sees the group gone
+// and then asks killedAt cannot fall between the kill and its mark and
+// report a killed child as exited. A group already gone exited on its own.
+func killGroup(c *child) {
 	live.mu.Lock()
 	defer live.mu.Unlock()
+	if signalGroup(c.cmd, os.Kill) != nil {
+		return
+	}
 	if live.killed == nil {
 		live.killed = map[*child]time.Time{}
 	}
@@ -103,6 +115,14 @@ func forgetKilled(done []*child) {
 	}
 }
 
+// startedSnapshot is snapshot once no Run is between Start and track:
+// every child started before it is in it.
+func startedSnapshot() []*child {
+	live.starting.Lock()
+	defer live.starting.Unlock()
+	return snapshot()
+}
+
 func snapshot() []*child {
 	live.mu.Lock()
 	defer live.mu.Unlock()
@@ -142,7 +162,7 @@ const killGrace = 2 * time.Second
 func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
 	escalated.Store(false) // escalation is scoped to this call
 	forgetKilled(nil)      // marks of children already reaped are stale
-	children := snapshot()
+	children := startedSnapshot()
 	if len(children) == 0 {
 		return nil
 	}
@@ -234,9 +254,7 @@ func (r *ending) killIfDue(c *child, now time.Time) {
 	if !escalated.Load() && now.Before(r.deadline[c]) {
 		return
 	}
-	if signalGroup(c.cmd, os.Kill) == nil {
-		markKilled(c)
-	}
+	killGroup(c)
 }
 
 // orphanRest records every child not gone as orphaned: even SIGKILL did not
@@ -258,9 +276,7 @@ func (r *ending) record(c *child, outcome string, now time.Time) {
 // while the TUI is already going away.
 func KillAll() {
 	escalated.Store(true)
-	for _, c := range snapshot() {
-		if signalGroup(c.cmd, os.Kill) == nil { // a group already gone exited on its own
-			markKilled(c)
-		}
+	for _, c := range startedSnapshot() {
+		killGroup(c)
 	}
 }
