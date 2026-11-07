@@ -16,31 +16,43 @@ import (
 // maxConfirmInput caps the typed-confirmation buffer.
 const maxConfirmInput = 64
 
-// modal is the confirm dialog for one pending action.
+// modal is the confirm dialog for one pending action, or for a chain
+// (act, then then's steps in order) confirmed once as a whole.
 type modal struct {
 	act     actions.Action
-	verb    string // non-empty: destructive, must be typed
+	then    []actions.Action
+	verb    string // non-empty: destructive or TypedConfirm, must be typed
 	input   Field
 	hint    string
 	scope   runner.Scope // the scope the command will run under
 	project string       // Deps.ProjectDir, shown in project scope
 }
 
-func newModal(act actions.Action, scope runner.Scope, project string) *modal {
-	m := &modal{act: act, scope: scope, project: project, input: Field{Max: maxConfirmInput}}
-	if act.Destructive {
-		m.verb = act.ConfirmVerb()
-		if m.verb == "" {
-			m.verb = "yes"
+func newModal(act actions.Action, scope runner.Scope, project string, then ...actions.Action) *modal {
+	m := &modal{act: act, then: then, scope: scope, project: project, input: Field{Max: maxConfirmInput}}
+	// The first step that must be typed sets the verb (for add-then-commit
+	// with soft findings, the commit's "commit").
+	for _, s := range m.steps() {
+		if s.Destructive || s.TypedConfirm {
+			m.verb = s.ConfirmVerb()
+			if m.verb == "" {
+				m.verb = "yes"
+			}
+			break
 		}
 	}
 	return m
 }
 
-// cancelModal closes the dialog without running the action and drops any
-// queued follow-ups.
+// steps is every action the modal confirms, in run order.
+func (m *modal) steps() []actions.Action {
+	return append([]actions.Action{m.act}, m.then...)
+}
+
+// cancelModal closes the dialog without running the action (or any step of
+// its chain) and drops any queued follow-ups.
 func (a *App) cancelModal() {
-	a.setStatus(statusInfo, "not run: "+mask.Sanitize(a.modal.act.Title))
+	a.setStatus(statusInfo, "not run: "+titles(a.modal.steps()))
 	a.modal, a.queue = nil, nil
 }
 
@@ -59,7 +71,7 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		switch s {
 		case "y":
 			a.modal = nil
-			return a.start(m.act)
+			return a.start(m.act, m.then)
 		case "enter":
 			m.hint = "press y to run it"
 		case "n":
@@ -70,7 +82,7 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 	if s == "enter" {
 		if m.input.Value == m.verb {
 			a.modal = nil
-			return a.start(m.act)
+			return a.start(m.act, m.then)
 		}
 		m.hint = fmt.Sprintf("type %q exactly to confirm", m.verb)
 		return nil
@@ -83,8 +95,15 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 // for project scope, "user", or "n/a (user-level)" for a command that the
 // CLI refuses --scope/--project on (secret, marketplace, plugin except
 // upgrade, doctor, revert).
+// A git action shows the repository it runs in instead.
 func (m *modal) scopeLine() string {
 	switch {
+	case m.act.Program == actions.ProgramGit:
+		top := ""
+		if len(m.act.Argv) > 1 && m.act.Argv[0] == "-C" {
+			top = m.act.Argv[1]
+		}
+		return "repo: " + mask.Sanitize(top)
 	case runner.ScopeUnaware(m.act.Argv):
 		return "scope: n/a (user-level)"
 	case m.scope == runner.ScopeProject:
@@ -151,24 +170,39 @@ func (m *modal) render(w int, mode renderMode) string {
 	if mode == renderCompact {
 		gap = ""
 	}
-	b.WriteString(styleBold.Render(mask.Sanitize(m.act.Title)) + "\n" + gap)
-	cmd := "  $ " + mask.Sanitize(m.act.Display())
-	if mode != renderFull {
-		cmd = ansi.Truncate(cmd, w-4, "…") // w includes the border and 1-column padding each side
+	steps := m.steps()
+	title := mask.Sanitize(m.act.Title)
+	if len(steps) > 1 {
+		title = strings.ReplaceAll(titles(steps), ", ", ", then ")
 	}
-	b.WriteString(cmd + "\n")
+	b.WriteString(styleBold.Render(title) + "\n" + gap)
+	// One $ line per step, in run order.
+	var destructive, network, interactive bool
+	for _, s := range steps {
+		cmd := "  $ " + mask.Sanitize(s.Display())
+		if mode != renderFull {
+			cmd = ansi.Truncate(cmd, w-4, "…") // w includes the border and 1-column padding each side
+		}
+		b.WriteString(cmd + "\n")
+		destructive = destructive || s.Destructive
+		network = network || s.Network
+		interactive = interactive || (s.Interactive && s.Program == "")
+	}
 	b.WriteString("  " + styleDim.Render(m.scopeLine()) + "\n")
-	if m.act.Warning != "" {
-		b.WriteString(gap + styleError.Render("! "+mask.Sanitize(m.act.Warning)) + "\n")
+	for _, s := range steps {
+		if s.Warning != "" {
+			b.WriteString(gap + styleError.Render("! "+mask.Sanitize(s.Warning)) + "\n")
+		}
 	}
+	// TypedConfirm asks for the verb but is not destructive: no badge.
 	var badges []string
-	if m.act.Destructive {
+	if destructive {
 		badges = append(badges, styleError.Render("[destructive]"))
 	}
-	if m.act.Network {
+	if network {
 		badges = append(badges, styleWarn.Render("[network]"))
 	}
-	if m.act.Interactive {
+	if interactive {
 		badges = append(badges, styleInfo.Render("[interactive]"))
 	}
 	if len(badges) > 0 {
