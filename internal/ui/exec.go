@@ -371,7 +371,9 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 	a.record(m.Action, oc, dur)
 	if a.quitting {
 		// q was pressed while this run was in flight: it is now cancelled
-		// and logged, so exit.
+		// and logged, so exit. The rest of a confirmed chain is not run;
+		// the log says so (R4: a staged-but-uncommitted index is explained).
+		a.recordNotRun(then)
 		return tea.Quit
 	}
 	title := mask.Sanitize(m.Action.Title)
@@ -414,6 +416,13 @@ func (a *App) finish(m RunMsg) tea.Cmd {
 	}
 	cmds = append(cmds, a.next(), a.refreshActive())
 	return tea.Batch(cmds...)
+}
+
+// recordNotRun logs each chain step dropped by a quit as not run.
+func (a *App) recordNotRun(then []actions.Action) {
+	for _, s := range then {
+		a.record(s, "not run", 0)
+	}
 }
 
 // record appends one activity-log entry.
@@ -478,6 +487,7 @@ func (a *App) quitDeadline() tea.Cmd {
 			oc = "interrupted"
 		}
 		a.record(r.act, oc, time.Since(r.start))
+		a.recordNotRun(r.then)
 		a.running = nil
 	}
 	return tea.Quit
@@ -488,7 +498,8 @@ func (a *App) quitDeadline() tea.Cmd {
 // the program on either without the model seeing it; main also sends a
 // QuitMsg on SIGHUP. A run still in flight is logged here as "abandoned"
 // (a write keeps running on its own, which is the safe choice for a write;
-// a read or editor is simply left) and the background reads are cancelled,
+// a read or editor is simply left), the rest of its confirmed chain as "not
+// run", and the background reads are cancelled,
 // so the next start has a record of it. The shell's own quits (q, ctrl+c
 // when idle, the quit after a logged run) have already logged and cleared
 // the run, so they pass through unchanged.
@@ -497,6 +508,7 @@ func (a *App) Filter(_ tea.Model, msg tea.Msg) tea.Msg {
 	case tea.QuitMsg, tea.InterruptMsg:
 		if r := a.running; r != nil {
 			a.record(r.act, "abandoned", time.Since(r.start))
+			a.recordNotRun(r.then)
 			a.running = nil
 		}
 		a.shutdown()
