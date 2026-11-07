@@ -202,7 +202,8 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   sensitive (a key, `.env`, an age identity), the scan of the added lines
   finds a likely secret, HEAD is detached, a merge, rebase, cherry-pick,
   revert or bisect is in progress, or `index.lock` is present (the TUI never
-  deletes it). A push is scanned the same way first. Your hooks and signing
+  deletes it). A push is scanned the same way first, the messages of the
+  outgoing commits included. Your hooks and signing
   run as configured, with no terminal (see above). Git commands are always
   bounded (see Usage). agentsync's own destination-backup repositories are
   recognised (by commit author and the `agentsync.managed` marker) and

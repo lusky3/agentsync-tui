@@ -38,6 +38,9 @@ const whyTooManyChanges = refused + "too many changes to scan; review and push o
 // own bound: the default network bound, ui.DefaultReadTimeout.
 var outgoingScanBound = ui.DefaultReadTimeout
 
+// whyBadRange refuses a push whose outgoing range is not two object ids.
+const whyBadRange = refused + "the outgoing range is not a pair of object ids"
+
 // whyUnfinished refuses a push whose scan ran past outgoingScanBound.
 const whyUnfinished = refused + "the outgoing scan did not finish; review and push outside the TUI"
 
@@ -116,7 +119,7 @@ func scanOutgoing(ctx context.Context, in netInput, base, tip string) ([]gitrepo
 func scanOutgoingRange(ctx context.Context, in netInput, base, tip string) ([]gitrepo.Finding, []string) {
 	names, patchArgv := gitrepo.OutgoingNamesArgv(in.repo, base, tip), gitrepo.OutgoingPatchArgv(in.repo, base, tip)
 	if names == nil || patchArgv == nil {
-		return nil, []string{refused + "the outgoing range is not a pair of object ids"}
+		return nil, []string{whyBadRange}
 	}
 	res, err := ui.Read(ctx, in.git, in.limit, names...)
 	if note := ui.ReadNote("git log", res, err); note != "" {
@@ -142,7 +145,56 @@ func scanOutgoingRange(ctx context.Context, in netInput, base, tip string) ([]gi
 	if cut {
 		fs = append(fs, gitrepo.Finding{Path: "outgoing commits", Kind: gitrepo.KindNotScannedPatch})
 	}
+	mfs, r := scanMessages(ctx, in, base, tip)
+	if r != nil {
+		return nil, r
+	}
+	return append(fs, mfs...), nil
+}
+
+// scanMessages scans the message of every outgoing commit as prose (R5):
+// the push publishes the messages with the commits, and a commit made
+// outside the TUI never met ValidCommitMessage. A list the runner cut
+// short is a soft finding (not scanned in full).
+func scanMessages(ctx context.Context, in netInput, base, tip string) ([]gitrepo.Finding, []string) {
+	argv := gitrepo.OutgoingMessagesArgv(in.repo, base, tip)
+	if argv == nil {
+		return nil, []string{whyBadRange}
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
+	if note := ui.ReadNote("git log", res, err); note != "" {
+		return nil, []string{refused + note}
+	}
+	out, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	fs, err := bounded(ctx, in.limit, func() ([]gitrepo.Finding, error) { return messageFindings(out), nil })
+	if err != nil {
+		return nil, scanRefusal(in, err)
+	}
+	if cut {
+		fs = append(fs, gitrepo.Finding{Path: messagesPath, Kind: gitrepo.KindNotScannedPatch})
+	}
 	return fs, nil
+}
+
+// messagesPath names the outgoing commit messages in a finding.
+const messagesPath = "outgoing commit messages"
+
+// messageFindings scans each "<sha> NUL <message> NUL" record of an
+// OutgoingMessagesArgv output, a message's lines numbered from 1 and
+// named "commit message <short sha>".
+func messageFindings(out string) []gitrepo.Finding {
+	fields := strings.Split(out, "\x00")
+	var fs []gitrepo.Finding
+	for i := 0; i+1 < len(fields); i += 2 {
+		sha := strings.TrimSpace(fields[i])
+		name := "commit message " + sha[:min(len(sha), 12)]
+		var lines []gitrepo.Line
+		for n, l := range strings.Split(strings.TrimSuffix(fields[i+1], "\n"), "\n") {
+			lines = append(lines, gitrepo.Line{N: n + 1, Text: strings.TrimSuffix(l, "\r")})
+		}
+		fs = append(fs, gitrepo.ScanLines(name, lines)...)
+	}
+	return fs
 }
 
 // scanSections scans each file section in turn: its file at its commit is

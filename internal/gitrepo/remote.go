@@ -95,6 +95,18 @@ func OutgoingPatchArgv(r Repo, base, tip string) []string {
 		"--format=%H", base + ".." + tip, "--", r.Pathspec}
 }
 
+// OutgoingMessagesArgv prints the raw message of every commit in
+// base..tip as "<sha> NUL <message> NUL", each record ended by a newline.
+// It has no pathspec: a push publishes every commit of the range, and
+// its message, whatever the commit touches. base and tip must be object
+// ids.
+func OutgoingMessagesArgv(r Repo, base, tip string) []string {
+	if actions.ValidObjectID(base) != nil || actions.ValidObjectID(tip) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "log", "--format=%H%x00%B%x00", base + ".." + tip, "--"}
+}
+
 // BlobArgv prints the content of path (relative to the toplevel) as
 // commit sha records it: the raw blob, no textconv or filter, so a push
 // scan reads an outgoing commit's file the way the push publishes it.

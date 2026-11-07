@@ -889,3 +889,28 @@ func TestPushScansOriginalNotReplacementObjects(t *testing.T) {
 	wantNothing(t, press(f.s, "P"))
 	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3")
 }
+
+// A push publishes the outgoing commits' messages too: a token in one
+// (committed outside the TUI, which refuses such a message) is a hard
+// finding, an opaque word a soft one.
+func TestPushScansOutgoingCommitMessages(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "first", map[string]string{skillA: "# a\n"})
+	gittest.Commit(t, home, "rotate\n\nold key "+ghpToken+"\n", map[string]string{skillA: "# b\n"})
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "commit message")
+	if strings.Contains(view(f.s), ghpToken) {
+		t.Errorf("view shows the token:\n%s", view(f.s))
+	}
+}
+
+func TestPushSoftFindingInCommitMessageNeedsTypedPush(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "id "+opaqueWord, map[string]string{skillA: "# a\n"})
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "P"))
+	if !d.Action.TypedConfirm || !strings.Contains(d.Action.Warning, "1 possible secret") {
+		t.Errorf("push action typed=%v warning=%q", d.Action.TypedConfirm, d.Action.Warning)
+	}
+}

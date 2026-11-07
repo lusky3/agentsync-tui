@@ -30,6 +30,7 @@ func TestSourceRepoReadArgvPinned(t *testing.T) {
 		{"patch", OutgoingPatchArgv(r, a, b), []string{"-C", "/h/top", "log", "-p", "--no-ext-diff", "--no-textconv",
 			"--no-color", "-U0", "--no-renames", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
 			"--format=%H", a + ".." + b, "--", "agentsync"}},
+		{"messages", OutgoingMessagesArgv(r, a, b), []string{"-C", "/h/top", "log", "--format=%H%x00%B%x00", a + ".." + b, "--"}},
 		{"blob", BlobArgv(r, a, "mcp/x.toml"), []string{"-C", "/h/top", "cat-file", "blob", a + ":mcp/x.toml"}},
 	}
 	for _, c := range cases {
@@ -53,6 +54,8 @@ func TestSourceRepoReadArgvRefusesBadArguments(t *testing.T) {
 		"patch short tip":    OutgoingPatchArgv(r, sha, sha[:39]),
 		"patch upper tip":    OutgoingPatchArgv(r, sha, strings.ToUpper(sha)),
 		"names glued option": OutgoingNamesArgv(r, sha+"..x", sha),
+		"messages bad base":  OutgoingMessagesArgv(r, "HEAD", sha),
+		"messages bad tip":   OutgoingMessagesArgv(r, sha, "--all"),
 		"branch commit bad":  BranchCommitArgv(r, "-x"),
 		"branch commit HEAD": BranchCommitArgv(r, "HEAD"),
 		"upstream bad":       BranchUpstreamCommitArgv(r, "a@{u}"),
