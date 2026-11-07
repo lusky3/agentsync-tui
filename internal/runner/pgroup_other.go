@@ -36,3 +36,6 @@ func groupGone(cmd *exec.Cmd) bool {
 	_, present := live.cmds[cmd]
 	return !present
 }
+
+// setSession: no sessions here; the same as setProcessGroup.
+func setSession(cmd *exec.Cmd) { setProcessGroup(cmd) }

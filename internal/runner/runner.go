@@ -64,11 +64,14 @@ const TruncatedMark = "\n[agentsync-tui: output truncated at 4 MiB]"
 // waitDelay is the effective SIGINT-to-SIGKILL grace: a zero or negative
 // grace (a zero Exec) falls back to InterruptGrace so a child that ignores
 // SIGINT is still killed.
-func (e *Exec) waitDelay() time.Duration {
-	if e.grace <= 0 {
+func (e *Exec) waitDelay() time.Duration { return effectiveGrace(e.grace) }
+
+// effectiveGrace is grace, or InterruptGrace when grace is not positive.
+func effectiveGrace(grace time.Duration) time.Duration {
+	if grace <= 0 {
 		return InterruptGrace
 	}
-	return e.grace
+	return grace
 }
 
 // capWriter keeps the first n bytes written and notes whether more came.
