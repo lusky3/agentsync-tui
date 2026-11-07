@@ -37,7 +37,7 @@
 - **D11 Never:** agentsync's backup repos, committing `.state/`, `--force`, `reset`, `clean`, `checkout`, `restore`, `stash`, `rebase`, `--no-verify`, `remote add/set-url`, `config` writes. A test enforces this over every builder (Task 3).
 - **R1 Children get their own session (`Setsid`) instead of only `Setpgid`.** `ssh`, a credential helper, gpg pinentry-tty or a hook then has no controlling terminal: it fails at once instead of stopping on SIGTTIN behind the alt-screen. `kill(-pid)` still reaches the group because the session leader's pgid is its pid. `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` is added only for `fetch`/`pull`/`push` when none of `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` (read from the target repo) is set, so a user's own ssh command always wins. *Task 2.*
 - **R2 Repository-selecting env is scrubbed for git children:** `GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT`. Run from a git hook, the TUI would otherwise inherit `GIT_DIR` and act on another repository. *Task 2.*
-- **R3 Git actions are always bounded**, because git's ref updates are atomic and its index writes use a lock file, so stopping git halfway is safe (unlike a multi-file agentsync write). Network git actions (fetch, pull, push) get `Timeouts.Read` (default 2m). Local git writes (add, commit) get `Timeouts.Write` if set, else `GitLocalWriteBound = 2*time.Minute`, which covers slow hooks. Local reads get `Timeouts.Local()`. `agentsync init <url>` keeps the existing write semantics. *Task 4.*
+- **R3 Git actions are always bounded**, because git's ref updates are atomic and its index writes use a lock file, so stopping git halfway never corrupts the repository (unlike a multi-file agentsync write). It is not always clean: a pull stopped during its checkout can leave some worktree files at the new version while HEAD and the index still name the old commit, and a SIGKILL can leave `index.lock` behind. So when a pull ends by timeout or interrupt, the note says "the pull was stopped; the worktree may be partly updated. Nothing was rolled back" and shows `git -C <top> status` to inspect (the fetched commits are already in `@{u}`); a left-over lock is reported by `InspectGitDir` and never deleted (Task 9). Network git actions (fetch, pull, push) get `Timeouts.Read` (default 2m). Local git writes (add, commit) get `Timeouts.Write` if set, else `GitLocalWriteBound = 2*time.Minute`, which covers slow hooks. Local reads get `Timeouts.Local()`. `agentsync init <url>` keeps the existing write semantics. *Task 4.*
 - **R4 Add-then-commit is one confirmation.** `DoMsg` gains `Then []actions.Action`. The modal shows every command line. Each step is logged and broadcast, and a failure stops the chain. If `add` succeeds and `commit` fails (a hook rejects it), the note says the files are now staged and shows `git -C <top> restore --staged -- …` for the user to run. The TUI does not run it. *Tasks 4, 8.*
 - **R5 Two classes of scan finding.** **Hard** (refuse, everywhere): known token shapes (`ghp_`, `github_pat_`, `gg_pat_`, `sk-`, `xox?-`, `AKIA…`, JWT), an Authorization/Bearer/x-api-key/cookie value that is not a reference, URL userinfo, `-----BEGIN … PRIVATE KEY-----`, `AGE-SECRET-KEY-1`. Also hard in the TOML config files (`agentsync.toml`, `mcp/**`, `hooks/*.toml`, `lsp/*.toml`): a secret-named key assigned a literal, and a `mask.TokenShaped` word that is not a reference **when it is an env value, a header value, or a URL query value**. A TokenShaped word elsewhere in a config file (for example inside `args`) is **soft**, and these are never findings at all: an OCI digest `@sha256:[0-9a-f]{64}`, a `sha256:`/`sha512:` integrity value, a 40-hex git commit pinned in an argument (as in `go install …@<sha>`), and a UUID that is not under a secret-named key. Reason: the discover plan writes digest-pinned Docker images (`mcp/brave-search@sha256:…`) into `mcp/*.toml`, and a hard refusal there would make every Docker-catalog install uncommittable from the TUI. **Soft** (allowed only after typing `commit`, findings listed): `TokenShaped` words and secret-named assignments in prose files (skills, memory, …), plus binary or over-1 MiB files that were not scanned. Reason: skills legitimately contain digests, UUIDs and "password:" prose, and a hard block there would make the tab useless. Every refusal shows `file:line`, the masked line, and the outside-the-TUI command for a known false positive. *Tasks 4, 7, 8.*
 - **R6 `secrets/` and `*.age`.** A file whose content contains `AGE-SECRET-KEY-` is sensitive (never selectable), whatever its name. An encrypted vault (starts `age-encryption.org/v1`) is listed **unselected** with "encrypted vault: commit only if you mean to share the ciphertext". Also never selectable: `.state/**`, basename `key.txt`, `*.pem`, `id_*` except `*.pub`, `.env`, `.env.*`. *Tasks 6, 7.*
@@ -244,7 +244,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
 - Consumes: `runner.Runner` (git, chezmoi), `ui.Read`-style bounded calls. To avoid importing `ui`, a local `read(ctx, r, timeout, argv...)` does the same thing.
 - Produces:
   - `type Manager int` (`Missing`, `None`, `Git`, `Chezmoi`), `type Layout int` (`AtRoot`, `BelowRoot`).
-  - `type Repo struct{ Manager Manager; Layout Layout; Home, ResolvedHome, Top, GitDir, Pathspec, ChezmoiSource, Refusal string }`. `Pathspec` is `"."` or the slash-separated home path relative to `Top`. A non-empty `Refusal` disables every git write.
+  - `type Repo struct{ Manager Manager; Layout Layout; Home, ResolvedHome, Top, GitDir, Pathspec, ChezmoiSource, ObjectFormat, Refusal string }`. `Pathspec` is `"."` or the slash-separated home path relative to `Top`. A non-empty `Refusal` disables every git write.
   - `func Detect(ctx context.Context, git, chezmoi runner.Runner, home string, timeout time.Duration) (Repo, error)`.
   - `type GitDirState struct{ Locked bool; InProgress string }` and `func InspectGitDir(gitDir string) GitDirState`. It checks `index.lock`, `MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, using `os.Lstat` only and never removing anything.
   - `func BackupAuthor(home string) string`: reads `[destination_directory_git_backup].author_email` from `<home>/agentsync.toml` with the existing TOML dependency, defaulting to `agentsync@localhost`.
@@ -255,7 +255,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   3. If `chezmoi != nil`: `chezmoi source-path` → `src`. If `ResolvedHome` is inside `EvalSymlinks(src)`, or `chezmoi source-path <ResolvedHome>` exits 0 → `Chezmoi`.
   4. `git -C <ResolvedHome> rev-parse --show-toplevel --absolute-git-dir`. Exit 128 with "not a git repository" → `None`. Not exactly two lines → `Refusal "repository path has a line break"`.
   5. `rel = filepath.Rel(EvalSymlinks(top), ResolvedHome)`. It must be `"."` or local, else `Refusal "the home is outside the repository"`.
-  6. `git -C top log -1 --format=%ae` equals `BackupAuthor` → `Refusal "this is agentsync's local-only destination history; it must never be committed or pushed"`.
+  6. Any commit reachable from HEAD is authored by `BackupAuthor`: `git -C top log -1 --fixed-strings --author=<BackupAuthor in angle brackets> --format=%H` prints a hash → `Refusal "this is agentsync's local-only destination history; it must never be committed or pushed"`. (Checking only the latest author would miss a backup repo the user has committed to by hand.)
   7. A `dubious ownership` stderr → `Refusal` with git's first line. The TUI never adds `safe.directory`.
 
 - [ ] **Step 1: Write failing tests** (real git through gittest; fake chezmoi through runnertest):
@@ -266,6 +266,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `TestSymlinkedHomeResolved` (the maintainer layout: `~/.agentsync` → `~/git/agent-config`, so `Top` equals the target and `Pathspec "."`).
   - `TestSymlinkedHomeIntoOtherRepoSubdir`.
   - `TestBackupAuthorRepoRefused` (HEAD authored by `agentsync@localhost`).
+  - `TestBackupRepoRefusedAfterManualCommit` (an `agentsync@localhost` commit followed by one with another author is still refused).
   - `TestCustomBackupAuthorFromToml`.
   - `TestChezmoiSourceContainsHome`, `TestChezmoiManagedTarget`, `TestChezmoiAbsentFallsThroughToGit`.
   - `TestInspectLockAndInProgress` (creates each marker; asserts the lock file still exists afterwards).
@@ -289,8 +290,8 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `type File struct{ Path, Orig, HomeRel string; Kind Kind; Class Class; Selectable, Default bool; Note string }`.
   - `type Status struct{ Branch Branch; Files []File }`.
   - `func ParseStatus(out []byte, r Repo) (Status, error)`.
-  - `func Classify(homeRel string, head []byte) (Class, string)`. `head` is up to the first 4 KiB of the worktree file, read with `os.Lstat` then open, never through a symlink.
-  - `func DisplayName(p string) string`: `p` itself when `mask.Sanitize(p)==p && utf8.ValidString(p)`, else `strconv.QuoteToASCII(p)` + ` (unusual name)`.
+  - `func Classify(homeRel string, head []byte, ageIdentity bool) (Class, string)`. `head` is up to the first 4 KiB of the worktree file, read with `os.Lstat` then open, never through a symlink. `ageIdentity` comes from `func HasAgeIdentity(path string) (bool, error)`, which streams the **whole** file (same Lstat-then-open, no symlink; the marker is matched across read-buffer boundaries) for `AGE-SECRET-KEY-`, so a marker past the first 4 KiB, or in a file over the 1 MiB scan cap, still makes the file Sensitive. A read error counts as found.
+  - `func DisplayName(p string) string`: `p` itself when `mask.Sanitize(p)==p && utf8.ValidString(p)`, else `strconv.QuoteToASCII(p)` + ` (unusual name)`. In both branches a name in which `mask.Credential` finds a token is shown through `mask.Text` with ` (name looks like a credential)`. Argv keeps the original path.
 - Parsing rules (pinned):
   - Split on NUL.
   - A record starting `# ` is a header: `branch.head` (`(detached)` → Detached), `branch.oid` (`(initial)` → Unborn), `branch.upstream`, `branch.ab +A -B`.
@@ -304,7 +305,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `.state/` prefix → StateDir (not selectable).
   - Contains `AGE-SECRET-KEY-`, basename `key.txt`, `*.pem`, `id_*` except `*.pub`, `.env`, `.env.*` → Sensitive (not selectable).
   - Starts `age-encryption.org/v1` → Vault (selectable, not default).
-  - Unusual name → Unusual (not selectable).
+  - Unusual name, or a name in which `mask.Credential` finds a token (committing it would publish the token in the tree; masked names could also look alike) → Unusual (not selectable).
   - Owned set from D3 → Owned (default when selectable).
   - Else Other (selectable, not default, note "not an agentsync file").
   - A rename into the home whose `Orig` is outside the home gets the note "the old path is outside the home and is not part of this commit".
@@ -317,10 +318,11 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `TestPathWithSpacesNewlineTabQuoteBackslashKeptExact`.
   - `TestInvalidUTF8AndBidiAreUnusual`.
   - `TestDisplayNamesNeverCollide` (`"a​b"` vs `"ab"` render differently).
+  - `TestTokenInFileNameMaskedAndNotSelectable` (`skills/ghp_<20 chars>/SKILL.md`: the token is absent from the row, the file is Unusual).
   - `TestGlobNamedFileMatchedLiterally`: real git with files `a*` and `ab`, where `StatusArgv` for pathspec `a*` lists only `a*` (proves `--literal-pathspecs` from Task 2).
   - `TestOutsidePathspecDropped`.
   - `TestClassifyTable` (every rule above, including `id_ed25519.pub` → Owned/Other, not Sensitive).
-  - `TestAgeIdentityByContentWhateverName`.
+  - `TestAgeIdentityByContentWhateverName`, `TestAgeIdentityPastFirst4KiB` (marker at offset 5000, and in a 2 MiB file, straddling a read-buffer boundary).
   - `TestVaultUnselectedByDefault`.
   - `TestStateDirNeverSelectable`.
   - `TestRenameAcrossHomeBoundaryNoted`.
@@ -338,8 +340,8 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
 **Interfaces:**
 - Consumes: `mask.Credential`, `mask.TokenShaped`, `mask.IsRef`, `mask.Text`, `mask.Value`, `mask.Sanitize`.
 - Produces:
-  - `func DiffArgv(r Repo, path string, unified int) []string` → `-C top diff --no-ext-diff --no-textconv --no-color -U<n> HEAD -- <path>` (when Unborn, the empty tree `4b825dc642cb6eb9a060e54bf8d69288fbee4904` replaces `HEAD`).
-  - `type Line struct{ N int; Text string }` and `func AddedLines(patch string) []Line`, which parses `@@ -a,b +c,d @@` and counts `+` lines (skipping `+++ `).
+  - `func DiffArgv(r Repo, path string, unified int) []string` → `-C top diff --no-ext-diff --no-textconv --no-color -U<n> HEAD -- <path>` (when Unborn, the empty tree of the repository's object format replaces `HEAD`: `4b825dc642cb6eb9a060e54bf8d69288fbee4904` for sha1, `6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321` for sha256. `Detect` reads the format once with `git -C top rev-parse --show-object-format`, into `Repo.ObjectFormat`; on git older than 2.29, which has no sha256 repositories and rejects that option, it is sha1. A sha1 id in a sha256 repository is "unknown revision".)
+  - `type Line struct{ N int; Text string }` and `func AddedLines(patch string) []Line`, which parses `@@ -a,b +c,d @@` and counts `+` lines. `+++ `/`--- ` are file headers only **outside** a hunk (before the first `@@` of a file, or after a hunk's old and new line counts are used up); inside a hunk every `+` line is an added line, so a file line `++ ghp_…` (diff line `+++ ghp_…`) is scanned.
   - `type Finding struct{ Path string; Line int; Shown string; Hard bool; Kind string }`.
   - `func ScanLines(homeRel string, lines []Line) []Finding`.
   - `func ScanNewFile(homeRel string, content []byte) []Finding`: binary (NUL in the first 8 KiB) or > 1 MiB → one soft finding `"not scanned: binary"`/`"not scanned: over 1 MiB"`.
@@ -347,10 +349,11 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `func MaskPatchLine(homeRel, line string) string`.
 - Rules (pinned):
   - Hard/soft per R5. `Shown` = `mask.Text` of the line, sanitised, cut to 120 columns. It never contains the raw value.
-  - `MaskPatchLine`: diff header lines (`diff `, `index `, `--- `, `+++ `, `@@`) → `mask.Sanitize`. Content lines keep their first byte (`+`/`-`/` `). For `IsConfigFile` paths, a `key = value` line whose key is not in `{type, command, url, enabled, description}` → `key = ` + `mask.Value(value)`, so references stay visible. Everything else → `mask.Text`.
+  - `MaskPatchLine`: diff header lines (`diff `, `index `, `--- `, `+++ `, `@@`) → `mask.Text(mask.Sanitize(line))`, so a token in a tracked file name is masked. `MaskPatchLine` is per line and cannot tell a header from an added line `++ …` inside a hunk; masking headers with `mask.Text` covers that case too. Content lines keep their first byte (`+`/`-`/` `). For `IsConfigFile` paths, a `key = value` line whose key is not in `{type, command, url, enabled, description}` → `key = ` + `mask.Value(value)`, so references stay visible. Everything else → `mask.Text`.
 
 - [ ] **Step 1: Write failing tests:**
   - `TestAddedLinesNumbers` (two hunks, line numbers right).
+  - `TestAddedLineStartingPlusPlusInsideHunk` (an added `++ ghp_…` line is reported; the `+++ b/x` header is not).
   - `TestHardEverywhereKinds` (one per R5 hard kind, in `skills/x/SKILL.md`).
   - `TestConfigLiteralSecretHard` (`mcp/a.toml`: `API_KEY = 'abc123def456ghi789'` → hard; `API_KEY = '${secret:a.api_key}'` → no finding).
   - `TestBearerRefNotAFinding`.
@@ -365,6 +368,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `TestFindingShownIsMasked` (the raw token never appears in `Shown`).
   - `TestMaskPatchLineConfigValues` (`command = 'npx'` visible; `X-Api-Key = 'literal'` → `••••`; `${env:T}` visible).
   - `TestMaskPatchLineStripsEscapes`.
+  - `TestMaskPatchLineHeaderTokens` (`diff --git a/skills/ghp_<20>/x b/…` and an added line `+++ ghp_<20>`: the token never survives).
   - `TestMaskPatchLineMaintainerSample`: the shell-style `${VAR}` and `Bearer ${VAR}` lines from the maintainer's mcp files stay visible.
   - `FuzzMaskPatchLine` (output never contains ESC; a planted `ghp_` token never survives).
 - [ ] **Step 2: Run** `go test ./internal/gitrepo/ -run 'Added|Hard|Config|Bearer|Prose|UUID|Binary|Finding|MaskPatch' -v`. Expected: FAIL.
@@ -388,7 +392,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
     3. `InspectGitDir`: lock or in-progress state is refused.
     4. Detached HEAD is refused.
     5. `Repo.Refusal` is refused.
-    6. Scan: tracked files via `DiffArgv(-U0)` + `AddedLines` + `ScanLines`; untracked files via `ScanNewFile`.
+    6. Scan: tracked files via `DiffArgv(-U0)` + `AddedLines` + `ScanLines`; untracked files via `ScanNewFile`. A tracked patch that holds `Binary files … differ` (binary content, or a `-diff` attribute) gets one soft finding `"not scanned: binary"`, and a patch cut by the runner (stdout ends with `runner.TruncatedMark`) gets one soft finding `"not scanned: patch over 4 MiB"`, so neither can be committed without the typed confirmation (R5: content that was not scanned is soft).
     - Any hard finding → refuse, listing the findings and `git -C <top> commit …` as the outside path.
     - Soft findings only → the commit `Action` has `TypedConfirm` and a `Warning` like `"N possible secrets listed on the Source repo tab; type commit to proceed"`.
     - Then `DoChain(scope, GitAdd, GitCommit)`. The selection includes both sides of a rename when both are inside the home.
@@ -408,11 +412,13 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `TestCommitRefusedWhenCheckFails`.
   - `TestCommitRefusedOnHardFinding`: `mcp add` with `--env API_KEY=ghp_…` written by hand. Nothing is emitted and `git log` count is unchanged.
   - `TestSoftFindingNeedsTypedCommit`.
+  - `TestTrackedBinaryChangeNeedsTypedCommit` and `TestTruncatedPatchNeedsTypedCommit` (a fake git returns a patch ending in `runner.TruncatedMark`).
   - `TestCommitRefusedWhenIndexLockPresent` (the lock is still there afterwards).
   - `TestCommitRefusedDuringMerge`.
   - `TestCommitRefusedDetached`.
   - `TestCommitRefusedForBackupRepo`.
   - `TestStateFileNeverInArgv`.
+  - `TestSelectionIsFilesNeverDirectories`: every path handed to `GitAdd`/`GitCommit` is a file record from `ParseStatus`, never a directory, so a pathspec cannot sweep in a tracked `skills/.state/…` descendant (the builders cannot tell a directory from a file, and `--literal-pathspecs` disables `:(exclude)`).
   - `TestChangedSinceListedRefreshes`.
   - `TestHomeBelowRootPathspecOnly` (a dirty file outside the home in the same repo never appears and never reaches argv).
   - `TestChezmoiNoticeAndNoGitKeys`.
@@ -435,11 +441,11 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
 - Produces (keys):
   - `f` fetch: needs an upstream; `remote` comes from `git -C top for-each-ref --format=%(upstream:remotename) refs/heads/<head>`, read once per refresh.
   - `p` pull: `AtRoot` only, upstream set, not detached, no lock or in-progress state.
-  - `P` push, under the same preconditions plus the outgoing guard. It emits `GitPush(GitRepo{Top}, remote, Branch.Head)` with the same `remote` as `f`. Refused when the upstream's branch (`%(upstream:remoteref)`) is not `refs/heads/<head>` (the explicit refspec would otherwise create a new remote branch; this is the rule `push.default=simple` applied) and when `git -C top config --get --type=bool remote.<remote>.mirror` prints `true` ("the remote is configured as a mirror; push outside the TUI").
+  - `P` push, under the same preconditions plus the outgoing guard. It emits `GitPush(GitRepo{Top}, remote, Branch.Head)` with the same `remote` as `f`. The explicit remote overrides `branch.<b>.pushRemote` and `remote.pushDefault`, so the push goes to the remote and branch whose `@{u}..HEAD` the guard scanned. Refused when the upstream's branch (`%(upstream:remoteref)`) is not `refs/heads/<head>` (the explicit refspec would otherwise create a new remote branch; this is the rule `push.default=simple` applied) and when `git -C top config --get --type=bool remote.<remote>.mirror` prints `true` ("the remote is configured as a mirror; push outside the TUI").
   - `D`/`A` after a successful pull emit `GotoMsg{"Drift"}` / `GotoMsg{"Apply"}`.
   - `i` bootstrap (user scope, `Missing`).
 - Rules (pinned):
-  - **Push guard:** `git -C top diff --name-only -z @{u}..HEAD -- <pathspec>`. A `.state/` or Sensitive path is refused. Each file then goes through `DiffArgv`-style `-U0 @{u}..HEAD` and `ScanLines`. Hard → refuse with findings and `git -C <top> log -p @{u}..HEAD` to inspect. Soft → `TypedConfirm`. More than 2000 files → one soft finding "too many to scan".
+  - **Push guard:** `git -C top log --format= --name-only -z @{u}..HEAD -- <pathspec>` (every path any outgoing commit touches, not only the net diff). A `.state/` or Sensitive path is refused. Each outgoing commit's own patch is then scanned (`git -C top log -p --no-ext-diff --no-textconv --no-color -U0 --format=%H @{u}..HEAD -- <pathspec>`, split per commit, through `AddedLines` and `ScanLines`), so a credential added in one commit and removed in a later one is still found: the push would publish it in history. A binary or truncated patch is soft, as in Task 8. Hard → refuse with findings and `git -C <top> log -p @{u}..HEAD` to inspect. Soft → `TypedConfirm`. More than 2000 files → **refused** "too many files to scan; review and push outside the TUI" (an unscanned push cannot be taken back, and unlike one large file the user cannot review 2000 files on this screen).
   - Behind > 0 with `ABKnown` → refuse "behind N: pull first".
   - No upstream → refuse with text:
     ```
@@ -448,7 +454,7 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
       git -C <top> push -u origin <branch>
     With the GitHub CLI: gh repo create <name> --private --source <top> --push
     ```
-  - **Public-host warning:** `git -C top remote get-url <remote>` → host. If it is in `{github.com, gitlab.com, bitbucket.org, codeberg.org, gitea.com, git.sr.ht}`, push `Warning` = `"pushes to <host>: make sure the repository is private; the TUI cannot see its visibility"`. A URL with https userinfo adds `"the remote URL embeds a credential"`. The URL is shown only through `mask.Text`.
+  - **Public-host warning:** `git -C top remote get-url --push --all <remote>` → one host per line (the push URLs git will use: `pushurl` entries when set, else `url` with `pushInsteadOf` applied; plain `get-url` prints the fetch URL). Every listed host is checked. If it is in `{github.com, gitlab.com, bitbucket.org, codeberg.org, gitea.com, git.sr.ht}`, push `Warning` = `"pushes to <host>: make sure the repository is private; the TUI cannot see its visibility"`. A URL with https userinfo adds `"the remote URL embeds a credential"`. The URL is shown only through `mask.Text`.
   - **Pull, non-fast-forward** (exit ≠ 0 and stderr contains `Not possible to fast-forward` or `diverging`): note "local and remote have diverged; nothing was changed. Resolve outside the TUI:" followed by `git -C <top> pull --rebase` or `git -C <top> merge @{u}`, and `then press r`.
   - **Pull success:** note `"pulled: agents see these changes only after an apply. D = Drift, A = Apply"`. The shell's `finish` already marks other tabs stale.
   - **Push rejected** (`non-fast-forward`/`fetch first`) → "remote has new commits: fetch (f) and pull (p) first".
@@ -466,9 +472,12 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
   - `TestPushRefusedNoUpstreamShowsGuidance`.
   - `TestPushRefusedWhenBehind`.
   - `TestPushRefusedOutgoingHardFinding` (a commit made outside the TUI with `ghp_…` in `mcp/x.toml`).
-  - `TestPushWarnsPublicHost` (remote URL set to `https://github.com/o/r.git` on a bare-repo `pushurl`, read with `get-url`).
+  - `TestPushRefusedTokenAddedThenRemoved` (one outgoing commit adds `ghp_…`, the next removes it; the net diff is clean).
+  - `TestPushRefusedTooManyFiles` (over 2000 outgoing paths; nothing emitted).
+  - `TestPushWarnsPublicHost` (fetch `url` a local bare repo, `pushurl` `https://github.com/o/r.git`, read with `get-url --push --all`).
   - `TestPushStderrTokenMasked`.
   - `TestPullPushRefusedBelowRoot`.
+  - `TestPullStoppedSaysWorktreeMayBePartlyUpdated` (a pull that times out gets the R3 note and `git -C <top> status`, never "nothing was changed").
   - `TestHangingRemoteTimesOut`: the remote is a local `http://127.0.0.1:<port>` listener that accepts and never answers (set via `pushurl` in the test repo's config, not through a builder), with `Timeouts.Read=200ms`. The status ends with `timed out` and no child is left (`runner` live set empty).
   - `TestNoTTYPromptOnSSH`: `GIT_SSH_COMMAND` unset and an `ssh://` remote to an unknown host. The push fails within the bound with "Host key verification failed" or similar, never stopped.
   - Bootstrap: `TestBootstrapShownWhenHomeMissing`, `TestBootstrapRejectsBadURLs` (table from Task 3, nothing emitted), `TestBootstrapEmitsInitAction`, `TestBootstrapDisabledInProjectScope`.
@@ -506,9 +515,9 @@ Dependency order: 1 is independent; 2 → 3 → 4; 5 needs 2; 6 and 7 need 5; 8 
 - [ ] **Step 3: Implement** registration and wiring. README:
   - Screens table row `18 | Source repo | git status of the home, masked diff, commit, fetch, pull, push | space select, a all, enter diff, c commit, f fetch, p pull, P push, i clone a home (when missing)`.
   - Navigation: "Tabs 10 and up are reached with `tab` / `shift+tab`".
-  - Safety model: a third exception paragraph. The TUI runs `git` (only `add`, `commit`, `fetch`, `pull --ff-only`, `push`, plus read-only `status`, `diff`, `rev-parse`, `log -1`, `for-each-ref`, `remote get-url`, `config --get`) on the home's repository, with the exact command shown and confirmed. A commit and a pull change files and history inside the home. Never `--force`, `reset`, `clean`, `rebase`, `--no-verify`. Your hooks and signing run as configured, with no terminal (a prompting hook, ssh or pinentry fails instead of hanging). Git commands are bounded (R3). The secret scan is heuristic (R5), and a hard refusal can be bypassed only by committing outside the TUI. agentsync's own destination history is never touched. chezmoi-managed homes are left to chezmoi.
+  - Safety model: a third exception paragraph. The TUI runs `git` (only `add`, `commit`, `fetch`, `pull --ff-only`, `push`, plus read-only `status`, `diff`, `rev-parse`, `log`, `for-each-ref`, `remote get-url`, `config --get`) on the home's repository, with the exact command shown and confirmed. A commit and a pull change files and history inside the home. Never `--force`, `reset`, `clean`, `rebase`, `--no-verify`. Your hooks and signing run as configured, with no terminal (a prompting hook, ssh or pinentry fails instead of hanging). Git commands are bounded (R3). The secret scan is heuristic (R5), and a hard refusal can be bypassed only by committing outside the TUI. agentsync's own destination history is never touched. chezmoi-managed homes are left to chezmoi.
   - Reword the "writes no agentsync files" sentence to name all exceptions.
-  - Known limits: the scan covers added lines only, push/pull need the repo to be the home itself (R7), and the scan-to-commit window is like `E`'s check-then-use.
+  - Known limits: the scan covers added lines only, push/pull need the repo to be the home itself (R7), and the scan-to-commit window is like `E`'s check-then-use. The window runs to the commit itself, not to the add: `git commit -- <paths>` records the worktree contents of those paths, not what `add` staged (verified with git 2.43), so a same-user process that rewrites a selected file after the scan changes what is committed.
 - [ ] **Step 4: Run** the full gate three times. Locally (never in CI), run once against a **clone** of a real home layout: `git clone --no-hardlinks ~/git/agent-config "$CLAUDE_JOB_DIR/tmp/ac"` then `git -C "$CLAUDE_JOB_DIR/tmp/ac" remote remove origin`, and `AGENTSYNC_HOME="$CLAUDE_JOB_DIR/tmp/ac" agentsync-tui`. Use `git clone`, **never `cp -a`**: the real home's ignored `.state/` holds pre-apply backups of agent configs that contain a live API key, and a copy would spread it into a temp directory. Delete the clone afterwards. Check the default selection excludes `kiro-agents-src/`, `steering/`, `setup.sh`. Record the result in the PR. Do not run it against the real `~/.agentsync`.
 - [ ] **Step 5: Commit** `feat: register the Source repo tab; end-to-end coverage and docs`. **End of PR B.**
 
