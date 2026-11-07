@@ -173,7 +173,7 @@ func (m *modal) render(w int, mode renderMode) string {
 	steps := m.steps()
 	title := mask.Sanitize(m.act.Title)
 	if len(steps) > 1 {
-		title = strings.ReplaceAll(titles(steps), ", ", ", then ")
+		title = joinTitles(steps, ", then ")
 	}
 	b.WriteString(styleBold.Render(title) + "\n" + gap)
 	// One $ line per step, in run order.

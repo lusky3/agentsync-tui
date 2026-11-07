@@ -171,11 +171,16 @@ func (a *App) toggleScope() tea.Cmd {
 
 // GotoMsg asks the shell to show the first screen titled Title (a screen's
 // offer to jump, such as Drift or Apply after a pull), refreshing it if its
-// data is stale. An unknown title only sets a warning.
+// data is stale. An unknown title only sets a warning, and so does a jump
+// while a modal is open or an action runs (the screen does not change).
 type GotoMsg struct{ Title string }
 
 // goTo handles a GotoMsg.
 func (a *App) goTo(title string) tea.Cmd {
+	if a.modal != nil || a.running != nil {
+		a.setStatus(statusWarn, "busy: another action is in progress")
+		return nil
+	}
 	for i, s := range a.screens {
 		if s.Title() == title {
 			return a.selectScreen(i)

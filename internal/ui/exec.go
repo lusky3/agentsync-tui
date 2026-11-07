@@ -201,11 +201,16 @@ func DoChain(scope runner.Scope, first actions.Action, then ...actions.Action) t
 
 // titles is the sanitised titles of acts, comma-separated.
 func titles(acts []actions.Action) string {
+	return joinTitles(acts, ", ")
+}
+
+// joinTitles joins the sanitised titles of acts with sep.
+func joinTitles(acts []actions.Action, sep string) string {
 	ts := make([]string, len(acts))
 	for i, a := range acts {
 		ts[i] = mask.Sanitize(a.Title)
 	}
-	return strings.Join(ts, ", ")
+	return strings.Join(ts, sep)
 }
 
 // scopeBound reports whether act depends on the scope it was built under:

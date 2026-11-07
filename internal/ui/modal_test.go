@@ -405,6 +405,17 @@ func TestModalShowsEveryChainCommand(t *testing.T) {
 	}
 }
 
+// A step title that itself contains ", " is kept whole in the chain title.
+func TestChainTitleKeepsCommaInStepTitle(t *testing.T) {
+	add, commit := gitAdd(t, "a", "b"), gitCommit(t, "a", "b")
+	add.Title = "Add a, b"
+	out := modalText(t, DoChain(runner.ScopeUser, add, commit)().(DoMsg))
+	want := "Add a, b, then " + commit.Title
+	if !strings.Contains(out, want) {
+		t.Errorf("modal lacks %q:\n%s", want, out)
+	}
+}
+
 func TestTypedConfirmNeedsVerbNoDestructiveBadge(t *testing.T) {
 	git := runnertest.New()
 	h := start(t, gitDeps(runnertest.New(), git), newScreen("A", "a"))

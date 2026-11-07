@@ -375,6 +375,30 @@ func TestGotoUnknownTitleWarns(t *testing.T) {
 	}
 }
 
+// A tab jump is refused while a modal is open or an action runs.
+func TestGotoRefusedWhileBusy(t *testing.T) {
+	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"), newScreen("B", "b"))
+	app.Update(DoMsg{Action: actions.PluginUpgradeAll()})
+	if app.modal == nil {
+		t.Fatal("precondition: modal open")
+	}
+	app.Update(GotoMsg{Title: "B"})
+	if app.active != 0 {
+		t.Errorf("active = %d with a modal open, want 0", app.active)
+	}
+	if app.statusKind != statusWarn || !strings.HasPrefix(app.status, "busy:") {
+		t.Errorf("status = %q (%v)", app.status, app.statusKind)
+	}
+	app.Update(key("y")) // the write is running; its cmd is never executed
+	if app.running == nil {
+		t.Fatal("precondition: write running")
+	}
+	app.Update(GotoMsg{Title: "B"})
+	if app.active != 0 {
+		t.Errorf("active = %d with an action running, want 0", app.active)
+	}
+}
+
 func TestRecordShutdownShowsGitProgram(t *testing.T) {
 	app := NewApp(baseDeps(newFakeRunner()), newScreen("A", "a"))
 	app.RecordShutdown([]runner.Ended{
