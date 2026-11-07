@@ -498,3 +498,20 @@ func TestAgentsyncDisplayUnchanged(t *testing.T) {
 		t.Errorf("ConfirmVerb = %q", got)
 	}
 }
+
+// The .state check holds where git on Windows reads '\' as a separator
+// and where the filesystem folds case (macOS, Windows), so no spelling of
+// the state directory reaches git.
+func TestStatePathRefusedAnyCaseOrSeparator(t *testing.T) {
+	for _, p := range []string{`.state\backup\config`, `skills\.state\x`, ".STATE/backup/x", "a/.State/x", `.State\x`} {
+		if err := ValidGitPath(p); err == nil {
+			t.Errorf("ValidGitPath(%q) accepted", p)
+		}
+		checkPathRefused(t, p)
+	}
+	for _, p := range []string{"state/x", ".stateful/x", "a.state/x", `x\y`} {
+		if err := ValidGitPath(p); err != nil {
+			t.Errorf("ValidGitPath(%q) = %v", p, err)
+		}
+	}
+}

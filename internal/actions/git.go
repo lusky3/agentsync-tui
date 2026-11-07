@@ -75,10 +75,11 @@ func hasControl(s string) bool {
 // ValidGitPath reports whether p may be passed to git as a path: non-empty,
 // at most 4096 bytes, local (relative, no ".." escape, not the whole tree),
 // valid UTF-8 and free of control and format characters. It refuses any
-// path with a "/"-separated component equal to ".state" (the ignored state
-// directory holds pre-apply backups with live secrets; D11) and any path
-// starting with ":" (git pathspec magic: --literal-pathspecs only applies
-// when the Action runs through runner.NewGit, so Argv must not rely on it).
+// path with a component equal to ".state" in any case, separated by '/' or
+// '\' (the ignored state directory holds pre-apply backups with live
+// secrets; D11) and any path starting with ":" (git pathspec magic:
+// --literal-pathspecs only applies when the Action runs through
+// runner.NewGit, so Argv must not rely on it).
 // Glob characters are allowed: the runner's --literal-pathspecs makes them
 // match literally.
 func ValidGitPath(p string) error {
@@ -95,10 +96,19 @@ func ValidGitPath(p string) error {
 		return errors.New("invalid path: names the whole tree")
 	case strings.HasPrefix(p, ":"):
 		return errors.New("invalid path: pathspec magic")
-	case slices.Contains(strings.Split(p, "/"), ".state"):
+	case inStateDir(p):
 		return errors.New("invalid path: inside the state directory")
 	}
 	return nil
+}
+
+// inStateDir reports whether any component of p, split on '/' and '\'
+// (git on Windows reads both as separators), is ".state" in any case
+// (macOS and Windows filesystems fold case).
+func inStateDir(p string) bool {
+	return slices.ContainsFunc(strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }), func(c string) bool {
+		return strings.EqualFold(c, ".state")
+	})
 }
 
 func checkPaths(paths []string) error {
