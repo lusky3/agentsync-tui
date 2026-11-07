@@ -64,7 +64,7 @@ func newSourceRepoEnv(t *testing.T) *testenv.Env {
 	}
 	gittest.Need(t)
 	env := testenv.New(t)
-	t.Chdir(env.Home)
+	env.Chdir(t)
 	return env
 }
 

@@ -331,21 +331,23 @@ func TestMainWiresGitAndOptionalChezmoi(t *testing.T) {
 		t.Skip("no /bin/sh")
 	}
 	for _, withChezmoi := range []bool{false, true} {
-		hermetic(t)
-		bin := t.TempDir()
-		t.Setenv("PATH", bin)
-		fakeBin(t, bin, "git")
-		if withChezmoi {
-			fakeBin(t, bin, "chezmoi")
-		}
-		d := buildDeps(context.Background(), func() {}, options{}, runner.ScopeUser, "")
-		wantProgram(t, d.Git, "git", []string{"status"}, "--literal-pathspecs")
-		switch {
-		case withChezmoi:
-			wantProgram(t, d.Chezmoi, "chezmoi", []string{"source-path"}, "chezmoi source-path")
-		case d.Chezmoi != nil:
-			t.Errorf("Deps.Chezmoi = %#v without chezmoi on PATH, want nil", d.Chezmoi)
-		}
+		t.Run(map[bool]string{false: "without chezmoi", true: "with chezmoi"}[withChezmoi], func(t *testing.T) {
+			hermetic(t)
+			bin := t.TempDir()
+			t.Setenv("PATH", bin)
+			fakeBin(t, bin, "git")
+			if withChezmoi {
+				fakeBin(t, bin, "chezmoi")
+			}
+			d := buildDeps(context.Background(), func() {}, options{}, runner.ScopeUser, "")
+			wantProgram(t, d.Git, "git", []string{"status"}, "--literal-pathspecs")
+			switch {
+			case withChezmoi:
+				wantProgram(t, d.Chezmoi, "chezmoi", []string{"source-path"}, "chezmoi source-path")
+			case d.Chezmoi != nil:
+				t.Errorf("Deps.Chezmoi = %#v without chezmoi on PATH, want nil", d.Chezmoi)
+			}
+		})
 	}
 }
 

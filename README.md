@@ -150,7 +150,7 @@ actions ask you to type a word instead (see the safety model).
 | 9 | Skills | canonical skills | `E`/`enter` edit, then `check` runs |
 | 10-14 | Subagents, Commands, Hooks, LSP, Memory | same as Skills | `E`/`enter` edit, then `check` runs |
 | 15 | Health | `doctor` and `check` results | `r` re-run |
-| 16 | Source repo | git status of the home, masked diff, commit, fetch, pull, push | `space` select, `a` all, `enter`/`d` diff, `c` commit, `f` fetch, `p` pull, `P` push, `i` clone a home (when missing), `r` refresh |
+| 16 | Source repo | git status of the home, masked diff, commit, fetch, pull, push | `space` select, `a` all, `enter`/`d` diff, `c` commit, `f` fetch, `p` pull, `P` push, `i` clone a home (when missing), `r` refresh; after a pull, `D` Drift / `A` Apply |
 
 Long views (command output, diffs, the plugin detail) scroll with the same keys as the lists.
 
@@ -180,10 +180,11 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
 - The second exception is the Source repo tab, which runs `git` (and,
   read-only, `chezmoi source-path`) on the repository that holds the home.
   Its only git writes are exactly these, each shown as its full command line
-  and confirmed: `add -- <paths>` and `commit --message=<msg> -- <paths>`
-  (one confirmation for both; only the files you selected, never `add -A`
-  or `commit -a`), `fetch <remote>` (no dialog, logged), `pull --ff-only
-  --no-rebase --no-autostash`, and `push --no-follow-tags
+  and confirmed, except `fetch <remote>`, which only updates
+  remote-tracking refs and runs without a dialog (logged): `add -- <paths>`
+  and `commit --message=<msg> -- <paths>` (one confirmation for both; only
+  the files you selected, never `add -A` or `commit -a`), `fetch <remote>`,
+  `pull --ff-only --no-rebase --no-autostash`, and `push --no-follow-tags
   --no-recurse-submodules <remote> <scanned sha>:refs/heads/<branch>`: the
   commit the pre-push scan read, to the current branch's name on its
   upstream's remote. A push is never forced and never sends another branch,
@@ -200,7 +201,8 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   deletes it). A push is scanned the same way first. Your hooks and signing
   run as configured, with no terminal (see above). Git commands are always
   bounded (see Usage). agentsync's own destination-backup repositories are
-  never touched, and a home that chezmoi manages gets a read-only notice
+  recognised (by commit author and the `agentsync.managed` marker) and
+  refused, and a home that chezmoi manages gets a read-only notice
   with the chezmoi commands to use instead. Diff and file content are only
   rendered, masked: never written to the activity log, the status line or
   `--debug-log`.

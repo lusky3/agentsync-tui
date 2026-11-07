@@ -24,7 +24,10 @@ type Env struct {
 	Env           []string // os.Environ() with the hermetic overrides applied
 }
 
-// New creates a hermetic environment rooted in a new Root.
+// New creates a hermetic environment rooted in a new Root. A test that runs
+// agentsync or the TUI through anything but Env.Agentsync (which sets the
+// child's directory itself) must call Chdir, so those children inherit the
+// fake home as their working directory.
 func New(t *testing.T) *Env {
 	t.Helper()
 	root := Root(t)
@@ -58,6 +61,14 @@ func New(t *testing.T) *Env {
 		e.Env = append(e.Env, k+"="+v)
 	}
 	return e
+}
+
+// Chdir makes the fake home the test's working directory (t.Chdir), so
+// every agentsync child that inherits it starts its project-tree walk
+// there, never below a real .agentsync.
+func (e *Env) Chdir(t testing.TB) {
+	t.Helper()
+	t.Chdir(e.Home)
 }
 
 // fallbackTemp is where Root goes when os.TempDir() lies below a

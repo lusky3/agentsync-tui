@@ -29,7 +29,7 @@ func TestE2ESmoke(t *testing.T) {
 	env := testenv.New(t)
 	// The TUI's agentsync children inherit this working directory: the fake
 	// home, never a directory below a real .agentsync tree.
-	t.Chdir(env.Home)
+	env.Chdir(t)
 	env.Init(t)
 	if _, se, code := env.Agentsync(t, "--no-input", "mcp", "add", "smoke", "--command", "echo"); code != 0 {
 		t.Fatalf("mcp add exit %d: %s", code, se)
