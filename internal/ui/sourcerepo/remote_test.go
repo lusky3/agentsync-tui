@@ -532,8 +532,8 @@ func (sh *shell) waitRefresh() {
 
 func noLiveChild(t *testing.T) {
 	t.Helper()
-	if ended := runner.Shutdown(os.Interrupt, 0, 0); len(ended) != 0 {
-		t.Errorf("children left running: %+v", ended)
+	if live := runner.Live(); len(live) != 0 {
+		t.Errorf("children left running: %q", live)
 	}
 }
 

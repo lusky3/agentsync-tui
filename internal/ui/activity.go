@@ -64,6 +64,8 @@ func outcome(res runner.Result, err error) string {
 		return "timeout"
 	case errors.Is(err, runner.ErrNotInstalled):
 		return "not-installed"
+	case errors.Is(err, runner.ErrShuttingDown):
+		return "not-started"
 	default:
 		return "error"
 	}
