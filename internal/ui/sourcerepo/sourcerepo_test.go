@@ -559,3 +559,28 @@ func TestHeadingMasksCredentials(t *testing.T) {
 		t.Errorf("heading:\n%s", v)
 	}
 }
+
+// PGP and PuTTY private keys in a skills file are sensitive too, and a
+// diff removing one is not shown (Ruling 45).
+func TestDiffNeverShowsPGPOrPuTTYKey(t *testing.T) {
+	for _, key := range []string{
+		"-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBGVmZXhhbXBsZS1rZXktYm9keQ==\n-----END PGP PRIVATE KEY BLOCK-----\n",
+		"PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nPrivate-Lines: 1\nQUJDREVGR0hJSktMTU5PUA==\n",
+	} {
+		home := newRepo(t)
+		gittest.Commit(t, home, "key", map[string]string{"skills/k/SKILL.md": "# k\n" + key})
+		write(t, home, "skills/k/SKILL.md", "# k\n")
+		write(t, home, "skills/n/notes.md", "# n\n"+key)
+		f := open(t, home)
+		f.s.list.Cursor = rowOf(f.s, "skills/n/notes.md")
+		press(f.s, "d")
+		if f.s.mode == modeDiff || !strings.Contains(view(f.s), "looks like a secret") {
+			t.Errorf("untracked key shown:\n%s", view(f.s))
+		}
+		f.s.list.Cursor = rowOf(f.s, "skills/k/SKILL.md")
+		press(f.s, "d")
+		if v := view(f.s); strings.Contains(v, "QUJDREVG") || strings.Contains(v, "lQOYBGVm") || !strings.Contains(v, "private key") {
+			t.Errorf("removed key shown:\n%s", v)
+		}
+	}
+}

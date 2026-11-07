@@ -114,6 +114,7 @@ var (
 		regexp.MustCompile(`xox[a-z]-[^\s"']+`),
 		regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 		regexp.MustCompile(`eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*`),
+		regexp.MustCompile(privateKeyPat),
 	}
 
 	schemeOnlyRe = regexp.MustCompile(`^\s*(?i:bearer|basic|token)?\s*[:\s]*$`)

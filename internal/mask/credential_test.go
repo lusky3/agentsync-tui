@@ -30,6 +30,9 @@ func TestCredentialHardKinds(t *testing.T) {
 		{"-----BEGIN OPENSSH PRIVATE KEY-----", "private-key"},
 		{"-----BEGIN RSA PRIVATE KEY-----", "private-key"},
 		{"-----BEGIN PRIVATE KEY-----", "private-key"},
+		{"-----BEGIN PGP PRIVATE KEY BLOCK-----", "private-key"},
+		{"PuTTY-User-Key-File-3: ssh-ed25519", "private-key"},
+		{"PuTTY-User-Key-File-2: ssh-rsa", "private-key"},
 		{"AGE-SECRET-KEY-1QQQQQQQQ", "age-identity"},
 		{"password=hunter2", "secret-assignment"},
 		{`api_key: "abc"`, "secret-assignment"},
@@ -158,6 +161,20 @@ func TestHeaderAndTripleQuotedAssignments(t *testing.T) {
 		}
 		if kind, ok := Credential(in); ok {
 			t.Errorf("Credential(%q) = %q", in, kind)
+		}
+	}
+}
+
+// Text masks a private-key marker, so a finding's shown line or a prose
+// diff line never carries one.
+func TestTextMasksPrivateKeyMarkers(t *testing.T) {
+	for _, in := range []string{
+		"-----BEGIN PGP PRIVATE KEY BLOCK-----",
+		"-----BEGIN OPENSSH PRIVATE KEY-----",
+		"PuTTY-User-Key-File-3: ssh-ed25519",
+	} {
+		if got := Text(in); got == in || strings.Contains(got, "PRIVATE KEY") || strings.Contains(got, "PuTTY-User-Key-File") {
+			t.Errorf("Text(%q) = %q", in, got)
 		}
 	}
 }

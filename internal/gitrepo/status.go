@@ -156,10 +156,11 @@ const (
 var (
 	ageSecret = []byte("AGE-SECRET-KEY-")
 	ageVault  = []byte("age-encryption.org/v1")
-	// privateKeyRe is a PEM or OpenSSH private-key header (as mask's
-	// KindPrivateKey reads one), its label bounded so that a header split
-	// across two reads is still found (markerCarry).
-	privateKeyRe = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----`)
+	// privateKeyRe is a private key's marker as mask's KindPrivateKey
+	// reads one: a PEM or OpenSSH header, a PGP secret key block's header,
+	// a PuTTY key file's first line. The label is bounded so that a marker
+	// split across two reads is still found (markerCarry).
+	privateKeyRe = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----|PuTTY-User-Key-File-[0-9]{1,8}:`)
 )
 
 // markerCarry is how many bytes of one read the key-material scan keeps
@@ -173,8 +174,8 @@ func keyMaterial(b []byte) bool {
 	return bytes.Contains(b, ageSecret) || privateKeyRe.Match(b)
 }
 
-// HoldsKeyMaterial reports whether s holds an age identity or a PEM or
-// OpenSSH private-key header: a diff that does is not shown, whichever of
+// HoldsKeyMaterial reports whether s holds an age identity or a
+// private-key marker (PEM, OpenSSH, PGP or PuTTY; privateKeyRe): a diff that does is not shown, whichever of
 // its lines (an added or a removed one) carries the key.
 func HoldsKeyMaterial(s string) bool { return keyMaterial([]byte(s)) }
 

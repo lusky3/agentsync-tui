@@ -5,6 +5,12 @@ import (
 	"strings"
 )
 
+// privateKeyPat is a private key's marker: a PEM or OpenSSH header
+// (-----BEGIN … PRIVATE KEY-----), a PGP secret key block's header and a
+// PuTTY key file's first line (PuTTY-User-Key-File-<version>:). Text masks
+// it whole (shapeRes), Credential reports it as KindPrivateKey.
+const privateKeyPat = `-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|PuTTY-User-Key-File-[0-9]+:`
+
 // The kinds of credential Credential names (the R5 hard findings).
 const (
 	KindTokenShape       = "token-shape"
@@ -16,7 +22,7 @@ const (
 )
 
 var (
-	privateKeyRe  = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+	privateKeyRe  = regexp.MustCompile(privateKeyPat)
 	ageIdentityRe = regexp.MustCompile(`AGE-SECRET-KEY-1`)
 )
 
