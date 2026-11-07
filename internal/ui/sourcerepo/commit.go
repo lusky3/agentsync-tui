@@ -34,6 +34,15 @@ const (
 	refused    = "refused: "
 	keyEsc     = "esc"
 	gitC       = "git -C "
+	// cannotScan starts the refusal of a file the scan could not read.
+	cannotScan = refused + "cannot scan "
+	// statusCmd ends a shown `git -C <top> status`.
+	statusCmd = " status"
+	// literalPathspecs goes before the subcommand of a command shown for
+	// the user to run that names paths: like the TUI's own git runs
+	// (runner.NewGit), it makes `*`, `:(glob)` and the like match only a
+	// file of that name.
+	literalPathspecs = " --literal-pathspecs"
 )
 
 // binaryRe is the line git prints for a binary change (binary content, or
@@ -242,7 +251,7 @@ func scanFile(ctx context.Context, in guardInput, unborn bool, f gitrepo.File) (
 func scanUntracked(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrepo.Finding, string) {
 	b, err := bounded(ctx, in.limit, func() (capped, error) { return readNew(in.repo.Top, f.Path) })
 	if err != nil {
-		return nil, refused + "cannot scan " + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
+		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
 	}
 	return gitrepo.ScanNewFile(f.HomeRel, []byte(b.data)), ""
 }
@@ -264,7 +273,7 @@ func readNew(top, rel string) (capped, error) {
 func scanTracked(ctx context.Context, in guardInput, unborn bool, f gitrepo.File) ([]gitrepo.Finding, string) {
 	argv := gitrepo.DiffArgv(in.repo, unborn, f.Path, 0)
 	if argv == nil {
-		return nil, refused + "cannot scan " + gitrepo.DisplayName(f.Path)
+		return nil, cannotScan + gitrepo.DisplayName(f.Path)
 	}
 	res, err := ui.Read(ctx, in.git, in.limit, argv...)
 	if note := ui.ReadNote("git diff", res, err); note != "" {
@@ -284,7 +293,7 @@ func scanTracked(ctx context.Context, in guardInput, unborn bool, f gitrepo.File
 	}
 	post, err := bounded(ctx, in.limit, func() (capped, error) { return postImage(in.repo.Top, f.Path) })
 	if err != nil {
-		return nil, refused + "cannot scan " + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
+		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
 	}
 	if post.cut && beyondCut(lines, post.data) {
 		out = append(out, notScanned(f, gitrepo.KindContextNotChecked))
@@ -501,11 +510,19 @@ func (s *Screen) onRun(m ui.RunMsg) {
 }
 
 // commitOutcome is the note after the commit step. It never holds the
-// run's output: only its exit code or error kind.
+// run's output: only its exit code or error kind. A commit that was
+// stopped (m.Err other than git missing: timed out, interrupted) may
+// already be recorded, as git
+// updates HEAD before the post-commit hook runs: the note asks for a
+// check rather than claiming a failure or offering the unstage command.
 func commitOutcome(p *pendingCommit, m ui.RunMsg, ok bool) string {
 	switch {
 	case ok:
 		return "committed: " + p.subject
+	case m.Err != nil && !errors.As(m.Err, new(*runner.MissingError)):
+		t := shellQuote(p.top)
+		return "the commit was stopped (" + outcomeOf(m) + "); it may have been recorded. Check before retrying or unstaging" +
+			runOutside + "\n  " + gitC + t + " log -1\n  " + gitC + t + statusCmd
 	case p.added:
 		return "commit failed (" + outcomeOf(m) + "); the selected files are now staged. " +
 			"To unstage them, run outside the TUI:\n  " + restoreCommand(p.top, p.add)
@@ -521,9 +538,9 @@ func outcomeOf(m ui.RunMsg) string {
 }
 
 // restoreCommand is the unstage command, as text for the user (R4): the
-// TUI never runs it (D11).
+// TUI never runs it (D11). Its paths are taken literally.
 func restoreCommand(top string, paths []string) string {
-	words := []string{"git", "-C", shellQuote(top), "restore", "--staged", "--"}
+	words := []string{"git", "-C", shellQuote(top), "--literal-pathspecs", "restore", "--staged", "--"}
 	for _, p := range paths[:min(len(paths), shownPaths)] {
 		words = append(words, shellQuote(mask.Text(p)))
 	}

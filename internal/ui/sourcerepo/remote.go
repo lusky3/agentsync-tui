@@ -346,8 +346,8 @@ func pushBranchRefusal(b gitrepo.Branch, r remoteInfo) string {
 	case b.Ahead == 0:
 		return "nothing to push: the branch is not ahead of its upstream"
 	case r.ref != headsPrefix+b.Head:
-		return refused + "the upstream is " + mask.Sanitize(r.ref) + " on " + mask.Sanitize(r.name) + ", not " +
-			headsPrefix + mask.Sanitize(b.Head) + "; a push from the TUI would create a new remote branch: push outside the TUI"
+		return refused + "the upstream is " + mask.Text(r.ref) + " on " + mask.Text(r.name) + ", not " +
+			headsPrefix + mask.Text(b.Head) + "; a push from the TUI would create a new remote branch: push outside the TUI"
 	}
 	return ""
 }
@@ -446,7 +446,7 @@ func (s *Screen) onNet(m netMsg) tea.Cmd {
 		s.note = strings.Join(pushHardRefusal(c.hard, s.repo.Top, m.push.wide), "\n")
 		return nil
 	}
-	warn := append(pushWarnings(m.push.urls), "scanned against "+mask.Sanitize(m.remote)+"/"+mask.Sanitize(m.head)+
+	warn := append(pushWarnings(m.push.urls), "scanned against "+mask.Text(m.remote)+"/"+mask.Text(m.head)+
 		" as last fetched; fetch (f) first if the remote may have been rewritten")
 	if m.push.wide {
 		warn = append(warn, whyWide)
@@ -528,7 +528,7 @@ func stopped(m ui.RunMsg) bool {
 func fetchOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 	switch {
 	case ok:
-		return "fetched " + mask.Sanitize(p.remote)
+		return "fetched " + mask.Text(p.remote)
 	case stopped(m):
 		return "fetch stopped (" + outcomeOf(m) + "); press r to see what arrived"
 	}
@@ -543,7 +543,7 @@ func pullOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 		return pulledNote
 	case stopped(m):
 		return "the pull was stopped; the worktree may be partly updated. Nothing was rolled back (" + outcomeOf(m) +
-			"). To inspect" + runOutside + "\n  " + gitC + t + " status"
+			"). To inspect" + runOutside + "\n  " + gitC + t + statusCmd
 	case strings.Contains(m.Result.Stderr, "would be overwritten"):
 		return "local changes block the pull; commit or stash them outside the TUI, then press r"
 	case strings.Contains(m.Result.Stderr, "Not possible to fast-forward") || strings.Contains(m.Result.Stderr, "diverging"):
@@ -567,7 +567,7 @@ func pushOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 
 // pushedNote names the commit a push sent and where.
 func pushedNote(p *pendingNet) string {
-	return "pushed " + p.sha[:min(len(p.sha), 7)] + " to " + mask.Sanitize(p.remote) + "/" + mask.Sanitize(p.head)
+	return "pushed " + p.sha[:min(len(p.sha), 7)] + " to " + mask.Text(p.remote) + "/" + mask.Text(p.head)
 }
 
 // unpushedMsg carries how many commits the branch holds past the pushed one.

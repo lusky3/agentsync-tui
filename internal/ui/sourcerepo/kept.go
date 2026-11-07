@@ -98,10 +98,10 @@ func keptLines(top string, f gitrepo.File, k keptNote) []string {
 			old = shellQuote(mask.Text(f.Orig))
 		}
 		return []string{"to commit the staged removal of " + name + runOutside,
-			"  " + gitC + shellQuote(top) + " commit -- " + old}
+			"  " + gitC + shellQuote(top) + literalPathspecs + " commit -- " + old}
 	case cmdStatus:
 		return []string{"the staged removal of " + name + " now shares its path with a directory; review it" + runOutside,
-			"  " + gitC + shellQuote(top) + " status"}
+			"  " + gitC + shellQuote(top) + statusCmd}
 	}
 	return nil
 }

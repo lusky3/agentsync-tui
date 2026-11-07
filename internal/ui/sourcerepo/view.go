@@ -23,7 +23,7 @@ const (
 	commitKeys  = "enter check and commit • esc back • ctrl+u clear"
 	// maxFindings is how many findings the pane lists.
 	maxFindings = 20
-	stateWarn   = ".state/ is not ignored: add /.state/ to .gitignore"
+	stateWarn   = ".state/ is not ignored: add .state/ (no leading slash: it matches at any depth, skills/.state/ too) to .gitignore"
 	sourceBack  = "old path exists again; its removal is not part of this commit"
 )
 
@@ -102,7 +102,7 @@ func (s *Screen) header() []string {
 		}
 	case gitrepo.Chezmoi:
 		out := []string{
-			theme.Bold.Render("Managed by chezmoi") + "  source: " + mask.Sanitize(s.repo.ChezmoiSource),
+			theme.Bold.Render("Managed by chezmoi") + "  source: " + mask.Text(s.repo.ChezmoiSource),
 			"The TUI leaves this home to chezmoi. Run these outside the TUI:",
 		}
 		for _, c := range chezmoiCommands {
@@ -125,7 +125,7 @@ func (s *Screen) header() []string {
 func (s *Screen) gitHeader() []string {
 	r, b := s.repo, s.status.Branch
 	out := []string{
-		theme.Bold.Render("git") + "  repo: " + mask.Sanitize(r.Top) + "  home: " + mask.Sanitize(r.Pathspec),
+		theme.Bold.Render("git") + "  repo: " + mask.Text(r.Top) + "  home: " + mask.Text(r.Pathspec),
 		"branch: " + branchText(b) + "  " + upstreamText(b),
 	}
 	if r.Refusal != "" {
@@ -138,7 +138,7 @@ func (s *Screen) gitHeader() []string {
 }
 
 func branchText(b gitrepo.Branch) string {
-	head := mask.Sanitize(b.Head)
+	head := mask.Text(b.Head)
 	switch {
 	case b.Detached:
 		return "detached HEAD"
@@ -156,7 +156,7 @@ func upstreamText(b gitrepo.Branch) string {
 	if b.ABKnown {
 		ab = "↑" + strconv.Itoa(b.Ahead) + " ↓" + strconv.Itoa(b.Behind)
 	}
-	return ab + "  upstream: " + mask.Sanitize(b.Upstream)
+	return ab + "  upstream: " + mask.Text(b.Upstream)
 }
 
 // warnings are the lines above the file rows.

@@ -1,6 +1,7 @@
 package sourcerepo
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -508,7 +509,7 @@ func TestCommitAfterAddFailureShowsStagedNote(t *testing.T) {
 	}
 	sh.finish()
 	note := sh.s.note
-	for _, want := range []string{"staged", "git -C " + sh.s.repo.Top + " restore --staged -- mcp/x.toml"} {
+	for _, want := range []string{"staged", "git -C " + sh.s.repo.Top + " --literal-pathspecs restore --staged -- mcp/x.toml"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note lacks %q: %q", want, note)
 		}
@@ -710,7 +711,7 @@ func TestRenameSourceSensitiveNameNoteShown(t *testing.T) {
 	gittest.Git(t, home, "mv", "skills/k.pem", "skills/k.txt")
 	f := open(t, home)
 	wantView(t, f.s, "old path is a sensitive path; its removal stays staged",
-		"git -C "+f.s.repo.Top+" commit -- skills/k.pem")
+		"git -C "+f.s.repo.Top+" --literal-pathspecs commit -- skills/k.pem")
 }
 
 // A home laid out like the maintainer's real one (synthetic: no real file
@@ -832,5 +833,26 @@ func TestCommitLargeTrackedFileContextNote(t *testing.T) {
 				t.Errorf("typed=%v, want %v (warning %q)", d.Then[0].TypedConfirm, c.typed, d.Then[0].Warning)
 			}
 		})
+	}
+}
+
+// A commit step that was stopped (timed out or interrupted) may already
+// have been recorded: git updates HEAD before a post-commit hook runs. The
+// note says so and asks for a check instead of claiming a failure.
+func TestStoppedCommitOutcomeIsUncertain(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	d := onlyDo(t, commit(f.s, commitMsg))
+	f.s.Update(ui.RunMsg{Action: d.Action})
+	f.s.Update(ui.RunMsg{Action: d.Then[0], Err: errors.New("timed out after 2m0s")})
+	note := f.s.note
+	for _, want := range []string{"may have been recorded", "git -C " + f.s.repo.Top + " log -1", "status"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note lacks %q: %q", want, note)
+		}
+	}
+	if strings.Contains(note, "commit failed") || strings.Contains(note, "nothing was committed") {
+		t.Errorf("note claims a failure: %q", note)
 	}
 }

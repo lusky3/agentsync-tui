@@ -493,7 +493,7 @@ func TestStateFileWarningRow(t *testing.T) {
 	home := newRepo(t)
 	write(t, home, "skills/.state/b.json", "{}\n")
 	f := open(t, home)
-	if v := view(f.s); !strings.Contains(v, ".state/ is not ignored: add /.state/ to .gitignore") {
+	if v := view(f.s); !strings.Contains(v, ".state/ is not ignored: add .state/ (no leading slash: it matches at any depth, skills/.state/ too) to .gitignore") {
 		t.Errorf("view:\n%s", v)
 	}
 }
@@ -544,5 +544,18 @@ func TestRepoChangeDropsOldSnapshot(t *testing.T) {
 	f.s.apply(loadMsg{repo: other, note: "git status: timed out"})
 	if len(f.s.status.Files) != 0 || len(f.s.selectedFiles()) != 0 {
 		t.Errorf("old snapshot kept under the new repository: %+v", f.s.status.Files)
+	}
+}
+
+// The heading's repository path, branch and upstream go through the
+// credential mask, as file names do.
+func TestHeadingMasksCredentials(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Git(t, home, "checkout", "-q", "-b", "wip-"+ghpToken)
+	gittest.Git(t, home, "push", "-q", "-u", "origin", "wip-"+ghpToken)
+	f := open(t, home)
+	v := view(f.s)
+	if strings.Contains(v, ghpToken) || !strings.Contains(v, "wip-") {
+		t.Errorf("heading:\n%s", v)
 	}
 }
