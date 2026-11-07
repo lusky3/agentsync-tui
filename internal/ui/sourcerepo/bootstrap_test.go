@@ -39,7 +39,7 @@ func openMissing(t *testing.T, scope runner.Scope) (*Screen, *runnertest.Fake, s
 
 func TestBootstrapShownWhenHomeMissing(t *testing.T) {
 	s, _, home := openMissing(t, runner.ScopeUser)
-	wantView(t, s, "No agentsync home at "+home+".", "i clone")
+	wantView(t, s, "No agentsync home at "+shellQuote(home)+".", "i clone")
 	press(s, "i")
 	if !s.CapturesKeys() || s.mode != modeURL {
 		t.Fatalf("i did not focus the URL field: mode %v", s.mode)

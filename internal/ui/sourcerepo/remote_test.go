@@ -168,7 +168,7 @@ func TestPullDivergedExplainsAndChangesNothing(t *testing.T) {
 	if head(t, home) != before {
 		t.Error("HEAD moved")
 	}
-	top := f.s.repo.Top
+	top := shellQuote(f.s.repo.Top)
 	wantView(t, f.s, "local and remote have diverged; nothing was changed. Resolve outside the TUI:",
 		"git -C "+top+" pull --rebase", "git -C "+top+" merge @{u}", "then press r")
 	if out := press(f.s, "A"); len(out) != 0 {
@@ -242,7 +242,7 @@ func TestPushRefusedWhenUpstreamNameDiffers(t *testing.T) {
 func TestPushRefusedNoUpstreamShowsGuidance(t *testing.T) {
 	home := newRepo(t)
 	f := open(t, home)
-	top := f.s.repo.Top
+	top := shellQuote(f.s.repo.Top)
 	for _, k := range []string{"P", "p", "f"} {
 		wantNothing(t, press(f.s, k))
 		wantView(t, f.s, "No upstream. Create a PRIVATE repository, then run outside the TUI:",
@@ -283,7 +283,7 @@ func TestPushRefusedOutgoingHardFinding(t *testing.T) {
 	gittest.Commit(t, home, "token", map[string]string{tomlX: baseTOML + "env = { API_KEY = \"" + ghpToken + "\" }\n"})
 	f := open(t, home)
 	wantNothing(t, press(f.s, "P"))
-	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3", "git -C "+f.s.repo.Top+" log -p @{u}..HEAD")
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3", "git -C "+shellQuote(f.s.repo.Top)+" log -p @{u}..HEAD")
 	if strings.Contains(view(f.s), ghpToken) {
 		t.Error("the token is shown")
 	}
@@ -430,7 +430,7 @@ func TestPullPushRefusedBelowRoot(t *testing.T) {
 	gittest.Git(t, top, "push", "-q", "-u", "origin", "main")
 	gittest.Commit(t, top, "local", map[string]string{"agentsync/skills/a/SKILL.md": "# a\n"})
 	f := open(t, filepath.Join(top, "agentsync"))
-	rt := f.s.repo.Top
+	rt := shellQuote(f.s.repo.Top)
 	for _, k := range []string{"p", "P"} {
 		wantNothing(t, press(f.s, k))
 		wantView(t, f.s, "the repository at "+rt+" holds more than the agentsync home; pull and push it outside the TUI",
@@ -578,7 +578,7 @@ func TestPullStoppedSaysWorktreeMayBePartlyUpdated(t *testing.T) {
 	sh.finish()
 	note := sh.s.note
 	for _, want := range []string{"the pull was stopped; the worktree may be partly updated. Nothing was rolled back",
-		"git -C " + sh.s.repo.Top + " status"} {
+		"git -C " + shellQuote(sh.s.repo.Top) + " status"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note lacks %q: %q", want, note)
 		}

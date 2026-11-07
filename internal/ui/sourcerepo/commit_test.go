@@ -163,7 +163,7 @@ func TestCommitRefusedOnHardFinding(t *testing.T) {
 		t.Error("a commit was made")
 	}
 	v := view(f.s)
-	for _, want := range []string{"refused", "mcp/x.toml:3", "git -C " + f.s.repo.Top + " commit"} {
+	for _, want := range []string{"refused", "mcp/x.toml:3", "git -C " + shellQuote(f.s.repo.Top) + " commit"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view lacks %q:\n%s", want, v)
 		}
@@ -509,7 +509,7 @@ func TestCommitAfterAddFailureShowsStagedNote(t *testing.T) {
 	}
 	sh.finish()
 	note := sh.s.note
-	for _, want := range []string{"staged", "git -C " + sh.s.repo.Top + " --literal-pathspecs restore --staged -- mcp/x.toml"} {
+	for _, want := range []string{"staged", "git -C " + shellQuote(sh.s.repo.Top) + " --literal-pathspecs restore --staged -- mcp/x.toml"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note lacks %q: %q", want, note)
 		}
@@ -693,7 +693,7 @@ func TestRenameSourceNowDirectoryNoteShown(t *testing.T) {
 	write(t, home, "skills/old.md/x.md", "# x\n")
 	f := open(t, home)
 	wantView(t, f.s, "old path is now a directory; its removal stays staged",
-		"resolve outside the TUI", "git -C "+f.s.repo.Top+" status")
+		"resolve outside the TUI", "git -C "+shellQuote(f.s.repo.Top)+" status")
 	if strings.Contains(view(f.s), "commit -- skills/old.md") {
 		t.Errorf("suggests committing a path that now matches a directory:\n%s", view(f.s))
 	}
@@ -711,7 +711,7 @@ func TestRenameSourceSensitiveNameNoteShown(t *testing.T) {
 	gittest.Git(t, home, "mv", "skills/k.pem", "skills/k.txt")
 	f := open(t, home)
 	wantView(t, f.s, "old path is a sensitive path; its removal stays staged",
-		"git -C "+f.s.repo.Top+" --literal-pathspecs commit -- skills/k.pem")
+		"git -C "+shellQuote(f.s.repo.Top)+" --literal-pathspecs commit -- skills/k.pem")
 }
 
 // A home laid out like the maintainer's real one (synthetic: no real file
@@ -847,7 +847,7 @@ func TestStoppedCommitOutcomeIsUncertain(t *testing.T) {
 	f.s.Update(ui.RunMsg{Action: d.Action})
 	f.s.Update(ui.RunMsg{Action: d.Then[0], Err: errors.New("timed out after 2m0s")})
 	note := f.s.note
-	for _, want := range []string{"may have been recorded", "git -C " + f.s.repo.Top + " log -1", "status"} {
+	for _, want := range []string{"may have been recorded", "git -C " + shellQuote(f.s.repo.Top) + " log -1", "status"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note lacks %q: %q", want, note)
 		}

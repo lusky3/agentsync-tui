@@ -380,7 +380,7 @@ func TestNotARepoShowsCommandsOnly(t *testing.T) {
 		t.Skipf("the temp dir is inside a git repository (manager %v)", s.repo.Manager)
 	}
 	v := view(s)
-	for _, want := range []string{"not a git repository", "git -C " + home + " init", "git -C " + home + " remote add origin <url>"} {
+	for _, want := range []string{"not a git repository", "git -C " + shellQuote(home) + " init", "git -C " + shellQuote(home) + " remote add origin <url>"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view lacks %q:\n%s", want, v)
 		}
