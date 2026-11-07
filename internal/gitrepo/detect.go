@@ -152,11 +152,15 @@ func resolveHome(home string) (resolvedHome string, missing bool, err error) {
 	return resolvedHome, empty, nil
 }
 
-// emptyDir reports whether dir is a directory with no entries.
+// emptyDir reports whether dir is a directory with no entries. It opens
+// dir with openDir, so a FIFO (or anything else that is not a directory)
+// is refused at once instead of waiting for a writer.
 func emptyDir(dir string) (bool, error) {
-	f, err := os.Open(dir)
-	if err != nil {
+	f, err := openDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
 		return false, err
+	} else if err != nil {
+		return false, fmt.Errorf("the home %s is not a readable directory: %w", dir, err)
 	}
 	defer func() { _ = f.Close() }()
 	if _, err := f.Readdirnames(1); errors.Is(err, io.EOF) {
@@ -363,10 +367,15 @@ var inProgress = []struct{ entry, op string }{
 	{"CHERRY_PICK_HEAD", "cherry-pick"},
 	{"REVERT_HEAD", "revert"},
 	{"BISECT_LOG", "bisect"},
+	// A multi-commit cherry-pick or revert keeps its state here while
+	// commits remain, also after the stopped pick was committed by hand
+	// (CHERRY_PICK_HEAD and REVERT_HEAD are gone by then).
+	{"sequencer", "cherry-pick or revert sequence"},
 }
 
 // InspectGitDir reports whether gitDir holds index.lock and which of a
-// merge, rebase, cherry-pick, revert or bisect is in progress. It only
+// merge, rebase, cherry-pick, revert (or a sequence of them) or bisect is
+// in progress. It only
 // Lstats (a dangling symlink counts) and never removes anything: a lock may
 // be the user's own running git.
 func InspectGitDir(gitDir string) GitDirState {

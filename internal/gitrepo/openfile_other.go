@@ -2,7 +2,10 @@
 
 package gitrepo
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 // openRegularFile opens name for reading and refuses anything that is not
 // a regular file. Lstat and the SameFile check in openRegular guard the
@@ -13,4 +16,17 @@ func openRegularFile(name string) (*os.File, error) {
 		return nil, err
 	}
 	return regularOnly(f)
+}
+
+// openDir opens name for listing once Stat calls it a directory, so a FIFO
+// is never opened.
+func openDir(name string) (*os.File, error) {
+	fi, err := os.Stat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.IsDir() {
+		return nil, errors.New("not a directory")
+	}
+	return os.Open(name)
 }

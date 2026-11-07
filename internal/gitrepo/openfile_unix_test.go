@@ -141,3 +141,32 @@ func TestBackupAuthorBoundedRead(t *testing.T) {
 		}
 	}
 }
+
+// A home that is a FIFO (or a symlink to one) is refused at once: opening
+// it to list entries would wait for a writer forever, outside any bound.
+func TestResolveHomeNeverBlocksOnFIFO(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "home")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(fifo, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{fifo, link} {
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := resolveHome(p)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("%s: a FIFO home was accepted", filepath.Base(p))
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: resolveHome blocked on a FIFO", filepath.Base(p))
+		}
+	}
+}

@@ -428,6 +428,10 @@ func TestInspectLockAndInProgress(t *testing.T) {
 		{"CHERRY_PICK_HEAD", false, GitDirState{InProgress: "cherry-pick"}},
 		{"REVERT_HEAD", false, GitDirState{InProgress: "revert"}},
 		{"BISECT_LOG", false, GitDirState{InProgress: "bisect"}},
+		// A cherry-pick or revert of several commits whose stopped pick
+		// was committed by hand: CHERRY_PICK_HEAD is gone, the sequence
+		// is still in progress.
+		{"sequencer", true, GitDirState{InProgress: "cherry-pick or revert sequence"}},
 	}
 	for _, c := range cases {
 		gd := t.TempDir()
@@ -646,5 +650,36 @@ func TestBackupAuthorThroughSymlink(t *testing.T) {
 	}
 	if got := BackupAuthor(other); got != DefaultBackupAuthor {
 		t.Errorf("outside link: %q", got)
+	}
+}
+
+// With real git: after the first pick of a two-commit cherry-pick stops on
+// a conflict and is resolved by a plain commit, git still has the rest of
+// the sequence to pick, and so does InspectGitDir.
+func TestInspectSequencerAfterManualCommit(t *testing.T) {
+	dir := t.TempDir()
+	gittest.Init(t, dir)
+	gittest.Commit(t, dir, "a", map[string]string{"f": "a\n"})
+	gittest.Git(t, dir, "checkout", "-q", "-b", "side")
+	gittest.Commit(t, dir, "s1", map[string]string{"f": "s1\n"})
+	gittest.Commit(t, dir, "s2", map[string]string{"g": "s2\n"})
+	gittest.Git(t, dir, "checkout", "-q", "main")
+	gittest.Commit(t, dir, "m", map[string]string{"f": "m\n"})
+	pick := exec.Command("git", "-C", dir, "cherry-pick", "side~1", "side")
+	pick.Env = gittest.Env(t)
+	if out, err := pick.CombinedOutput(); err == nil {
+		t.Fatalf("cherry-pick did not stop:\n%s", out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("resolved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Git(t, dir, "add", "--", "f")
+	gittest.Git(t, dir, "commit", "-q", "--message=resolved")
+	gd := filepath.Join(dir, ".git")
+	if _, err := os.Lstat(filepath.Join(gd, "CHERRY_PICK_HEAD")); err == nil {
+		t.Fatal("CHERRY_PICK_HEAD still there")
+	}
+	if got := InspectGitDir(gd).InProgress; got == "" {
+		t.Fatal("sequence in progress not reported")
 	}
 }

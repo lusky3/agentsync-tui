@@ -18,3 +18,9 @@ func openRegularFile(name string) (*os.File, error) {
 	}
 	return regularOnly(f)
 }
+
+// openDir opens name for listing without blocking on a FIFO (O_NONBLOCK),
+// refusing anything that is not a directory (O_DIRECTORY).
+func openDir(name string) (*os.File, error) {
+	return os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
+}
