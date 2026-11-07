@@ -299,8 +299,9 @@ func (s *Screen) commitView() []string {
 		out = append(out, theme.Dim.Render("checking: status, agentsync check, git state, secret scan…"))
 	}
 	for i, l := range c.refusal {
+		l = mask.Sanitize(l)
 		if i == 0 {
-			l = theme.Bad.Render(mask.Sanitize(l))
+			l = theme.Bad.Render(l)
 		}
 		out = append(out, l)
 	}

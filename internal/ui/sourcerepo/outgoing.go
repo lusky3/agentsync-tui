@@ -83,14 +83,15 @@ func outgoingPaths(names string) []string {
 	return out
 }
 
-// outgoingPathRefusal refuses a push whose commits touch a .state/ or
-// sensitive path: the push would publish it whatever the scan finds.
+// outgoingPathRefusal refuses a push whose commits touch a .state/,
+// sensitive or unusual path (a name holding a credential among them, which
+// the line scan never sees): the push would publish it whatever the scan
+// finds.
 func outgoingPathRefusal(r gitrepo.Repo, paths []string) []string {
 	for _, p := range paths {
-		class, _ := gitrepo.Classify(homeRel(r.Pathspec, p), nil, false)
-		if class == gitrepo.StateDir || class == gitrepo.Sensitive {
+		if why := unpushablePath(homeRel(r.Pathspec, p)); why != "" {
 			return []string{
-				refused + "an outgoing commit touches " + gitrepo.DisplayName(p) + " (" + class.String() + " path); a push would publish it",
+				refused + "an outgoing commit touches " + gitrepo.DisplayName(p) + " (" + why + "); a push would publish it",
 				"(deleting such a file counts too: the push publishes the history that held it)",
 				"to inspect the commits" + runOutside,
 				"  " + inspectCommand(r.Top),
@@ -98,6 +99,19 @@ func outgoingPathRefusal(r gitrepo.Repo, paths []string) []string {
 		}
 	}
 	return nil
+}
+
+// unpushablePath is why a home-relative path may not be pushed from the
+// TUI, or "" when it may: its class, or for an unusual name the reason.
+func unpushablePath(rel string) string {
+	class, note := gitrepo.Classify(rel, nil, false)
+	switch class {
+	case gitrepo.StateDir, gitrepo.Sensitive:
+		return class.String() + " path"
+	case gitrepo.Unusual:
+		return strings.TrimSuffix(note, ", not selectable")
+	}
+	return ""
 }
 
 // scanPatch scans the added lines of each file section of patch. A binary

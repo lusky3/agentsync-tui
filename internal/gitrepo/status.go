@@ -123,18 +123,19 @@ func (s Status) Note() string {
 
 // The notes a File can carry.
 const (
-	noteOther       = "not an agentsync file"
-	noteState       = "agentsync state directory: never committed"
-	noteSensitive   = "looks like a secret (private key, age identity or env file): never committed"
-	noteUnreadable  = "could not be read; not selectable"
-	noteVault       = "encrypted vault: commit only if you mean to share the ciphertext"
-	noteUnusual     = "unusual name, not selectable"
-	noteCredName    = "the name looks like a credential, not selectable"
-	noteBadPath     = "git cannot be given this path safely, not selectable"
-	noteSpecial     = "not a regular file, not selectable"
-	noteSymlink     = "symlink: classified by its name only"
-	noteConflict    = "unresolved conflict: resolve it outside the TUI"
-	noteOrigOutside = "the old path is outside the home and is not part of this commit"
+	noteOther            = "not an agentsync file"
+	noteState            = "agentsync state directory: never committed"
+	noteSensitive        = "looks like a secret (private key, age identity or env file): never committed"
+	noteSensitiveDeleted = "looks like a secret (private key, age identity or env file): removing it must be committed outside the TUI"
+	noteUnreadable       = "could not be read; not selectable"
+	noteVault            = "encrypted vault: commit only if you mean to share the ciphertext"
+	noteUnusual          = "unusual name, not selectable"
+	noteCredName         = "the name looks like a credential, not selectable"
+	noteBadPath          = "git cannot be given this path safely, not selectable"
+	noteSpecial          = "not a regular file, not selectable"
+	noteSymlink          = "symlink: classified by its name only"
+	noteConflict         = "unresolved conflict: resolve it outside the TUI"
+	noteOrigOutside      = "the old path is outside the home and is not part of this commit"
 )
 
 // The suffixes DisplayName adds.
@@ -393,8 +394,12 @@ func (p *parser) restrict(f *File, c content) {
 			f.Class, f.Note, f.Selectable = Unusual, note, false
 		}
 	}
-	if c.unreadable && f.Class == Sensitive {
+	switch {
+	case c.unreadable && f.Class == Sensitive:
 		f.Note = noteUnreadable
+	case f.Kind == Deleted && f.Class == Sensitive:
+		// What is refused is committing its removal.
+		f.Note = noteSensitiveDeleted
 	}
 	if c.link {
 		f.Note = joinNote(f.Note, noteSymlink)

@@ -812,3 +812,16 @@ func TestPushPinsTheScannedBranch(t *testing.T) {
 		t.Error("feat's commit reached the remote")
 	}
 }
+
+// A path whose name holds a credential, committed outside the TUI, is
+// refused by name: the line scan never sees file names.
+func TestPushRefusedCredentialNamedPath(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "named", map[string]string{"skills/" + ghpToken + "/x.md": "# x\n"})
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused", "an outgoing commit touches", "the name looks like a credential", "a push would publish it")
+	if strings.Contains(view(f.s), ghpToken) {
+		t.Error("the token in the path is shown")
+	}
+}

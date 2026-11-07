@@ -750,3 +750,19 @@ func pinnedEnv(t *testing.T) []string {
 	const date = "2026-01-01T00:00:00Z"
 	return append(slices.Clone(gittest.Env(t)), "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
 }
+
+// A deleted sensitive file's note says what is refused: committing its
+// removal, not the file itself.
+func TestDeletedSensitiveNoteIsKindAware(t *testing.T) {
+	s := parse(t, recs(headerOID, ordinary(".D", ".env"), ordinary(".M", "key.txt")), atRoot(t))
+	del, mod := get(t, s, ".env"), get(t, s, "key.txt")
+	if del.Class != Sensitive || del.Selectable || del.Default {
+		t.Fatalf("deleted = %+v, want Sensitive, not selectable", del)
+	}
+	if del.Note != noteSensitiveDeleted || strings.Contains(del.Note, "never committed") {
+		t.Fatalf("deleted note = %q, want %q", del.Note, noteSensitiveDeleted)
+	}
+	if mod.Note != noteSensitive {
+		t.Fatalf("modified note = %q, want %q", mod.Note, noteSensitive)
+	}
+}

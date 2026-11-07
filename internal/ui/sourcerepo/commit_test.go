@@ -763,3 +763,17 @@ func TestMaintainerLayoutDefaultSelection(t *testing.T) {
 		t.Errorf("references reported as findings: %+v", f.s.commit.findings)
 	}
 }
+
+// Every refusal line is sanitised, not only the first: a later line can
+// carry a path or git's own words.
+func TestCommitRefusalLinesSanitised(t *testing.T) {
+	f := open(t, newRepo(t))
+	f.s.mode = modeCommit
+	f.s.commit.refusal = []string{"refused \x1b]0;a\x07", "  git -C \x1b]0;evil\x07 log\x1b[2J", "\x1b[31mred\r"}
+	raw := strings.Join(f.s.commitView(), "\n")
+	for _, bad := range []string{"\x07", "\x1b]", "\x1b[2J", "\x1b[31m", "\r"} {
+		if strings.Contains(raw, bad) {
+			t.Errorf("commit view holds %q: %q", bad, raw)
+		}
+	}
+}
