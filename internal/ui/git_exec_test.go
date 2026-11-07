@@ -238,6 +238,46 @@ func TestChainRunsSecondOnlyAfterSuccess(t *testing.T) {
 	}
 }
 
+// R4: the second step starts only after the first has returned. The add
+// is held in flight; the commit must not reach the runner until it is
+// released.
+func TestChainSecondStepWaitsForFirst(t *testing.T) {
+	add, commit := gitAdd(t, "a.txt"), gitCommit(t, "a.txt")
+	addKey := strings.Join(add.Argv, " ")
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	git := runnertest.New()
+	git.Guard = func(argv string) {
+		if argv == addKey {
+			close(started)
+			<-release
+		}
+	}
+	h := start(t, gitDeps(runnertest.New(), git), newScreen("A", "a"))
+	h.tm.Send(DoChain(runner.ScopeUser, add, commit)())
+	h.pressAndWait(key("y"))
+	select {
+	case <-started:
+	case <-time.After(timeout):
+		t.Fatal("the add never started")
+	}
+	time.Sleep(50 * time.Millisecond) // room for a wrongly early commit to start
+	if got := git.Calls(); len(got) != 0 {
+		t.Fatalf("while the add was in flight the runner saw %q; the commit started early", got)
+	}
+	unblock()
+	if first, second := h.waitRunMsg(), h.waitRunMsg(); first.Action.Key() != add.Key() || second.Action.Key() != commit.Key() {
+		t.Errorf("ran %q then %q", first.Action.Title, second.Action.Title)
+	}
+	h.final()
+	want := []string{addKey, strings.Join(commit.Argv, " ")}
+	if got := git.Calls(); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("git calls = %q, want %q", got, want)
+	}
+}
+
 func TestChainStopsOnFailureAndSaysWhatDidNotRun(t *testing.T) {
 	add := gitAdd(t, "a.txt")
 	git := runnertest.New().On(strings.Join(add.Argv, " "), runner.Result{ExitCode: 1, Stderr: "fatal: pathspec"}, nil)
