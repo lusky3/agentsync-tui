@@ -47,7 +47,7 @@ var (
 type GitRepo struct{ Top string }
 
 func (r GitRepo) check() error {
-	if !filepath.IsAbs(r.Top) || filepath.Clean(r.Top) != r.Top || hasControl(r.Top) {
+	if !filepath.IsAbs(r.Top) || filepath.Clean(r.Top) != r.Top || HasControl(r.Top) {
 		return errors.New("invalid git toplevel: not an absolute, clean path")
 	}
 	return nil
@@ -58,9 +58,9 @@ func (r GitRepo) head(words ...string) []string {
 	return append([]string{"-C", r.Top}, words...)
 }
 
-// hasControl reports control (including \n and \t) or format characters,
+// HasControl reports control (including \n and \t) or format characters,
 // or invalid UTF-8.
-func hasControl(s string) bool {
+func HasControl(s string) bool {
 	if !utf8.ValidString(s) || mask.Sanitize(s) != s {
 		return true
 	}
@@ -88,7 +88,7 @@ func ValidGitPath(p string) error {
 		return errors.New("invalid path: empty")
 	case len(p) > maxGitPathBytes:
 		return errors.New("invalid path: too long")
-	case strings.IndexByte(p, 0) >= 0, hasControl(p):
+	case strings.IndexByte(p, 0) >= 0, HasControl(p):
 		return errors.New("invalid path: control or format character, or invalid UTF-8")
 	case !filepath.IsLocal(p):
 		return errors.New("invalid path: not inside the repository")
@@ -96,16 +96,16 @@ func ValidGitPath(p string) error {
 		return errors.New("invalid path: names the whole tree")
 	case strings.HasPrefix(p, ":"):
 		return errors.New("invalid path: pathspec magic")
-	case inStateDir(p):
+	case InStateDir(p):
 		return errors.New("invalid path: inside the state directory")
 	}
 	return nil
 }
 
-// inStateDir reports whether any component of p, split on '/' and '\'
+// InStateDir reports whether any component of p, split on '/' and '\'
 // (git on Windows reads both as separators), is ".state" in any case
 // (macOS and Windows filesystems fold case).
-func inStateDir(p string) bool {
+func InStateDir(p string) bool {
 	return slices.ContainsFunc(strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }), func(c string) bool {
 		return strings.EqualFold(c, ".state")
 	})
@@ -135,7 +135,7 @@ func ValidCommitMessage(m string) error {
 		return errors.New("invalid commit message: invalid UTF-8")
 	case utf8.RuneCountInString(m) > maxCommitRunes:
 		return fmt.Errorf("invalid commit message: over %d characters", maxCommitRunes)
-	case hasControl(m):
+	case HasControl(m):
 		return errors.New("invalid commit message: must be one line without control or format characters")
 	}
 	if kind, ok := mask.Credential(m); ok {
@@ -181,7 +181,7 @@ func ValidBranchName(b string) error {
 		return bad
 	case strings.Contains(b, ".."), strings.Contains(b, "@{"), strings.Contains(b, "//"):
 		return bad
-	case strings.ContainsAny(b, " ~^:?*[\\+\x7f"), hasControl(b):
+	case strings.ContainsAny(b, " ~^:?*[\\+\x7f"), HasControl(b):
 		return bad
 	}
 	for _, c := range strings.Split(b, "/") {
@@ -207,7 +207,7 @@ func ValidCloneURL(u string) error {
 		return bad("empty")
 	case len(u) > maxCloneURL:
 		return bad("too long")
-	case hasControl(u), strings.ContainsFunc(u, unicode.IsSpace):
+	case HasControl(u), strings.ContainsFunc(u, unicode.IsSpace):
 		return bad("whitespace, control or format character")
 	case strings.Contains(u, "::"):
 		return bad(`"<transport>::" URLs are not allowed`)
