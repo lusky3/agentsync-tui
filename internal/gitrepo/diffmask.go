@@ -198,11 +198,11 @@ func plainScalar(t string) bool {
 }
 
 // container reports whether t is one array or inline table: it opens with
-// open, closes with close, and its brackets and quotes balance (topScan).
+// opener, closes with closer, and its brackets and quotes balance (topScan).
 // Unbalanced, half-edited TOML is never walked as a table, so a stray
 // closer cannot end it early and leave a later pair unmasked.
-func container(t string, open, close byte) bool {
-	return len(t) >= 2 && t[0] == open && t[len(t)-1] == close && topScan(t, nil)
+func container(t string, opener, closer byte) bool {
+	return len(t) >= 2 && t[0] == opener && t[len(t)-1] == closer && topScan(t, nil)
 }
 
 // credential reports what mask.Credential finds in s, TOML triple quotes

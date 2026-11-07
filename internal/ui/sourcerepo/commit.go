@@ -165,7 +165,7 @@ func runGuards(ctx context.Context, gen int, in guardInput) guardMsg {
 // is no longer listed, no longer selectable, or changed its kind or rename
 // source (a modified file deleted since, for instance): the user would
 // commit something other than what the list showed.
-func pick(files []gitrepo.File, selected []gitrepo.File) ([]gitrepo.File, bool) {
+func pick(files, selected []gitrepo.File) ([]gitrepo.File, bool) {
 	by := make(map[string]gitrepo.File, len(files))
 	for _, f := range files {
 		by[f.Path] = f
