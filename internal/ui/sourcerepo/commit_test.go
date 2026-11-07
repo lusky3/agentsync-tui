@@ -1,0 +1,535 @@
+package sourcerepo
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/exp/teatest/v2"
+
+	"github.com/lusky3/agentsync-tui/internal/actions"
+	"github.com/lusky3/agentsync-tui/internal/gitrepo/gittest"
+	"github.com/lusky3/agentsync-tui/internal/runner"
+	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
+	"github.com/lusky3/agentsync-tui/internal/ui"
+)
+
+const commitMsg = "chore: update config"
+
+func logCount(t *testing.T, dir string) int {
+	t.Helper()
+	return strings.Count(gittest.Git(t, dir, "log", "--format=%H"), "\n")
+}
+
+// commit presses c, types the message and enter, and returns what the
+// screen emitted.
+func commit(s *Screen, msg string) []tea.Msg {
+	press(s, "c")
+	typeText(s, msg)
+	return press(s, "enter")
+}
+
+func onlyDo(t *testing.T, out []tea.Msg) ui.DoMsg {
+	t.Helper()
+	if len(out) != 1 {
+		t.Fatalf("emitted %d messages, want one DoMsg: %v", len(out), out)
+	}
+	d, ok := out[0].(ui.DoMsg)
+	if !ok {
+		t.Fatalf("emitted %T", out[0])
+	}
+	return d
+}
+
+func mustAct(a actions.Action, err error) actions.Action {
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
+// wantChain asserts the DoMsg is GitAdd(add) then GitCommit(commit).
+func wantChain(t *testing.T, s *Screen, d ui.DoMsg, add, commit []string) {
+	t.Helper()
+	r := actions.GitRepo{Top: s.repo.Top}
+	wa := mustAct(actions.GitAdd(r, add))
+	wc := mustAct(actions.GitCommit(r, commitMsg, commit))
+	if !slices.Equal(d.Action.Argv, wa.Argv) {
+		t.Errorf("add argv\n got %q\nwant %q", d.Action.Argv, wa.Argv)
+	}
+	if len(d.Then) != 1 || !slices.Equal(d.Then[0].Argv, wc.Argv) {
+		t.Fatalf("commit step %+v, want %q", d.Then, wc.Argv)
+	}
+	if d.Scope != runner.ScopeUser {
+		t.Errorf("scope %q", d.Scope)
+	}
+}
+
+// argvPaths is the paths after "--".
+func argvPaths(argv []string) []string {
+	i := slices.Index(argv, "--")
+	if i < 0 {
+		return nil
+	}
+	return argv[i+1:]
+}
+
+func TestCommitEmitsChainWithExplicitPaths(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	write(t, home, "-rf", "not a flag\n")
+	f := open(t, home)
+	selectRow(t, f.s, "-rf")
+	d := onlyDo(t, commit(f.s, commitMsg))
+	want := []string{tomlX, "-rf"} // status order: tracked changes, then untracked
+	wantChain(t, f.s, d, want, want)
+	for _, argv := range [][]string{d.Action.Argv, d.Then[0].Argv} {
+		dash, rf := slices.Index(argv, "--"), slices.Index(argv, "-rf")
+		if dash < 0 || rf < dash {
+			t.Errorf("-rf before --: %q", argv)
+		}
+	}
+	if d.Then[0].TypedConfirm {
+		t.Error("a clean commit needs no typed confirmation")
+	}
+	if f.s.CapturesKeys() {
+		t.Error("the screen still captures keys after emitting")
+	}
+}
+
+func TestCommitIncludesInHomeRenameBothSides(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "skill", map[string]string{"skills/old/SKILL.md": "# s\n"})
+	gittest.Git(t, home, "mv", "skills/old/SKILL.md", "skills/new.md")
+	f := open(t, home)
+	d := onlyDo(t, commit(f.s, commitMsg))
+	// The old path is gone from the index and the worktree: git add would
+	// refuse it, git commit -- <old> records its removal.
+	wantChain(t, f.s, d, []string{"skills/new.md"}, []string{"skills/new.md", "skills/old/SKILL.md"})
+}
+
+func TestCommitMessageRefusalShownInline(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	out := commit(f.s, "add "+ghpToken)
+	if len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	v := view(f.s)
+	if !strings.Contains(v, "reword the message") || !strings.Contains(v, "credential") || strings.Contains(v, ghpToken) {
+		t.Errorf("view:\n%s", v)
+	}
+	if !f.s.CapturesKeys() {
+		t.Error("the field lost focus")
+	}
+	press(f.s, "esc")
+	if f.s.CapturesKeys() || f.s.mode != modeList {
+		t.Error("esc did not leave the field")
+	}
+}
+
+func TestCommitRefusedWhenCheckFails(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	f.agent.On("check", runner.Result{ExitCode: 1, Stderr: "mcp/x.toml: bad server\n"}, nil)
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if v := view(f.s); !strings.Contains(v, "agentsync check exited 1") {
+		t.Errorf("view:\n%s", v)
+	}
+	if got := f.agent.Calls(); !slices.Contains(got, "check") {
+		t.Errorf("agentsync calls %v", got)
+	}
+}
+
+func TestCommitRefusedOnHardFinding(t *testing.T) {
+	home := newRepo(t)
+	// What `mcp add --env API_KEY=ghp_…` would have written, by hand.
+	write(t, home, tomlX, baseTOML+"env = { API_KEY = \""+ghpToken+"\" }\n")
+	f := open(t, home)
+	before := logCount(t, home)
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if logCount(t, home) != before {
+		t.Error("a commit was made")
+	}
+	v := view(f.s)
+	for _, want := range []string{"refused", "mcp/x.toml:3", "git -C " + f.s.repo.Top + " commit"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view lacks %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, ghpToken) {
+		t.Error("the token is shown")
+	}
+}
+
+func TestSoftFindingNeedsTypedCommit(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, skillA, "# a\n\nThe id is "+opaqueWord+".\n")
+	f := open(t, home)
+	d := onlyDo(t, commit(f.s, commitMsg))
+	wantChain(t, f.s, d, []string{skillA}, []string{skillA})
+	c := d.Then[0]
+	if !c.TypedConfirm || !strings.Contains(c.Warning, "1 possible secret listed on the Source repo tab; type commit to proceed") {
+		t.Errorf("commit step: typed=%v warning=%q", c.TypedConfirm, c.Warning)
+	}
+	if c.ConfirmVerb() != "commit" {
+		t.Errorf("verb %q", c.ConfirmVerb())
+	}
+	if v := view(f.s); !strings.Contains(v, skillA+":3") || strings.Contains(v, opaqueWord) {
+		t.Errorf("findings not listed masked:\n%s", v)
+	}
+}
+
+func TestTrackedBinaryChangeNeedsTypedCommit(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "bin", map[string]string{"skills/b/data.bin": "a\x00b\n"})
+	write(t, home, "skills/b/data.bin", "c\x00d\n")
+	f := open(t, home)
+	d := onlyDo(t, commit(f.s, commitMsg))
+	if !d.Then[0].TypedConfirm {
+		t.Error("an unscanned binary change was not soft")
+	}
+	if v := view(f.s); !strings.Contains(v, "not scanned: binary") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+func TestTruncatedPatchNeedsTypedCommit(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	f.git.override = func(args []string) (runner.Result, bool) {
+		if gitCmd(args) != "diff" {
+			return runner.Result{}, false
+		}
+		return runner.Result{Stdout: "diff --git a/mcp/x.toml b/mcp/x.toml\n@@ -2,0 +3 @@\n+args = []\n" + runner.TruncatedMark}, true
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	if !d.Then[0].TypedConfirm {
+		t.Error("a truncated patch was not soft")
+	}
+	if v := view(f.s); !strings.Contains(v, "not scanned: patch over 4 MiB") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+func TestCommitRefusedWhenIndexLockPresent(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	lock := filepath.Join(home, ".git", "index.lock")
+	write(t, filepath.Dir(lock), "index.lock", "")
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if v := view(f.s); !strings.Contains(v, "index.lock") {
+		t.Errorf("view:\n%s", v)
+	}
+	if _, err := os.Lstat(lock); err != nil {
+		t.Errorf("the lock is gone: %v", err)
+	}
+}
+
+func TestCommitRefusedDuringMerge(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	head := strings.TrimSpace(gittest.Git(t, home, "rev-parse", "HEAD"))
+	write(t, filepath.Join(home, ".git"), "MERGE_HEAD", head+"\n")
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if v := view(f.s); !strings.Contains(v, "a merge is in progress") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+func TestCommitRefusedDetached(t *testing.T) {
+	home := newRepo(t)
+	gittest.Git(t, home, "checkout", "-q", "--detach")
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if v := view(f.s); !strings.Contains(v, "HEAD is detached") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+func TestCommitRefusedForBackupRepo(t *testing.T) {
+	home := newRepo(t)
+	gittest.Git(t, home, "config", "agentsync.managed", "true")
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	for _, k := range []string{"space", "a", "c"} {
+		if out := press(f.s, k); len(out) != 0 {
+			t.Fatalf("%s emitted %v", k, out)
+		}
+	}
+	if f.s.mode == modeCommit || f.s.CapturesKeys() {
+		t.Error("c opened the message field")
+	}
+	if v := view(f.s); !strings.Contains(v, "local-only destination history") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+func TestStateFileNeverInArgv(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "state", map[string]string{"skills/.state/b.json": "{}\n", skillA: "# a\n"})
+	write(t, home, "skills/.state/b.json", "{\"k\":1}\n")
+	write(t, home, skillA, "# a2\n")
+	f := open(t, home)
+	if rowOf(f.s, "skills/.state/b.json") < 0 {
+		t.Fatalf("state file not listed: %v", paths(f.s))
+	}
+	selectRow(t, f.s, "skills/.state/b.json")
+	if f.s.sel["skills/.state/b.json"] {
+		t.Error("space selected the state file")
+	}
+	press(f.s, "a")
+	if len(f.s.selectedPaths()) == 0 {
+		press(f.s, "a")
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	wantChain(t, f.s, d, []string{skillA}, []string{skillA})
+	for _, step := range append([]actions.Action{d.Action}, d.Then...) {
+		for _, a := range step.Argv {
+			if strings.Contains(a, ".state") {
+				t.Errorf("argv holds %q", a)
+			}
+		}
+	}
+}
+
+func TestSelectionIsFilesNeverDirectories(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "state", map[string]string{"skills/x/.state/k": "1\n", "skills/x/SKILL.md": "# x\n"})
+	write(t, home, "skills/x/.state/k", "2\n")
+	write(t, home, "skills/x/SKILL.md", "# x2\n")
+	write(t, home, "skills/y/SKILL.md", "# y\n")
+	f := open(t, home)
+	press(f.s, "a")
+	if len(f.s.selectedPaths()) == 0 {
+		press(f.s, "a")
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	records := map[string]bool{}
+	for _, fl := range f.s.status.Files {
+		records[fl.Path] = true
+	}
+	for _, step := range append([]actions.Action{d.Action}, d.Then...) {
+		for _, p := range argvPaths(step.Argv) {
+			fi, err := os.Lstat(filepath.Join(home, p))
+			if !records[p] || (err == nil && fi.IsDir()) || strings.HasSuffix(p, "/") {
+				t.Errorf("argv path %q is not a file record", p)
+			}
+		}
+	}
+}
+
+func TestChangedSinceListedRefreshes(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	write(t, home, skillA, "# a\n")
+	f := open(t, home)
+	if err := os.Remove(filepath.Join(home, filepath.FromSlash(skillA))); err != nil {
+		t.Fatal(err)
+	}
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	if v := view(f.s); !strings.Contains(v, "changed since listed: refreshed") {
+		t.Errorf("view:\n%s", v)
+	}
+	if rowOf(f.s, skillA) >= 0 || f.s.mode != modeList {
+		t.Errorf("not refreshed: %v mode %v", paths(f.s), f.s.mode)
+	}
+}
+
+func TestHomeBelowRootPathspecOnly(t *testing.T) {
+	gittest.Need(t)
+	top := filepath.Join(t.TempDir(), "dots")
+	gittest.Init(t, top)
+	gittest.Commit(t, top, "init", map[string]string{"README.md": "r\n", "agentsync/agentsync.toml": "# a\n"})
+	write(t, top, "README.md", "dirty\n")
+	write(t, top, "agentsync/mcp/x.toml", baseTOML)
+	f := open(t, filepath.Join(top, "agentsync"))
+	if got := paths(f.s); !slices.Equal(got, []string{"agentsync/mcp/x.toml"}) {
+		t.Fatalf("listed %v", got)
+	}
+	if v := view(f.s); strings.Contains(v, "README") {
+		t.Errorf("outside file shown:\n%s", v)
+	}
+	press(f.s, "a")
+	if len(f.s.selectedPaths()) == 0 {
+		press(f.s, "a")
+	}
+	d := onlyDo(t, commit(f.s, commitMsg))
+	wantChain(t, f.s, d, []string{"agentsync/mcp/x.toml"}, []string{"agentsync/mcp/x.toml"})
+}
+
+// --- through the real shell ---
+
+// probe wraps the shell and reports every message it processed.
+type probe struct {
+	*ui.App
+	seen chan tea.Msg
+}
+
+func (p probe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	_, cmd := p.App.Update(msg)
+	select {
+	case p.seen <- msg:
+	default:
+	}
+	return p, cmd
+}
+
+type shell struct {
+	t  *testing.T
+	tm *teatest.TestModel
+	p  probe
+	s  *Screen
+}
+
+func startShell(t *testing.T, home, logPath string) *shell {
+	t.Helper()
+	d := deps(home, runnertest.New(), gittest.NewGit(t), nil)
+	d.LogPath = logPath
+	s := New(d)
+	sh := &shell{t: t, s: s, p: probe{App: ui.NewApp(d, s), seen: make(chan tea.Msg, 4096)}}
+	sh.tm = teatest.NewTestModel(t, sh.p, teatest.WithInitialTermSize(160, 60))
+	sh.wait("load", func(m tea.Msg) bool { _, ok := m.(loadMsg); return ok })
+	return sh
+}
+
+func (sh *shell) wait(what string, match func(tea.Msg) bool) tea.Msg {
+	sh.t.Helper()
+	deadline := time.After(20 * time.Second)
+	for {
+		select {
+		case m := <-sh.p.seen:
+			if match(m) {
+				return m
+			}
+		case <-deadline:
+			sh.t.Fatalf("timed out waiting for %s", what)
+			return nil
+		}
+	}
+}
+
+func (sh *shell) keys(ks ...string) {
+	for _, k := range ks {
+		sh.tm.Send(key(k))
+	}
+}
+
+// commitThrough commits the default selection through the modal and
+// returns the commit step's RunMsg.
+func (sh *shell) commitThrough() ui.RunMsg {
+	sh.t.Helper()
+	sh.keys("c")
+	sh.tm.Type(commitMsg)
+	sh.keys("enter")
+	sh.wait("guard", func(m tea.Msg) bool { _, ok := m.(guardMsg); return ok })
+	sh.wait("DoMsg", func(m tea.Msg) bool { _, ok := m.(ui.DoMsg); return ok })
+	sh.keys("y")
+	m := sh.wait("commit RunMsg", func(m tea.Msg) bool {
+		r, ok := m.(ui.RunMsg)
+		return ok && gitCmd(r.Action.Argv) == "commit"
+	})
+	return m.(ui.RunMsg)
+}
+
+func (sh *shell) finish() {
+	sh.t.Helper()
+	_ = sh.tm.Quit()
+	sh.tm.FinalModel(sh.t, teatest.WithFinalTimeout(20*time.Second))
+}
+
+func TestActivityLogHasNoDiffContent(t *testing.T) {
+	home := newRepo(t)
+	const content = "CONTENT_LINE_never_logged"
+	write(t, home, tomlX, baseTOML+"# "+content+"\n")
+	logPath := filepath.Join(t.TempDir(), "activity.log")
+	sh := startShell(t, home, logPath)
+	if r := sh.commitThrough(); r.Err != nil || r.Result.ExitCode != 0 {
+		t.Fatalf("commit failed: %+v", r)
+	}
+	sh.finish()
+	if !strings.Contains(sh.s.note, "committed: "+commitMsg) {
+		t.Errorf("note %q", sh.s.note)
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(b)
+	if !strings.Contains(log, "commit '--message="+commitMsg+"' -- mcp/x.toml") {
+		t.Errorf("log lacks the masked commit line:\n%s", log)
+	}
+	if strings.Contains(log, content) || strings.Contains(log, "[servers.x]") {
+		t.Errorf("log holds file content:\n%s", log)
+	}
+	if logCount(t, home) != 2 {
+		t.Error("nothing was committed")
+	}
+}
+
+func TestCommitAfterAddFailureShowsStagedNote(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	write(t, filepath.Join(home, ".git", "hooks"), "pre-commit", "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(filepath.Join(home, ".git", "hooks", "pre-commit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sh := startShell(t, home, "")
+	r := sh.commitThrough()
+	if r.Result.ExitCode == 0 {
+		t.Fatal("the hook did not reject the commit")
+	}
+	sh.finish()
+	note := sh.s.note
+	for _, want := range []string{"staged", "git -C " + sh.s.repo.Top + " restore --staged -- mcp/x.toml"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note lacks %q: %q", want, note)
+		}
+	}
+	if staged := gittest.Git(t, home, "diff", "--cached", "--name-only"); staged != tomlX+"\n" {
+		t.Errorf("staged %q", staged)
+	}
+}
+
+func TestCommitOutcomeMatchedOnCommitKey(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"args = []\n")
+	f := open(t, home)
+	d := onlyDo(t, commit(f.s, commitMsg))
+	f.s.Update(ui.RunMsg{Action: d.Action})
+	if strings.Contains(f.s.note, "committed") {
+		t.Fatalf("the add's RunMsg was taken for the commit: %q", f.s.note)
+	}
+	f.s.Update(ui.RunMsg{Action: d.Then[0], Result: runner.Result{ExitCode: 1, Stderr: "hook said " + ghpToken}})
+	if !strings.Contains(f.s.note, "restore --staged") || strings.Contains(f.s.note, "ghp_") {
+		t.Errorf("note %q", f.s.note)
+	}
+	// An add that failed stops the chain: nothing is staged.
+	d = onlyDo(t, commit(f.s, commitMsg))
+	f.s.Update(ui.RunMsg{Action: d.Action, Result: runner.Result{ExitCode: 128}})
+	if strings.Contains(f.s.note, "restore") || !strings.Contains(f.s.note, "nothing was committed") {
+		t.Errorf("note after add failure %q", f.s.note)
+	}
+}
