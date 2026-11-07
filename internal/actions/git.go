@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -71,8 +72,13 @@ func hasControl(s string) bool {
 
 // ValidGitPath reports whether p may be passed to git as a path: non-empty,
 // at most 4096 bytes, local (relative, no ".." escape, not the whole tree),
-// valid UTF-8 and free of control and format characters. Glob characters
-// are allowed: the runner's --literal-pathspecs makes them match literally.
+// valid UTF-8 and free of control and format characters. It refuses any
+// path with a "/"-separated component equal to ".state" (the ignored state
+// directory holds pre-apply backups with live secrets; D11) and any path
+// starting with ":" (git pathspec magic: --literal-pathspecs only applies
+// when the Action runs through runner.NewGit, so Argv must not rely on it).
+// Glob characters are allowed: the runner's --literal-pathspecs makes them
+// match literally.
 func ValidGitPath(p string) error {
 	switch {
 	case p == "":
@@ -85,6 +91,10 @@ func ValidGitPath(p string) error {
 		return errors.New("invalid path: not inside the repository")
 	case filepath.Clean(p) == ".":
 		return errors.New("invalid path: names the whole tree")
+	case strings.HasPrefix(p, ":"):
+		return errors.New("invalid path: pathspec magic")
+	case slices.Contains(strings.Split(p, "/"), ".state"):
+		return errors.New("invalid path: inside the state directory")
 	}
 	return nil
 }

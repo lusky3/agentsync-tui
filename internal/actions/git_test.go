@@ -111,7 +111,8 @@ func TestCommitMessageIsTrimmed(t *testing.T) {
 }
 
 func TestGitPathRefusals(t *testing.T) {
-	for _, p := range []string{"../x", "/abs", "a/../../b", "a\nb", "a\tb", "\xff", "a\u202eb", "a\u200bb", "", "a\x00b", ".", "a/..", strings.Repeat("a", 4097)} {
+	for _, p := range []string{"../x", "/abs", "a/../../b", "a\nb", "a\tb", "\xff", "a\u202eb", "a\u200bb", "", "a\x00b", ".", "a/..", strings.Repeat("a", 4097),
+		".state", ".state/backup/x", ".agentsync/.state/x", "a/.state", "./.state/x", ":(glob)x", ":/x", ":!x", ":"} {
 		if err := ValidGitPath(p); err == nil {
 			t.Errorf("ValidGitPath(%q) accepted", p)
 		}
@@ -361,6 +362,21 @@ func TestGitBuildersNeverEmitForbidden(t *testing.T) {
 		"--mirror", "--tags", "--delete", "-d", "--upload-pack=x", "--receive-pack=x", "--exec=x",
 		"-rf", "--output=/tmp/x", "origin", "x --no-verify", "a b", "ext::sh -c x", "-uX",
 	}
+	// Paths no path-taking builder may accept: the ignored .state/ (pre-apply
+	// backups holding live secrets) at any depth, and git pathspec magic.
+	refusedPaths := []string{".state/backup/x", ".agentsync/.state/x", ":(glob)x", ":(top)a", ":!x"}
+	for _, p := range refusedPaths {
+		for name, b := range map[string]func() (Action, error){
+			"GitAdd":       func() (Action, error) { return GitAdd(testRepo, []string{p}) },
+			"GitAdd mixed": func() (Action, error) { return GitAdd(testRepo, []string{"ok", p}) },
+			"GitCommit":    func() (Action, error) { return GitCommit(testRepo, "m", []string{p}) },
+		} {
+			if a, err := b(); err == nil {
+				t.Errorf("%s accepted %q: %q", name, p, a.Argv)
+			}
+		}
+	}
+	hostile = append(hostile, refusedPaths...)
 	allowed := []string{"add", "commit", "fetch", "pull", "push"}
 	var built []Action
 	for _, h := range hostile {
