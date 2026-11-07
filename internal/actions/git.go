@@ -362,13 +362,16 @@ func GitPull(r GitRepo) (Action, error) {
 	return a, nil
 }
 
-// GitPush builds `-C <top> push --no-follow-tags <remote>
-// refs/heads/<branch>:refs/heads/<branch>` (D6): one explicit, non-forced,
-// single-branch refspec. An explicit refspec overrides the repository's
-// remote.<remote>.push refspecs (which take precedence over push.default
-// and can force every branch) and push.default itself; --no-follow-tags
-// overrides push.followTags. A non-fast-forward is rejected by git, never
-// forced. remote.<remote>.mirror makes git refuse the push outright.
+// GitPush builds `-C <top> push --no-follow-tags --no-recurse-submodules
+// <remote> refs/heads/<branch>:refs/heads/<branch>` (D6): one explicit,
+// non-forced, single-branch refspec. An explicit refspec overrides the
+// repository's remote.<remote>.push refspecs (which take precedence over
+// push.default and can force every branch) and push.default itself;
+// --no-follow-tags overrides push.followTags, and --no-recurse-submodules
+// overrides push.recurseSubmodules (on-demand would push submodule commits
+// to other repositories, check would gate on them). A non-fast-forward is
+// rejected by git, never forced. remote.<remote>.mirror makes git refuse
+// the push outright.
 func GitPush(r GitRepo, remote, branch string) (Action, error) {
 	if err := r.check(); err != nil {
 		return Action{}, err
@@ -380,7 +383,7 @@ func GitPush(r GitRepo, remote, branch string) (Action, error) {
 		return Action{}, err
 	}
 	ref := "refs/heads/" + branch
-	a := gitAction("Push", r.head("push", "--no-follow-tags", remote, ref+":"+ref))
+	a := gitAction("Push", r.head("push", "--no-follow-tags", "--no-recurse-submodules", remote, ref+":"+ref))
 	a.Network = true
 	return a, nil
 }

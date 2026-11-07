@@ -214,3 +214,52 @@ func TestGitPushToMirrorRemoteChangesNothing(t *testing.T) {
 		t.Errorf("a mirror remote's refs changed:\n%s", out)
 	}
 }
+
+// push.recurseSubmodules=on-demand would make a push also push a
+// submodule's commits to the submodule's own remote, and =check would gate
+// the push on other repositories. --no-recurse-submodules keeps GitPush to
+// the one branch of the one repository: the superproject's main moves and
+// the submodule's remote is untouched.
+func TestGitPushNeverRecursesIntoSubmodules(t *testing.T) {
+	for _, mode := range []string{"on-demand", "check"} {
+		t.Run(mode, func(t *testing.T) {
+			g := newHermeticGit(t)
+			g.must("", "config", "--global", "protocol.file.allow", "always") // local submodule URL
+			g.must("", "config", "--global", "user.name", "t")
+			g.must("", "config", "--global", "user.email", "t@example.invalid")
+			dir := t.TempDir()
+			subRemote, superRemote := filepath.Join(dir, "sub.git"), filepath.Join(dir, "super.git")
+			work := filepath.Join(dir, "work")
+			g.must("", "init", "-q", "--bare", "-b", "main", subRemote)
+			g.must("", "init", "-q", "--bare", "-b", "main", superRemote)
+			seed := filepath.Join(dir, "seed")
+			g.must("", "init", "-q", "-b", "main", seed)
+			g.commit(seed, "s", "1")
+			g.must(seed, "push", "-q", subRemote, "main")
+			g.must("", "init", "-q", "-b", "main", work)
+			g.must(work, "submodule", "add", "-q", subRemote, "sub")
+			g.must(work, "commit", "-q", "-m", "add sub")
+			g.must(work, "remote", "add", "origin", superRemote)
+			g.must(work, "push", "-q", "origin", "main")
+			g.commit(filepath.Join(work, "sub"), "s", "2") // unpushed submodule commit
+			g.must(work, "add", "sub")
+			g.must(work, "commit", "-q", "-m", "bump sub")
+			g.must(work, "config", "push.recurseSubmodules", mode)
+			subBefore := g.must("", "--git-dir="+subRemote, "rev-parse", "main")
+			top, err := filepath.EvalSymlinks(work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := mustAction(t)(GitPush(GitRepo{Top: top}, "origin", "main"))
+			if out, err := g.run("", a.Argv...); err != nil {
+				t.Fatalf("push: %v\n%s", err, out)
+			}
+			if got := g.must("", "--git-dir="+subRemote, "rev-parse", "main"); got != subBefore {
+				t.Errorf("the submodule's remote moved from %s to %s", subBefore, got)
+			}
+			if got, want := g.must("", "--git-dir="+superRemote, "rev-parse", "main"), g.must(work, "rev-parse", "main"); got != want {
+				t.Errorf("superproject remote main = %s, want %s", got, want)
+			}
+		})
+	}
+}
