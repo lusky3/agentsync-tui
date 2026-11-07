@@ -385,12 +385,18 @@ func exists(p string) bool {
 	return err == nil
 }
 
+// maxConfigBytes caps BackupAuthor's read of agentsync.toml.
+const maxConfigBytes = 1 << 20
+
 // BackupAuthor is the email agentsync's destination backups commit as:
 // [destination_directory_git_backup].author_email in <home>/agentsync.toml,
-// or DefaultBackupAuthor when that is unset, empty or unreadable.
+// or DefaultBackupAuthor when that is unset, empty or unreadable. The file
+// is read with ReadRegular (no symlink, never blocking on a FIFO) and at
+// most maxConfigBytes; a longer one is unreadable too. The default is the
+// fail-safe answer: Detect's marker rule still applies.
 func BackupAuthor(home string) string {
-	b, err := os.ReadFile(filepath.Join(home, "agentsync.toml"))
-	if err != nil {
+	b, err := ReadRegular(filepath.Join(home, "agentsync.toml"), maxConfigBytes+1)
+	if err != nil || len(b) > maxConfigBytes {
 		return DefaultBackupAuthor
 	}
 	var cfg struct {

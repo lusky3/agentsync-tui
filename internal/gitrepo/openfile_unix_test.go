@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -102,5 +103,41 @@ func readRefusedPromptly(t *testing.T, p string) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("%s: read blocked", filepath.Base(p))
+	}
+}
+
+// BackupAuthor never blocks on agentsync.toml as a FIFO or a symlink to
+// one; both, like an oversize file, give the default author.
+func TestBackupAuthorBoundedRead(t *testing.T) {
+	cases := map[string]func(home string) error{
+		"fifo": func(home string) error { return syscall.Mkfifo(filepath.Join(home, tomlName), 0o600) },
+		"symlink to fifo": func(home string) error {
+			fifo := filepath.Join(home, "fifo")
+			if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+				return err
+			}
+			return os.Symlink(fifo, filepath.Join(home, tomlName))
+		},
+		"oversize": func(home string) error {
+			body := "[destination_directory_git_backup]\nauthor_email = \"big@example.invalid\"\n" +
+				"# " + strings.Repeat("x", maxConfigBytes) + "\n"
+			return os.WriteFile(filepath.Join(home, tomlName), []byte(body), 0o600)
+		},
+	}
+	for name, mk := range cases {
+		home := t.TempDir()
+		if err := mk(home); err != nil {
+			t.Skipf("%s: %v", name, err)
+		}
+		done := make(chan string, 1)
+		go func() { done <- BackupAuthor(home) }()
+		select {
+		case got := <-done:
+			if got != DefaultBackupAuthor {
+				t.Errorf("%s: %q, want the default", name, got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: BackupAuthor blocked", name)
+		}
 	}
 }
