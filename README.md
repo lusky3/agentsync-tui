@@ -105,9 +105,13 @@ own process group behind the TUI, its children get `GIT_TERMINAL_PROMPT=0`
 and `SSH_ASKPASS_REQUIRE=never` (and no `GIT_ASKPASS`), so a git clone that
 would ask for credentials on the terminal fails with an error instead of
 hanging the run. The git and chezmoi commands the Source repo tab runs go
-further: each runs in its own session, with no controlling terminal, so ssh,
+further: on Linux and macOS (the release platforms, and any other Unix
+build) each runs in its own session, with no controlling terminal, so ssh,
 a credential helper, gpg's pinentry or a hook that wants to prompt fails at
-once instead of stopping behind the TUI's screen. `fetch`, `pull` and `push`
+once instead of stopping behind the TUI's screen. A build for another
+platform (Windows, built from source) has no sessions or process groups:
+git may inherit the console, so a hook or helper can still prompt there,
+and cancelling a command ends git itself but not the helpers it started. `fetch`, `pull` and `push`
 also get `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` unless you set
 `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` yourself, in which case
 yours is used. Variables that would point git at another repository
