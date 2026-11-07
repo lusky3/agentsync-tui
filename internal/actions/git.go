@@ -422,7 +422,8 @@ func InitFromURL(u string) (Action, error) {
 // cloneURLDisplay is a valid clone URL masked for display, an ssh:// user
 // name kept visible: ValidCloneURL allows a user name but no password
 // there, and a plain name (git, deploy.bot) is not a secret. A user name
-// mask.Text would change (a token shape) stays masked, as does anything
+// mask.Text would change or that is token-shaped (mask.TokenShaped, which
+// also reads shapes mask.Text leaves alone) stays masked, as does anything
 // else mask.Text masks. The scp form user@host:path has no userinfo for
 // mask.Text to mask.
 func cloneURLDisplay(u string) string {
@@ -433,7 +434,7 @@ func cloneURLDisplay(u string) string {
 	}
 	user, _, hasUser := strings.Cut(rest, "@")
 	hidden := sshScheme + mask.Mask + "@"
-	if !hasUser || !urlUserRe.MatchString(user) || mask.Text(user) != user || !strings.HasPrefix(masked, hidden) {
+	if !hasUser || !urlUserRe.MatchString(user) || mask.Text(user) != user || mask.TokenShaped(user) || !strings.HasPrefix(masked, hidden) {
 		return masked
 	}
 	return sshScheme + user + "@" + masked[len(hidden):]

@@ -51,7 +51,9 @@ type Action struct {
 	// generic mask.Args heuristics over Argv.
 	display []string
 	// premasked marks display as already masked by its builder: Display
-	// only sanitises it rather than running mask.Text over it again.
+	// only sanitises it rather than running mask.Text over it again. It is
+	// set only by builders whose display copy is produced entirely by mask
+	// functions.
 	premasked bool
 	// more, when positive, is the number of trailing argv elements display
 	// leaves out; Display ends with "… (+more more)".

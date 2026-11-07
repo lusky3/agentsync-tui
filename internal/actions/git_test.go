@@ -534,8 +534,11 @@ func TestInitFromURLDisplayKeepsPlainUser(t *testing.T) {
 			t.Errorf("Display(%q) = %q, want %q", u, got, want)
 		}
 	}
-	// A user name that is a token shape stays masked.
-	if got := mustAction(t)(InitFromURL("ssh://ghp_abcdefghijkl@h/o/r")).Display(); strings.Contains(got, "ghp_") {
-		t.Errorf("token-shaped user shown: %q", got)
+	// A user name that is a token shape stays masked, whether or not
+	// mask.Text knows its shape.
+	for _, user := range []string{"ghp_abcdefghijkl", "AbCdEf0123456789XyZ", "glpat-abcdefghij0123456789"} {
+		if got := mustAction(t)(InitFromURL("ssh://" + user + "@h/o/r")).Display(); strings.Contains(got, user) {
+			t.Errorf("token-shaped user shown: %q", got)
+		}
 	}
 }
