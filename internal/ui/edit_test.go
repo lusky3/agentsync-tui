@@ -329,3 +329,120 @@ func TestEditDoneMarksOtherScreensStale(t *testing.T) {
 		t.Error("B still stale after being shown")
 	}
 }
+
+// symHome builds <tmp>/real holding mcp/srv.toml and <tmp>/link -> real, the
+// shape of a home that is itself a symlink (~/.agentsync -> ~/git/agent-config).
+func symHome(t *testing.T) (tmp, link, real string) {
+	t.Helper()
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real = filepath.Join(tmp, "real")
+	link = filepath.Join(tmp, "link")
+	if err := os.MkdirAll(filepath.Join(real, "mcp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "mcp", "srv.toml"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	return tmp, link, real
+}
+
+// argvEditor records its last argument in the returned file, then exits 0.
+func argvEditor(t *testing.T) (script, rec string) {
+	t.Helper()
+	dir := t.TempDir()
+	rec = filepath.Join(dir, "argv")
+	script = filepath.Join(dir, "argv-editor")
+	body := "#!/bin/sh\nfor last; do :; done\nprintf '%s' \"$last\" > '" + rec + "'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, rec
+}
+
+// editAccepted sends EditFileMsg{Path: p} for a home of link and asserts the
+// editor ran on want with no refusal.
+func editAccepted(t *testing.T, link, p, want string) {
+	t.Helper()
+	ed, rec := argvEditor(t)
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", ed)
+	d := baseDeps(newFakeRunner())
+	d.AgentsyncHome = link
+	h := start(t, d, newScreen("A", "a"))
+	h.tm.Send(EditFileMsg{Path: p})
+	h.waitMsg("editDoneMsg", isEditDone)
+	app := h.final()
+	if strings.Contains(app.status, "refused") {
+		t.Errorf("status %q", app.status)
+	}
+	got, err := os.ReadFile(rec)
+	if err != nil || string(got) != want {
+		t.Errorf("editor argv path = %q (%v), want %q", got, err, want)
+	}
+}
+
+func TestEditFileAcceptsFileUnderSymlinkedHome(t *testing.T) {
+	_, link, real := symHome(t)
+	editAccepted(t, link, filepath.Join(link, "mcp", "srv.toml"), filepath.Join(real, "mcp", "srv.toml"))
+}
+
+func TestEditFileAcceptsResolvedPathUnderSymlinkedHome(t *testing.T) {
+	_, link, real := symHome(t)
+	p := filepath.Join(real, "mcp", "srv.toml")
+	editAccepted(t, link, p, p)
+}
+
+// refusedUnderSymlinkedHome asserts p is refused for a home of link and the
+// editor never starts.
+func refusedUnderSymlinkedHome(t *testing.T, link, p string) {
+	t.Helper()
+	ed, rec := argvEditor(t)
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", ed)
+	d := baseDeps(newFakeRunner())
+	d.AgentsyncHome = link
+	app := NewApp(d)
+	_, cmd := app.Update(EditFileMsg{Path: p})
+	if cmd != nil || app.running != nil || !strings.Contains(app.status, "refused") {
+		t.Errorf("not refused: cmd %v running %v status %q", cmd != nil, app.running, app.status)
+	}
+	if _, err := os.Stat(rec); err == nil {
+		t.Error("editor ran")
+	}
+}
+
+func TestEditFileRefusesEscapeFromSymlinkedHome(t *testing.T) {
+	tmp, link, real := symHome(t)
+	outside := filepath.Join(tmp, "outside.toml")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evil := filepath.Join(real, "mcp", "evil.toml")
+	if err := os.Symlink(outside, evil); err != nil {
+		t.Fatal(err)
+	}
+	refusedUnderSymlinkedHome(t, link, filepath.Join(link, "mcp", "evil.toml"))
+	b, _ := os.ReadFile(outside)
+	if string(b) != "x" {
+		t.Errorf("outside file modified: %q", b)
+	}
+}
+
+func TestEditFileRefusesSiblingOfSymlinkTarget(t *testing.T) {
+	tmp, link, _ := symHome(t)
+	sib := filepath.Join(tmp, "real2")
+	if err := os.MkdirAll(sib, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(sib, "x.toml")
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refusedUnderSymlinkedHome(t, link, p)
+}
