@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -146,7 +147,7 @@ const (
 )
 
 // headSize is how much of a file Classify sees; ageReadBuf is the read
-// size of the age-identity scan.
+// size of the key-material scan.
 const (
 	headSize   = 4 << 10
 	ageReadBuf = 32 << 10
@@ -155,7 +156,27 @@ const (
 var (
 	ageSecret = []byte("AGE-SECRET-KEY-")
 	ageVault  = []byte("age-encryption.org/v1")
+	// privateKeyRe is a PEM or OpenSSH private-key header (as mask's
+	// KindPrivateKey reads one), its label bounded so that a header split
+	// across two reads is still found (markerCarry).
+	privateKeyRe = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----`)
 )
+
+// markerCarry is how many bytes of one read the key-material scan keeps
+// for the next: more than the longest marker privateKeyRe or ageSecret
+// matches.
+const markerCarry = 80
+
+// keyMaterial reports whether b holds an age identity or a private-key
+// header.
+func keyMaterial(b []byte) bool {
+	return bytes.Contains(b, ageSecret) || privateKeyRe.Match(b)
+}
+
+// HoldsKeyMaterial reports whether s holds an age identity or a PEM or
+// OpenSSH private-key header: a diff that does is not shown, whichever of
+// its lines (an added or a removed one) carries the key.
+func HoldsKeyMaterial(s string) bool { return keyMaterial([]byte(s)) }
 
 // ownedFiles and ownedDirs are the agentsync-owned set (D3), relative to
 // the home.
@@ -441,14 +462,14 @@ func selectable(c Class) bool {
 }
 
 // Classify classifies a file by its home-relative path, its first bytes
-// (head, at most 4 KiB) and whether its whole content holds an age
-// identity, in the pinned order: state dir, sensitive, vault, unusual
+// (head, at most 4 KiB) and whether its whole content holds key material
+// (an age identity or a private-key header), in the pinned order: state dir, sensitive, vault, unusual
 // name, owned, other. It returns the class and its note.
 func Classify(homeRel string, head []byte, ageIdentity bool) (Class, string) {
 	switch {
 	case actions.InStateDir(homeRel):
 		return StateDir, noteState
-	case ageIdentity || bytes.Contains(head, ageSecret) || sensitiveName(homeRel):
+	case ageIdentity || keyMaterial(head) || sensitiveName(homeRel):
 		return Sensitive, noteSensitive
 	case bytes.HasPrefix(head, ageVault):
 		return Vault, noteVault
@@ -513,8 +534,9 @@ func maskedName(s string) string {
 // content is what inspect read of a worktree file.
 type content struct {
 	head []byte
-	// age is set when the file holds an age identity or could not be
-	// read (fail closed); unreadable tells the two apart for the note.
+	// age is set when the file holds key material (an age identity or a
+	// private-key header) or could not be read (fail closed); unreadable
+	// tells the two apart for the note.
 	age, unreadable bool
 	link, special   bool
 }
@@ -522,8 +544,8 @@ type content struct {
 // unreadable is a file inspect could not read: Sensitive, never selectable.
 var unreadable = content{age: true, unreadable: true}
 
-// inspect reads rel under top: its first 4 KiB and an age-identity scan
-// of the whole file. A symlink (or a path whose parent resolves outside
+// inspect reads rel under top: its first 4 KiB and a key-material scan
+// (age identity, private-key header) of the whole file. A symlink (or a path whose parent resolves outside
 // top) is not read; a directory or special file is not read; a missing
 // file has no content; a failed read counts as an age identity and is
 // marked unreadable.
@@ -551,7 +573,7 @@ func inspect(top, rel string) content {
 	if err != nil {
 		return unreadable
 	}
-	age, err := scanAge(io.MultiReader(bytes.NewReader(head), f))
+	age, err := scanKeys(io.MultiReader(bytes.NewReader(head), f))
 	if err != nil {
 		return unreadable
 	}
@@ -642,12 +664,12 @@ func ReadRegular(name string, limit int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, max(limit, 0)))
 }
 
-// HasAgeIdentity reports whether the file named name holds
-// "AGE-SECRET-KEY-" anywhere, streaming the whole file (no size cap) and
+// HasKeyMaterial reports whether the file named name holds an age identity
+// ("AGE-SECRET-KEY-") or a private-key header anywhere, streaming the whole file (no size cap) and
 // matching across read boundaries. It never follows a symlink: a symlink,
 // a special file or a missing path is false. A read error counts as found
 // and is returned.
-func HasAgeIdentity(name string) (bool, error) {
+func HasKeyMaterial(name string) (bool, error) {
 	f, _, err := openRegular(name)
 	if err != nil {
 		return true, err
@@ -656,23 +678,22 @@ func HasAgeIdentity(name string) (bool, error) {
 		return false, nil
 	}
 	defer func() { _ = f.Close() }()
-	found, err := scanAge(f)
+	found, err := scanKeys(f)
 	if err != nil {
 		return true, err
 	}
 	return found, nil
 }
 
-// scanAge streams r in ageReadBuf reads, carrying the last
-// len(marker)-1 bytes over so a marker split across reads is found.
-func scanAge(r io.Reader) (bool, error) {
-	carry := len(ageSecret) - 1
-	buf := make([]byte, carry+ageReadBuf)
+// scanKeys streams r in ageReadBuf reads, carrying the last markerCarry
+// bytes over so a marker split across reads is found.
+func scanKeys(r io.Reader) (bool, error) {
+	buf := make([]byte, markerCarry+ageReadBuf)
 	keep := 0
 	for {
 		n, err := r.Read(buf[keep : keep+ageReadBuf])
 		total := keep + n
-		if bytes.Contains(buf[:total], ageSecret) {
+		if keyMaterial(buf[:total]) {
 			return true, nil
 		}
 		if errors.Is(err, io.EOF) {
@@ -680,7 +701,7 @@ func scanAge(r io.Reader) (bool, error) {
 		} else if err != nil {
 			return false, err
 		}
-		keep = min(total, carry)
+		keep = min(total, markerCarry)
 		copy(buf, buf[total-keep:total])
 	}
 }

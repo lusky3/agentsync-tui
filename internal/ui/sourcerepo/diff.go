@@ -112,12 +112,21 @@ func addedPatch(content string) string {
 	return "+" + strings.ReplaceAll(content, "\n", "\n+")
 }
 
+// whyKeyMaterial is the note for a diff that holds key material.
+const whyKeyMaterial = "the diff holds a private key or an age identity: content not shown"
+
 // maskedDiff masks every line of patch and caps the result at ui.MaxOutput.
+// A patch holding key material (a private-key header or an age identity,
+// on an added or a removed line) is not shown at all: the lines of a key
+// body are not credential shapes MaskPatchLine would mask.
 func maskedDiff(gen int, homeRel, patch string, cut bool) diffMsg {
 	m := diffMsg{gen: gen, trunc: cut}
-	if patch == "" {
+	switch {
+	case patch == "":
 		m.note = "no changes to show"
 		return m
+	case gitrepo.HoldsKeyMaterial(patch):
+		return diffMsg{gen: gen, note: whyKeyMaterial}
 	}
 	size := 0
 	for _, l := range strings.Split(strings.TrimSuffix(patch, "\n"), "\n") {

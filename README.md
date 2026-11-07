@@ -199,7 +199,8 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   `rebase`, `--no-verify`, `remote add`/`set-url` or a `config` write, and it
   never creates a remote or a hosted repository. A commit is refused when
   `agentsync check` fails, a selected file is under `.state/` or looks
-  sensitive (a key, `.env`, an age identity), the scan of the added lines
+  sensitive (a key, `.env`, an age identity or a private key in its
+  content), the scan of the added lines
   finds a likely secret, HEAD is detached, a merge, rebase, cherry-pick,
   revert or bisect is in progress, or `index.lock` is present (the TUI never
   deletes it). A push is scanned the same way first, the messages of the
@@ -212,7 +213,8 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   recognised (by commit author and the `agentsync.managed` marker) and
   refused, and a home that chezmoi manages gets a read-only notice
   with the chezmoi commands to use instead. Diff and file content are only
-  rendered, masked: never written to the activity log, the status line or
+  rendered, masked (a diff that holds a private key or an age identity is
+  not shown at all): never written to the activity log, the status line or
   `--debug-log`.
 - Destructive actions (removing a server, agent, plugin, marketplace or
   secret; revert) need a typed verb (the subcommand, for example `remove`).

@@ -506,6 +506,7 @@ func TestClassifyTable(t *testing.T) {
 		{"skills/.State/y", "", false, StateDir},
 		{notesPath, "x " + ageMarker, false, Sensitive},
 		{notesPath, "", true, Sensitive},
+		{notesPath, "key:\n" + pemHeader + "\nQUFBQQ==\n", false, Sensitive},
 		{"key.txt", "", false, Sensitive},
 		{"skills/KEY.TXT", "", false, Sensitive},
 		{"skills/server.pem", "", false, Sensitive},
@@ -573,9 +574,9 @@ func TestAgeIdentityPastFirst4KiB(t *testing.T) {
 		path string
 		want bool
 	}{{at5000, true}, {bigPath, true}, {clean, false}} {
-		got, err := HasAgeIdentity(c.path)
+		got, err := HasKeyMaterial(c.path)
 		if err != nil || got != c.want {
-			t.Errorf("HasAgeIdentity(%s) = %v, %v; want %v", filepath.Base(c.path), got, err, c.want)
+			t.Errorf("HasKeyMaterial(%s) = %v, %v; want %v", filepath.Base(c.path), got, err, c.want)
 		}
 	}
 	// Through ParseStatus, a file named like a skill.
@@ -583,6 +584,36 @@ func TestAgeIdentityPastFirst4KiB(t *testing.T) {
 	write(t, r.Top, notesPath, strings.Repeat("x", 5000)+ageMarker)
 	if f := get(t, parse(t, recs(headerOID, untracked(notesPath)), r), notesPath); f.Class != Sensitive {
 		t.Fatalf("marker past 4 KiB: %+v", f)
+	}
+}
+
+// pemHeader is a PEM private-key header (no key follows it here).
+const pemHeader = "-----BEGIN OPENSSH PRIVATE KEY-----"
+
+// A private key is sensitive by content, whatever the file's name, also
+// past the first 4 KiB and across a read-buffer boundary, so its diff is
+// never shown and it is never selectable.
+func TestPrivateKeyByContentWhateverName(t *testing.T) {
+	dir := t.TempDir()
+	off := 3*ageReadBuf - 9
+	big := bytes.Repeat([]byte("y"), 4*ageReadBuf)
+	copy(big[off:], "-----BEGIN RSA PRIVATE KEY-----")
+	bigPath := filepath.Join(dir, "big")
+	if err := os.WriteFile(bigPath, big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := HasKeyMaterial(bigPath); !got || err != nil {
+		t.Errorf("HasKeyMaterial(big) = %v, %v", got, err)
+	}
+	r := atRoot(t)
+	write(t, r.Top, notesPath, strings.Repeat("x", 5000)+"\n"+pemHeader+"\n")
+	write(t, r.Top, okPath, "a PRIVATE KEY is not a header\n")
+	s := parse(t, recs(headerOID, untracked(notesPath), untracked(okPath)), r)
+	if f := get(t, s, notesPath); f.Class != Sensitive || f.Selectable {
+		t.Fatalf("%s = %+v, want Sensitive", notesPath, f)
+	}
+	if f := get(t, s, okPath); f.Class != Owned {
+		t.Fatalf("ok.md = %+v", f)
 	}
 }
 
@@ -596,8 +627,8 @@ func TestSymlinkClassifiedByNameNeverDefault(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := HasAgeIdentity(link); got || err != nil {
-		t.Fatalf("HasAgeIdentity followed a symlink: %v, %v", got, err)
+	if got, err := HasKeyMaterial(link); got || err != nil {
+		t.Fatalf("HasKeyMaterial followed a symlink: %v, %v", got, err)
 	}
 	f := get(t, parse(t, recs(headerOID, untracked("skills/l.md")), r), "skills/l.md")
 	if f.Class != Owned || f.Default {
