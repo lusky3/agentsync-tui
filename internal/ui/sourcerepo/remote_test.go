@@ -983,3 +983,47 @@ func TestWideScanReadsRootCommitWhatever(t *testing.T) {
 		}
 	}
 }
+
+// cutRead makes the fixture's git read for argv holding marker come back
+// marked cut (runner.TruncatedMark after its output), as a read past the
+// runner's cap does.
+func cutRead(f *fixture, marker string) {
+	f.git.mu.Lock()
+	defer f.git.mu.Unlock()
+	f.git.override = func(args []string) (runner.Result, bool) {
+		if !slices.Contains(args, marker) {
+			return runner.Result{}, false
+		}
+		res, err := f.git.inner.Run(context.Background(), args...)
+		if err != nil {
+			return runner.Result{}, false
+		}
+		res.Stdout += runner.TruncatedMark
+		return res, true
+	}
+}
+
+// A whole-history scan (push URL other than the fetch URL) that was cut
+// is refused outright: what it did not read may be anything the
+// destination lacks. A cut narrow scan stays a soft finding.
+func TestWideScanCutIsRefused(t *testing.T) {
+	for _, marker := range []string{"-p", "--format=%H%x00%B%x00"} {
+		home, _ := newTracked(t)
+		gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n" + strings.Repeat("line\n", 50)})
+		mirror := filepath.Join(t.TempDir(), "mirror.git")
+		gittest.Git(t, "", "init", "-q", "--bare", mirror)
+		gittest.Git(t, home, "config", "remote.origin.pushurl", mirror)
+		f := open(t, home)
+		cutRead(f, marker)
+		wantNothing(t, press(f.s, "P"))
+		wantView(t, f.s, whyWideCut)
+	}
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n" + strings.Repeat("line\n", 50)})
+	f := open(t, home)
+	cutRead(f, "-p")
+	d := onlyDo(t, press(f.s, "P"))
+	if !d.Action.TypedConfirm {
+		t.Errorf("a cut narrow scan needs no typing: %q", d.Action.Warning)
+	}
+}

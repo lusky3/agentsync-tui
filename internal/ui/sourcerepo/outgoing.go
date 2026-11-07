@@ -38,6 +38,11 @@ const whyTooManyChanges = refused + "too many changes to scan; review and push o
 // own bound: the default network bound, ui.DefaultReadTimeout.
 var outgoingScanBound = ui.DefaultReadTimeout
 
+// whyWideCut refuses a whole-history push scan (base "") whose patch or
+// message read the runner cut: the unread part may be anything the push
+// destination lacks.
+const whyWideCut = refused + "the outgoing history is too large to scan completely; push it outside the TUI"
+
 // gitLog names the outgoing log reads in a refusal.
 const gitLog = "git log"
 
@@ -142,6 +147,9 @@ func scanOutgoingRange(ctx context.Context, in netInput, base, tip string) ([]gi
 		return nil, []string{refused + note}
 	}
 	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	if cut && base == "" {
+		return nil, []string{whyWideCut}
+	}
 	fs, r := scanSections(ctx, in, splitPatch(patch))
 	if r != nil {
 		return nil, r
@@ -159,7 +167,8 @@ func scanOutgoingRange(ctx context.Context, in netInput, base, tip string) ([]gi
 // scanMessages scans the message of every outgoing commit as prose (R5):
 // the push publishes the messages with the commits, and a commit made
 // outside the TUI never met ValidCommitMessage. A list the runner cut
-// short is a soft finding (not scanned in full).
+// short is a soft finding (not scanned in full), or in a whole-history
+// scan (base "") a refusal (whyWideCut).
 func scanMessages(ctx context.Context, in netInput, base, tip string) ([]gitrepo.Finding, []string) {
 	argv := gitrepo.OutgoingMessagesArgv(in.repo, base, tip)
 	if argv == nil {
@@ -170,6 +179,9 @@ func scanMessages(ctx context.Context, in netInput, base, tip string) ([]gitrepo
 		return nil, []string{refused + note}
 	}
 	out, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	if cut && base == "" {
+		return nil, []string{whyWideCut}
+	}
 	fs, err := bounded(ctx, in.limit, func() ([]gitrepo.Finding, error) { return messageFindings(out), nil })
 	if err != nil {
 		return nil, scanRefusal(in, err)
