@@ -24,6 +24,23 @@ const maxOutgoing = 2000
 // whyTooMany refuses a push whose outgoing commits touch too many paths.
 const whyTooMany = refused + "too many files to scan; review and push outside the TUI"
 
+// maxChanges is how many file changes (a file in one commit, each read for
+// its multi-line context) the outgoing commits may hold. Past it the push
+// is refused (whyTooManyChanges): 2000 files in each of 10 commits is more
+// than this screen should read before a push.
+var maxChanges = 20000
+
+// whyTooManyChanges refuses a push whose commits hold too many changes.
+const whyTooManyChanges = refused + "too many changes to scan; review and push outside the TUI"
+
+// outgoingScanBound is the deadline of the whole outgoing scan (its reads,
+// one per changed file per commit, and the scan), on top of each read's
+// own bound: the default network bound, ui.DefaultReadTimeout.
+var outgoingScanBound = ui.DefaultReadTimeout
+
+// whyUnfinished refuses a push whose scan ran past outgoingScanBound.
+const whyUnfinished = refused + "the outgoing scan did not finish; review and push outside the TUI"
+
 // publicHosts are the public hosting services a push warns about: the TUI
 // cannot see whether the repository there is private.
 var publicHosts = map[string]bool{
@@ -33,47 +50,6 @@ var publicHosts = map[string]bool{
 
 // errPatchPath is a patch section whose path cannot be read back.
 var errPatchPath = errors.New("cannot read a path in the outgoing patch")
-
-// scanOutgoing is the outgoing guard (R5 for a push): every path the
-// outgoing commits touch is listed and a state or sensitive one refused,
-// then every commit's patch is scanned file by file, so a credential added
-// in one commit and removed in a later one is still found.
-func scanOutgoing(ctx context.Context, in netInput, base, tip string) ([]gitrepo.Finding, []string) {
-	names, patchArgv := gitrepo.OutgoingNamesArgv(in.repo, base, tip), gitrepo.OutgoingPatchArgv(in.repo, base, tip)
-	if names == nil || patchArgv == nil {
-		return nil, []string{refused + "the outgoing range is not a pair of object ids"}
-	}
-	res, err := ui.Read(ctx, in.git, in.limit, names...)
-	if note := ui.ReadNote("git log", res, err); note != "" {
-		return nil, []string{refused + note}
-	}
-	list, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
-	paths := outgoingPaths(list)
-	if cut || len(paths) > maxOutgoing {
-		return nil, []string{whyTooMany}
-	}
-	if r := outgoingPathRefusal(in.repo, paths); r != nil {
-		return nil, r
-	}
-	res, err = ui.Read(ctx, in.git, in.limit, patchArgv...)
-	if note := ui.ReadNote("git log", res, err); note != "" {
-		return nil, []string{refused + note}
-	}
-	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
-	secs := splitPatch(patch)
-	if r := readPostImages(ctx, in, secs); r != nil {
-		return nil, r
-	}
-	fs, err := bounded(ctx, in.limit, func() ([]gitrepo.Finding, error) { return scanPatch(secs, in.repo.Pathspec) })
-	if err != nil {
-		return nil, []string{refused + "cannot scan the outgoing commits: " + errNote(err), "to inspect them" + runOutside,
-			"  " + inspectCommand(in.repo.Top)}
-	}
-	if cut {
-		fs = append(fs, gitrepo.Finding{Path: "outgoing commits", Kind: gitrepo.KindNotScannedPatch})
-	}
-	return fs, nil
-}
 
 // outgoingPaths is the distinct paths of a NUL-separated name list.
 func outgoingPaths(names string) []string {
@@ -120,77 +96,158 @@ func unpushablePath(rel string) string {
 	return ""
 }
 
-// scanPatch scans the added lines of each file section, in the context of
-// the file as its commit records it (readPostImages). A binary section,
-// or one whose file was cut, is a soft finding: it was not scanned (whole).
-func scanPatch(secs []filePatch, pathspec string) ([]gitrepo.Finding, error) {
-	var out []gitrepo.Finding
+// scanOutgoing is the outgoing guard (R5 for a push): every path the
+// outgoing commits touch is listed and a state or sensitive one refused,
+// then every commit's patch is scanned file by file, so a credential added
+// in one commit and removed in a later one is still found. The whole scan
+// has one deadline, outgoingScanBound, on top of each read's own bound;
+// past it the push is refused (whyUnfinished).
+func scanOutgoing(ctx context.Context, in netInput, base, tip string) ([]gitrepo.Finding, []string) {
+	ctx, cancel := context.WithTimeout(ctx, outgoingScanBound)
+	defer cancel()
+	fs, refusal := scanOutgoingRange(ctx, in, base, tip)
+	if ctx.Err() != nil {
+		return nil, []string{whyUnfinished}
+	}
+	return fs, refusal
+}
+
+// scanOutgoingRange is scanOutgoing's work, under its deadline.
+func scanOutgoingRange(ctx context.Context, in netInput, base, tip string) ([]gitrepo.Finding, []string) {
+	names, patchArgv := gitrepo.OutgoingNamesArgv(in.repo, base, tip), gitrepo.OutgoingPatchArgv(in.repo, base, tip)
+	if names == nil || patchArgv == nil {
+		return nil, []string{refused + "the outgoing range is not a pair of object ids"}
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, names...)
+	if note := ui.ReadNote("git log", res, err); note != "" {
+		return nil, []string{refused + note}
+	}
+	list, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	paths := outgoingPaths(list)
+	if cut || len(paths) > maxOutgoing {
+		return nil, []string{whyTooMany}
+	}
+	if r := outgoingPathRefusal(in.repo, paths); r != nil {
+		return nil, r
+	}
+	res, err = ui.Read(ctx, in.git, in.limit, patchArgv...)
+	if note := ui.ReadNote("git log", res, err); note != "" {
+		return nil, []string{refused + note}
+	}
+	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	fs, r := scanSections(ctx, in, splitPatch(patch))
+	if r != nil {
+		return nil, r
+	}
+	if cut {
+		fs = append(fs, gitrepo.Finding{Path: "outgoing commits", Kind: gitrepo.KindNotScannedPatch})
+	}
+	return fs, nil
+}
+
+// scanSections scans each file section in turn: its file at its commit is
+// read, the section scanned against it and the file dropped before the
+// next section is read, so at most one post-image is held at a time. More
+// than maxChanges sections with added lines (one read each) are refused.
+func scanSections(ctx context.Context, in netInput, secs []filePatch) ([]gitrepo.Finding, []string) {
+	changes := 0
 	for _, sec := range secs {
 		if sec.path == "" {
-			return nil, errPatchPath
+			return nil, scanRefusal(in, errPatchPath)
 		}
-		rel := homeRel(pathspec, sec.path)
+		if sec.needsPost() {
+			changes++
+		}
+	}
+	if changes > maxChanges {
+		return nil, []string{whyTooManyChanges}
+	}
+	var out []gitrepo.Finding
+	for _, sec := range secs {
+		fs, r := scanSection(ctx, in, sec)
+		if r != nil {
+			return nil, r
+		}
+		out = append(out, fs...)
+	}
+	return out, nil
+}
+
+// scanRefusal refuses a push whose patch could not be scanned.
+func scanRefusal(in netInput, err error) []string {
+	return []string{refused + "cannot scan the outgoing commits: " + errNote(err), "to inspect them" + runOutside,
+		"  " + inspectCommand(in.repo.Top)}
+}
+
+// scanSection scans the added lines of one file section in the context of
+// the file as its commit records it (readPost): the -U0 patch holds only
+// the changed lines, and a line in a multi-line value is classified by
+// the key that opened it, which may be unchanged. A binary section is a
+// soft finding (not scanned), as is an added line past the post-image's
+// 1 MiB cut (its multi-line context is not known).
+func scanSection(ctx context.Context, in netInput, sec filePatch) ([]gitrepo.Finding, []string) {
+	var post capped
+	if sec.needsPost() {
+		var r []string
+		if post, r = readPost(ctx, in, sec); r != nil {
+			return nil, r
+		}
+	}
+	rel := homeRel(in.repo.Pathspec, sec.path)
+	fs, err := bounded(ctx, in.limit, func() ([]gitrepo.Finding, error) {
+		var out []gitrepo.Finding
 		if binaryRe.MatchString(sec.body) {
 			out = append(out, notScanned(gitrepo.File{HomeRel: rel}, gitrepo.KindNotScannedBinary))
 		}
-		if sec.postCut {
-			out = append(out, notScanned(gitrepo.File{HomeRel: rel}, gitrepo.KindNotScannedLarge))
+		lines := gitrepo.AddedLines(sec.body)
+		if post.cut && beyondCut(lines, post.data) {
+			out = append(out, notScanned(gitrepo.File{HomeRel: rel}, gitrepo.KindContextNotChecked))
 		}
-		out = append(out, gitrepo.ScanAdded(rel, gitrepo.AddedLines(sec.body), sec.post)...)
+		return append(out, gitrepo.ScanAdded(rel, lines, post.data)...), nil
+	})
+	if err != nil {
+		return nil, scanRefusal(in, err)
 	}
-	return out, nil
+	return fs, nil
+}
+
+// beyondCut reports an added line past the last complete line of post, a
+// post-image cut short: its multi-line context is not known.
+func beyondCut(lines []gitrepo.Line, post string) bool {
+	complete := strings.Count(post, "\n")
+	return slices.ContainsFunc(lines, func(l gitrepo.Line) bool { return l.N > complete })
 }
 
 // gitlinkRe is a section of a submodule (gitlink) change: its added line
 // is "Subproject commit <sha>", and there is no file to read.
 var gitlinkRe = regexp.MustCompile(`(?m)^(?:new file mode|index \S+) 160000$`)
 
-// readPostImages reads, for each section with added lines, the file as the
-// section's commit records it (gitrepo.BlobArgv, the runner's output cap),
-// keeping its first maxScanned bytes: the -U0 patch holds only the changed
-// lines, and a line in a multi-line value is classified by the key that
-// opened it, which may be unchanged. It returns a refusal, or nil.
-func readPostImages(ctx context.Context, in netInput, secs []filePatch) []string {
-	n := 0
-	for i := range secs {
-		sec := &secs[i]
-		if sec.path == "" || gitlinkRe.MatchString(sec.body) || len(gitrepo.AddedLines(sec.body)) == 0 {
-			continue
-		}
-		if n++; n > maxOutgoing {
-			return []string{whyTooMany}
-		}
-		if r := sec.readPost(ctx, in); r != nil {
-			return r
-		}
-	}
-	return nil
+// needsPost reports a section whose file is read for context: one with
+// added lines that is not a gitlink.
+func (sec filePatch) needsPost() bool {
+	return !gitlinkRe.MatchString(sec.body) && len(gitrepo.AddedLines(sec.body)) > 0
 }
 
-// readPost reads sec's file at its commit into sec.post; a refusal or nil.
-func (sec *filePatch) readPost(ctx context.Context, in netInput) []string {
+// readPost reads sec's file at its commit (gitrepo.BlobArgv, through the
+// runner and its output cap), keeping a copy of its first maxScanned bytes
+// so the read's whole output is not kept alive; cut when it was longer.
+func readPost(ctx context.Context, in netInput, sec filePatch) (capped, []string) {
 	argv := gitrepo.BlobArgv(in.repo, sec.commit, sec.path)
 	if argv == nil {
-		return []string{refused + "cannot read " + gitrepo.DisplayName(sec.path) + " in an outgoing commit"}
+		return capped{}, []string{refused + "cannot read " + gitrepo.DisplayName(sec.path) + " in an outgoing commit"}
 	}
 	res, err := ui.Read(ctx, in.git, in.limit, argv...)
 	if note := ui.ReadNote("git cat-file", res, err); note != "" {
-		return []string{refused + note}
+		return capped{}, []string{refused + note}
 	}
 	data, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
-	sec.post, sec.postCut = data[:min(len(data), maxScanned)], cut || len(data) > maxScanned
-	return nil
+	return capped{data: strings.Clone(data[:min(len(data), maxScanned)]), cut: cut || len(data) > maxScanned}, nil
 }
 
 // filePatch is one "diff --git" section: its path ("" when the header
-// could not be read), the commit it belongs to ("" before any %H line),
-// the lines after the header, and its file as that commit records it
-// (readPostImages; postCut when that was cut).
-type filePatch struct {
-	path, commit, body string
-	post               string
-	postCut            bool
-}
+// could not be read), the commit it belongs to ("" before any %H line)
+// and the lines after the header.
+type filePatch struct{ path, commit, body string }
 
 const diffHeader = "diff --git "
 

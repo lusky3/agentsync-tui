@@ -286,14 +286,15 @@ func scanTracked(ctx context.Context, in guardInput, unborn bool, f gitrepo.File
 	if err != nil {
 		return nil, refused + "cannot scan " + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
 	}
-	if post.cut {
-		out = append(out, notScanned(f, gitrepo.KindNotScannedLarge))
+	if post.cut && beyondCut(lines, post.data) {
+		out = append(out, notScanned(f, gitrepo.KindContextNotChecked))
 	}
 	return append(out, gitrepo.ScanAdded(f.HomeRel, lines, post.data)...), ""
 }
 
 // postImage is the worktree file rel the diff's added lines come from, its
-// first maxScanned bytes (cut past them). A symlink's diff is its target,
+// first maxScanned bytes (cut past them: an added line past the cut is
+// still scanned, but soft, as its multi-line context is not known). A symlink's diff is its target,
 // which has no multi-line strings: it gives no context.
 func postImage(top, rel string) (capped, error) {
 	c, err := readFile(top, rel, maxScanned)

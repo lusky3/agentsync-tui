@@ -810,3 +810,27 @@ func TestCommitMultiLineBodyEditUnderPlainKey(t *testing.T) {
 		t.Errorf("a plain body edit needs a typed commit: %q", d.Then[0].Warning)
 	}
 }
+
+// An edit of a tracked file over 1 MiB is scanned in full; the multi-line
+// context is cut at 1 MiB, so only an added line past the cut is soft.
+func TestCommitLargeTrackedFileContextNote(t *testing.T) {
+	big := strings.Repeat("plain line\n", (1<<20)/11+1000)
+	for _, c := range []struct {
+		name, body string
+		typed      bool
+	}{
+		{"edit near the start", "edited\n" + big[len("plain line\n"):], false},
+		{"edit past the cut", big + "appended\n", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := newRepo(t)
+			gittest.Commit(t, home, "big", map[string]string{"skills/b/big.md": big})
+			write(t, home, "skills/b/big.md", c.body)
+			f := open(t, home)
+			d := onlyDo(t, commit(f.s, commitMsg))
+			if d.Then[0].TypedConfirm != c.typed {
+				t.Errorf("typed=%v, want %v (warning %q)", d.Then[0].TypedConfirm, c.typed, d.Then[0].Warning)
+			}
+		})
+	}
+}

@@ -276,6 +276,11 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   `$NAME` is treated as a reference to a variable, so a literal that looks
   like one (`$PASSWORD123`) is not flagged. A hard refusal can be bypassed
   only by committing outside the TUI; the refusal shows the commands.
+- Source repo: the scan reads a line inside a TOML multi-line string as
+  the value of the key that opened it, but not a multi-line string that is
+  an array element (`KEYS = ['''`): its lines are scanned on their own.
+- Source repo: YAML block scalars (`key: |`) are not followed either; each
+  of their lines is scanned on its own.
 - Source repo: the scan and the commit are separate steps, like `E`'s
   check-then-use. The window runs to the commit itself, not to the add:
   `git commit -- <paths>` records what those paths hold in the worktree
@@ -291,7 +296,9 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   commits and files the TUI does not own. A push is also refused for a
   mirror remote, an upstream whose branch name differs from the local
   branch, an upstream that is a local branch, a branch with no upstream
-  (the commands to add one are shown), and more than 2000 outgoing files.
+  (the commands to add one are shown), more than 2000 outgoing files, more
+  than 20000 file changes across the outgoing commits, and a scan that does
+  not finish within two minutes.
 - Source repo: signed commits and pushes and pre-commit or pre-push hooks
   run with no terminal, so one that prompts (pinentry, a passphrase, an
   interactive hook) fails instead of hanging. Use an agent (gpg-agent,
