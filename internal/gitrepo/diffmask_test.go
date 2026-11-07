@@ -136,6 +136,8 @@ func FuzzMaskPatchLine(f *testing.F) {
 	f.Add(scanMCP, "+args = ['\x1b[31m', '']", uint(11))
 	f.Add("agentsync.toml", " K = \"${secret:", uint(15))
 	f.Add(scanMCP, "+name = { a = 'x' }}, Authorization = '"+hunter+"' }", uint(0))
+	// A header name glued to a preceding character (a fuzz crash).
+	f.Add("mCp/0", " name={0Authorization = '"+hunter+"'}", uint(65))
 	f.Fuzz(func(t *testing.T, path, line string, at uint) {
 		pos := int(at % uint(len(line)+1))
 		planted := line[:pos] + ghpTok + line[pos:]
@@ -289,6 +291,8 @@ func TestMaskPatchLineHeaderPairsInProse(t *testing.T) {
 			`+API_KEY = '''hunter2abc'''`,
 			`+API_KEY = """hunter2abc`,
 			`+"X-Custom-Api-Key" = "hunter2abc"`,
+			` name={0Authorization = 'hunter2abc'}`,
+			`+x_Cookie = "id=hunter2abc"`,
 		} {
 			if got := MaskPatchLine(path, l); strings.Contains(got, "hunter2abc") {
 				t.Errorf("%s %q -> %q", path, l, got)

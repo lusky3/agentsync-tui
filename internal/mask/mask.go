@@ -76,19 +76,22 @@ var (
 	// that group consists only of references.
 	textRules = append([]rule{
 		// Authorization-style headers with any scheme, as a header line
-		// ("Name: value") or a TOML/JSON pair ("Name" = "value").
-		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization` + headerSep + `(?:(?:bearer|basic|token|digest)\s+["'` + "`" + `]*)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
-		{re: regexp.MustCompile(`(?i)(\b(?:[a-z0-9]+-)*api-key` + headerSep + `)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		// ("Name: value") or a TOML/JSON pair ("Name" = "value"). The
+		// header rules have no left word boundary: a name glued to what
+		// precedes it ("{0Authorization = ...", "x_Cookie: ...") is still
+		// read, which masks more, never less.
+		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization` + headerSep + `(?:(?:bearer|basic|token|digest)\s+["'` + "`" + `]*)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:[a-z0-9]+-)*api-key` + headerSep + `)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// Cookie headers: the whole cookie string is the secret.
-		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie` + headerSep + `)([^\s"'` + "`" + `][^\n"'` + "`" + `]*)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:set-)?cookie` + headerSep + `)([^\s"'` + "`" + `][^\n"'` + "`" + `]*)`), kind: KindAuthHeader},
 		// The header-line rules as they were before the pair form: with
 		// one optional quote, a run of quotes around a reference makes
 		// them read a scheme word or a blank as the value. Kept so that
 		// what was a finding still is one; on the lines above they only
 		// re-mask a Mask.
-		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["'` + "`" + `]?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
-		{re: regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["'` + "`" + `]?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
-		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*:\s*["'` + "`" + `]?)([^\n"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization["']?\s*:\s*["'` + "`" + `]?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(x-api-key["']?\s*:\s*["'` + "`" + `]?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:set-)?cookie["']?\s*:\s*["'` + "`" + `]?)([^\n"'` + "`" + `]+)`), kind: KindAuthHeader},
 		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// userinfo in URLs.
 		{re: regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)([^/\s@"']+)@`), kind: KindURLUserinfo},
