@@ -584,3 +584,31 @@ func TestDiffNeverShowsPGPOrPuTTYKey(t *testing.T) {
 		}
 	}
 }
+
+// Ruling 48: the diff pane masks a visible key's value under an env table,
+// the header read from the post-image (a tracked file's worktree, an
+// untracked file itself); outside one the value stays visible.
+func TestDiffMasksVisibleKeyInEnvTable(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "env", map[string]string{tomlX: envTableTOML})
+	write(t, home, tomlX, envTableTOML+"command = '"+ghpToken+"'\nname = '"+opaqueWord+"'\n")
+	body := baseTOML + "[servers.y]\nrev = '" + opaqueWord + "'\n[servers.y.headers]\nA = '1'\nB = '2'\nC = '3'\nD = '4'\nname = '" + opaqueWord + "'\n"
+	write(t, home, "mcp/y.toml", body)
+	f := open(t, home)
+	for _, c := range []struct {
+		path, want string
+		shown      int
+	}{{tomlX, "+name = '••••'", 0}, {"mcp/y.toml", "+name = '••••'", 1}} {
+		f.s.mode = modeList
+		f.s.list.Cursor = rowOf(f.s, c.path)
+		press(f.s, "enter")
+		if f.s.mode != modeDiff {
+			t.Fatalf("%s: mode %v, want diff", c.path, f.s.mode)
+		}
+		d := strings.Join(f.s.diff.lines, "\n")
+		if strings.Contains(d, ghpToken) || strings.Count(d, opaqueWord) != c.shown || !strings.Contains(d, c.want) {
+			t.Errorf("%s: diff pane:\n%s", c.path, d)
+		}
+		press(f.s, "esc")
+	}
+}

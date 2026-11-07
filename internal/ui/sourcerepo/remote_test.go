@@ -1043,3 +1043,17 @@ func TestWideScanCutIsRefused(t *testing.T) {
 		t.Errorf("a cut narrow scan needs no typing: %q", d.Action.Warning)
 	}
 }
+
+// Ruling 48 for a push: the blob gives the [servers.x.env] context.
+func TestPushRefusedVisibleKeyInEnvTable(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "env", map[string]string{tomlX: envTableTOML})
+	gittest.Git(t, home, "push", "-q", "origin", "main")
+	gittest.Commit(t, home, "name", map[string]string{tomlX: envTableTOML + "name = '" + opaqueWord + "'\n"})
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:8")
+	if strings.Contains(view(f.s), opaqueWord) {
+		t.Error("the value is shown")
+	}
+}

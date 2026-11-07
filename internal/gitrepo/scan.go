@@ -190,23 +190,25 @@ type Finding struct {
 func ScanLines(homeRel string, lines []Line) []Finding { return ScanAdded(homeRel, lines, "") }
 
 // ScanAdded is ScanLines with the file's post-image post (the whole new
-// file, "" when unknown) as context: an added line inside the body of a
-// TOML multi-line string opened by a secret-named or header key or under
-// an env or headers table (Ruling 43), whose
-// opener the -U0 patch does not hold when only the body changed, is also
-// classified as that key's value (multiLineBodies, classifyBody). Its
-// Shown is mask.Mask: the body line is the secret.
+// file, "" when unknown) as context (contextOf). An added line inside the
+// body of a TOML multi-line string opened by a secret-named or header key
+// or under an env or headers table (Ruling 43), whose opener the -U0 patch
+// does not hold when only the body changed, is also classified as that
+// key's value (classifyBody); its Shown is mask.Mask, the body line being
+// the secret. An added line under an env or headers [table], whose header
+// the patch need not hold either, is classified as an env or header value
+// whatever its key (Ruling 48).
 func ScanAdded(homeRel string, lines []Line, post string) []Finding {
 	config := IsConfigFile(homeRel)
 	shownPath := mask.OneLine(mask.Text(homeRel))
-	bodies := multiLineBodies(post)
+	pc := contextOf(post)
 	var out []Finding
 	for _, l := range lines {
 		if len(l.Text) > maxLineBytes {
 			out = append(out, Finding{Path: shownPath, Line: l.N, Kind: KindLineTooLong})
 			continue
 		}
-		if f, ok := scanLine(l, config, bodies); ok {
+		if f, ok := scanLine(l, config, pc); ok {
 			f.Path = shownPath
 			out = append(out, f)
 		}
@@ -216,10 +218,10 @@ func ScanAdded(homeRel string, lines []Line, post string) []Finding {
 
 // scanLine is one added line's finding, if any: the line on its own and,
 // in a multi-line body, as its key's value; hard when either is.
-func scanLine(l Line, config bool, bodies map[int]mlOpener) (Finding, bool) {
-	kind, hard, found := classify(l.Text, config)
+func scanLine(l Line, config bool, pc postContext) (Finding, bool) {
+	kind, hard, found := classify(l.Text, config, pc.env[l.N])
 	f := Finding{Line: l.N, Shown: shown(l.Text), Hard: hard, Kind: kind}
-	o, in := bodies[l.N]
+	o, in := pc.bodies[l.N]
 	if !in {
 		return f, found
 	}
@@ -269,8 +271,9 @@ func IsConfigFile(homeRel string) bool {
 	return (dir == "hooks/" || dir == "lsp/") && strings.HasSuffix(file, ".toml")
 }
 
-// classify decides one line's finding.
-func classify(text string, config bool) (kind string, hard, found bool) {
+// classify decides one line's finding; env says the line lies under an
+// env, environment or headers table (Ruling 48).
+func classify(text string, config, env bool) (kind string, hard, found bool) {
 	pairs := allPairs(text)
 	credKind, cred := mask.Credential(tripleQuotes.Replace(text))
 	opener, authOpener := multiLineOpener(pairs)
@@ -287,7 +290,7 @@ func classify(text string, config bool) (kind string, hard, found bool) {
 		return KindTokenShapedWord, false, hasTokenWord(text)
 	}
 	text = exemptRe.ReplaceAllString(mask.Sanitize(text), " ")
-	if hardTokenWord(text) {
+	if hardTokenWord(text, env) {
 		return KindTokenShapedWord, true, true
 	}
 	return KindTokenShapedWord, false, hasTokenWord(text)
@@ -441,12 +444,13 @@ func hasTokenWord(s string) bool {
 func softKey(k string) bool { return visibleKeys[k] }
 
 // hardTokenWord reports a config line's hard token-shaped word: in the
-// value of a key that is not a softKey (an env or header value), of a
+// value of a key that is not a softKey (an env or header value), of any
+// key on a line under an env or headers [table] (env, Ruling 48), of a
 // dotted key under an env or headers table (env.command), in the value of
 // a softKey that holds an env or headers table (nestedEnvTable),
 // or a URL query value anywhere on the line.
-func hardTokenWord(text string) bool {
-	if kv, ok := parseKV(text); ok && (!softKey(kv.lastKey()) || kv.underEnvTable() || nestedEnvTable(text)) && hasTokenWord(kv.value) {
+func hardTokenWord(text string, env bool) bool {
+	if kv, ok := parseKV(text); ok && (env || !softKey(kv.lastKey()) || kv.underEnvTable() || nestedEnvTable(text)) && hasTokenWord(kv.value) {
 		return true
 	}
 	for _, u := range urlRe.FindAllString(text, -1) {

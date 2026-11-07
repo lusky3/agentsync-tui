@@ -40,7 +40,12 @@ var diffHeaders = []string{"diff ", "index ", "--- ", "+++ ", "@@"}
 // words. Other lines go through mask.Text. The result is sanitised and
 // passes mask.Text last, so a token shape cannot survive anywhere, the
 // name of a reference included.
-func MaskPatchLine(homeRel, line string) string {
+func MaskPatchLine(homeRel, line string) string { return maskPatchLine(homeRel, line, false) }
+
+// maskPatchLine is MaskPatchLine for a line under an env, environment or
+// headers table (env): a config pair's value goes through maskStrict
+// whatever its key.
+func maskPatchLine(homeRel, line string, env bool) string {
 	if len(line) > maxLineBytes {
 		return longLine(line)
 	}
@@ -55,7 +60,7 @@ func MaskPatchLine(homeRel, line string) string {
 	}
 	body := line[1:]
 	if IsConfigFile(homeRel) {
-		body = maskConfigLine(body)
+		body = maskConfigLine(body, env)
 	}
 	return line[:1] + mask.Text(body)
 }
@@ -72,9 +77,13 @@ func longLine(line string) string {
 // tableRe is a TOML [table] or [[array]] header line.
 var tableRe = regexp.MustCompile(`^\s*\[\[?[^\[\]=]*\]\]?\s*(?:#.*)?$`)
 
-// maskConfigLine masks one content line of a config file.
-func maskConfigLine(s string) string {
+// maskConfigLine masks one content line of a config file; a pair under an
+// env, environment or headers table (env) as an env or header value.
+func maskConfigLine(s string, env bool) string {
 	if p, ok := parseKV(s); ok {
+		if env {
+			return p.strict()
+		}
 		return p.masked()
 	}
 	t := strings.TrimSpace(s)
@@ -171,13 +180,19 @@ func (p kv) masked() string {
 	key := p.lastKey()
 	switch {
 	case p.underEnvTable():
-		return p.indent + mask.Text(p.key) + p.eq + maskStrict(p.value) + p.trail
+		return p.strict()
 	case key == "args":
 		return p.indent + p.key + p.eq + maskArgs(p.value) + p.trail
 	case visibleKeys[key]:
 		return p.indent + p.key + p.eq + maskVisible(p.value, false) + p.trail
 	}
 	return p.indent + mask.Text(p.key) + p.eq + maskValue(p.value) + p.trail
+}
+
+// strict rebuilds the pair as an env or header value: its key through
+// mask.Text, its value through maskStrict.
+func (p kv) strict() string {
+	return p.indent + mask.Text(p.key) + p.eq + maskStrict(p.value) + p.trail
 }
 
 // envTableKey names a table of values handed to a program: env,

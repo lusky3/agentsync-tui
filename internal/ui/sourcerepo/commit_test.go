@@ -886,3 +886,61 @@ func TestStoppedCommitOutcomeIsUncertain(t *testing.T) {
 		t.Errorf("note claims a failure: %q", note)
 	}
 }
+
+// envTableTOML is a config file whose [servers.x.env] header is more than
+// three lines above its last pairs, so neither a -U0 nor a -U3 hunk of an
+// edit there holds the header.
+const envTableTOML = baseTOML + "[servers.x.env]\nA = '1'\nB = '2'\nC = '3'\nD = '4'\n"
+
+// Ruling 48: under an env or headers table every value is an env or header
+// value, whatever its key: a visible key's credential or token-shaped value
+// is hard, its context read from the post-image.
+func TestCommitRefusedVisibleKeyInEnvTable(t *testing.T) {
+	for _, c := range []struct{ name, line, secret string }{
+		{"credential", "command = '" + ghpToken + "'", ghpToken},
+		{"token-shaped", "name = '" + opaqueWord + "'", opaqueWord},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := newRepo(t)
+			gittest.Commit(t, home, "env", map[string]string{tomlX: envTableTOML})
+			write(t, home, tomlX, envTableTOML+c.line+"\n")
+			f := open(t, home)
+			before := logCount(t, home)
+			if out := commit(f.s, commitMsg); len(out) != 0 {
+				t.Fatalf("emitted %v", out)
+			}
+			if logCount(t, home) != before {
+				t.Error("a commit was made")
+			}
+			wantView(t, f.s, "refused", "mcp/x.toml:8")
+			if strings.Contains(view(f.s), c.secret) {
+				t.Error("the value is shown")
+			}
+		})
+	}
+}
+
+// The same for a new file: it is its own context.
+func TestCommitRefusedVisibleKeyInEnvTableNewFile(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, envTableTOML+"name = '"+opaqueWord+"'\n")
+	f := open(t, home)
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	wantView(t, f.s, "refused", "mcp/x.toml:8")
+}
+
+// Outside an env table a visible key's token-shaped value stays soft
+// (Rulings 20, 21): a typed commit, not a refusal.
+func TestCommitVisibleKeyOutsideEnvTableSoft(t *testing.T) {
+	home := newRepo(t)
+	body := baseTOML + "[servers.x.env]\nA = '1'\n[servers.y]\ncommand = 'npx'\n"
+	gittest.Commit(t, home, "env", map[string]string{tomlX: body})
+	write(t, home, tomlX, body+"name = '"+opaqueWord+"'\n")
+	f := open(t, home)
+	d := onlyDo(t, commit(f.s, commitMsg))
+	if !d.Then[0].TypedConfirm {
+		t.Errorf("want a typed commit: %q", d.Then[0].Warning)
+	}
+}

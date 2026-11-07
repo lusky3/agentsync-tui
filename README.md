@@ -287,7 +287,9 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
 - Source repo: the secret scan is heuristic. It reads only the lines a
   commit or push would add. A hard finding (a known token shape, a literal
   credential in an Authorization/Bearer header, URL userinfo, a private
-  key, a literal value under a secret-named key in a config file) refuses
+  key, a literal value under a secret-named key in a config file, a
+  token-shaped value anywhere under an `env` or `headers` table, read from
+  the whole file, so a table header outside the change counts) refuses
   the commit or push; a soft finding (a token-shaped word in prose, a file
   too large or binary to scan) asks you to type `commit` first. An all-caps
   `$NAME` is treated as a reference to a variable, so a literal that looks

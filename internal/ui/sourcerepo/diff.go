@@ -79,7 +79,8 @@ func (s *Screen) openDiff() tea.Cmd {
 
 // readDiff reads one file's diff: an untracked file's content as added
 // lines, anything else through git diff against HEAD. Every line goes
-// through MaskPatchLine and the whole is capped at ui.MaxOutput.
+// through a gitrepo.PatchMasker (MaskPatchLine with the file's post-image
+// as context) and the whole is capped at ui.MaxOutput.
 func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo, unborn bool, f gitrepo.File, limit time.Duration) diffMsg {
 	if f.Kind == gitrepo.Untracked {
 		b, err := bounded(ctx, limit, func() (capped, error) { return readFile(repo.Top, f.Path, ui.MaxOutput) })
@@ -89,7 +90,7 @@ func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo
 		if strings.IndexByte(b.data, 0) >= 0 {
 			return diffMsg{gen: gen, note: "binary file: content not shown"}
 		}
-		return maskedDiff(gen, f.HomeRel, addedPatch(b.data), b.cut)
+		return maskedDiff(gen, gitrepo.NewAddedMasker(f.HomeRel, b.data), addedPatch(b.data), b.cut)
 	}
 	argv := gitrepo.DiffArgv(repo, unborn, f.Path, 3)
 	if argv == nil {
@@ -100,7 +101,19 @@ func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo
 		return diffMsg{gen: gen, note: note}
 	}
 	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
-	return maskedDiff(gen, f.HomeRel, patch, cut)
+	return maskedDiff(gen, gitrepo.NewPatchMasker(f.HomeRel, worktreePost(ctx, repo, f, limit)), patch, cut)
+}
+
+// worktreePost is the post-image of a tracked file's diff against HEAD:
+// its first maxScanned bytes in the worktree, or "" when it cannot be read
+// (deleted, replaced by a symlink, timed out): the diff's own table
+// headers are then the only context (gitrepo.PatchMasker).
+func worktreePost(ctx context.Context, repo gitrepo.Repo, f gitrepo.File, limit time.Duration) string {
+	b, err := bounded(ctx, limit, func() (capped, error) { return readFile(repo.Top, f.Path, maxScanned) })
+	if err != nil {
+		return ""
+	}
+	return b.data
 }
 
 // addedPatch shows content as the added lines of a new file.
@@ -115,11 +128,12 @@ func addedPatch(content string) string {
 // whyKeyMaterial is the note for a diff that holds key material.
 const whyKeyMaterial = "the diff holds a private key or an age identity: content not shown"
 
-// maskedDiff masks every line of patch and caps the result at ui.MaxOutput.
+// maskedDiff masks every line of patch through pm and caps the result at
+// ui.MaxOutput.
 // A patch holding key material (a private-key header or an age identity,
 // on an added or a removed line) is not shown at all: the lines of a key
 // body are not credential shapes MaskPatchLine would mask.
-func maskedDiff(gen int, homeRel, patch string, cut bool) diffMsg {
+func maskedDiff(gen int, pm *gitrepo.PatchMasker, patch string, cut bool) diffMsg {
 	m := diffMsg{gen: gen, trunc: cut}
 	switch {
 	case patch == "":
@@ -130,7 +144,7 @@ func maskedDiff(gen int, homeRel, patch string, cut bool) diffMsg {
 	}
 	size := 0
 	for _, l := range strings.Split(strings.TrimSuffix(patch, "\n"), "\n") {
-		l = strings.ReplaceAll(gitrepo.MaskPatchLine(homeRel, strings.TrimSuffix(l, "\r")), "\t", "  ")
+		l = strings.ReplaceAll(pm.Line(strings.TrimSuffix(l, "\r")), "\t", "  ")
 		if size += len(l) + 1; size > ui.MaxOutput {
 			m.trunc = true
 			break

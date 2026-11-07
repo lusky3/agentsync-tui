@@ -17,37 +17,57 @@ type mlOpener struct {
 	auth, secret, env bool
 }
 
-// multiLineBodies maps each line number of post (a whole file, its
-// post-image) that lies in the body of a TOML multi-line string (triple
+// postContext is what a file's post-image tells about its lines, by line
+// number: the multi-line string body each lies in (bodies), and whether
+// it lies under an env, environment or headers [table] (env, Ruling 48).
+type postContext struct {
+	bodies map[int]mlOpener
+	env    map[int]bool
+}
+
+// contextOf reads post (a whole file, its post-image; "" when unknown).
+// bodies maps each line in the body of a TOML multi-line string (triple
 // single or double quotes) opened by a secret-named or header key, or
 // under an env, environment or headers table (the current [table], a
 // dotted key or an inline table), to that opener. The opener line itself
 // is not a body line; the closing line is. A string that never closes runs
 // to the end of the file. A string that is an array element is not
-// followed (README, known limits).
-func multiLineBodies(post string) map[int]mlOpener {
-	out := map[int]mlOpener{}
+// followed (README, known limits). env holds every line from an env,
+// environment or headers [table] header to the next header outside a
+// multi-line string.
+func contextOf(post string) postContext {
+	c := postContext{bodies: map[int]mlOpener{}, env: map[int]bool{}}
 	var cur *mlOpener
 	envTable := false
 	for i, l := range strings.Split(post, "\n") {
 		l = strings.TrimSuffix(l, "\r")
 		if cur == nil {
-			if tableRe.MatchString(l) {
-				// Every key-like word on the header line counts, a
-				// comment's included (fail closed).
-				envTable = kv{key: l}.underEnvTable()
+			if e, ok := envHeader(l); ok {
+				envTable = e
 			}
+			c.env[i+1] = envTable
 			cur = openerOf(l, envTable)
 			continue
 		}
+		c.env[i+1] = envTable
 		if cur.auth || cur.secret || cur.env {
-			out[i+1] = *cur
+			c.bodies[i+1] = *cur
 		}
 		if delimIndex(l, cur.delim) >= 0 {
 			cur = nil
 		}
 	}
-	return out
+	return c
+}
+
+// envHeader reports whether l is a [table] or [[array]] header (ok) and
+// whether it names an env, environment or headers table. Every key-like
+// word on the line counts, a comment's included (fail closed).
+func envHeader(l string) (env, ok bool) {
+	if !tableRe.MatchString(l) {
+		return false, false
+	}
+	return kv{key: l}.underEnvTable(), true
 }
 
 // openerOf is the multi-line string the line opens and does not close, or
