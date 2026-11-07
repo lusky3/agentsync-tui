@@ -196,6 +196,7 @@ func TestCheckVersionAgainstRealBinary(t *testing.T) {
 		t.Skip("agentsync not on PATH")
 	}
 	env.Init(t)
+	t.Chdir(env.Home) // the children's working directory: never below a real .agentsync
 	r := NewExec(bin, ScopeUser, "")
 	r.Env = env.Env
 	// Read-only commands only. Non-zero exit is tolerated only when it is

@@ -19,14 +19,17 @@ func TestEnvIsHermetic(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_EMAIL", "leak@example.invalid")
 	t.Setenv("XDG_CONFIG_HOME", "/nonexistent/xdg")
 	env := Env(t)
+	// Compared as cleaned paths: TMPDIR may be spelled with a trailing or
+	// doubled slash, or lie below $HOME; neither must matter.
+	tmp := filepath.Clean(os.TempDir())
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		switch k {
 		case gitDirVar, "GIT_AUTHOR_EMAIL":
 			t.Errorf("inherited %s survived", kv)
 		case "HOME", "XDG_CONFIG_HOME":
-			if !strings.HasPrefix(v, os.TempDir()) {
-				t.Errorf("%s not a temp dir", kv)
+			if rel, err := filepath.Rel(tmp, v); err != nil || !filepath.IsLocal(rel) {
+				t.Errorf("%s not under the temp dir %s", kv, tmp)
 			}
 		}
 	}

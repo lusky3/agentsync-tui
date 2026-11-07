@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -360,8 +361,15 @@ func TestPushModalShowsEveryPushURLMasked(t *testing.T) {
 	app.Update(tea.WindowSizeMsg{Width: 400, Height: 60})
 	app.Update(d)
 	v := ansi.Strip(app.View().Content)
-	for _, want := range []string{bare, "example.com/o/r.git", "the remote URL embeds a credential"} {
-		if !strings.Contains(v, want) {
+	// The modal wraps long paths anywhere: compare without spaces and borders.
+	flat := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == '│' {
+			return -1
+		}
+		return r
+	}, v)
+	for _, want := range []string{bare, "example.com/o/r.git", "theremoteURLembedsacredential"} {
+		if !strings.Contains(flat, strings.ReplaceAll(want, " ", "")) {
 			t.Errorf("modal lacks %q:\n%s", want, v)
 		}
 	}

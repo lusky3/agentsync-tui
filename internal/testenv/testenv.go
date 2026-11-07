@@ -1,6 +1,7 @@
 // Package testenv provides a hermetic environment for tests that drive the
-// real agentsync binary: HOME, AGENTSYNC_HOME and XDG_* all point at
-// t.TempDir(), and every knob the CLI reads from the environment that could
+// real agentsync binary: HOME, AGENTSYNC_HOME and XDG_* all point into a
+// temp root no ancestor of which holds a .agentsync entry (see Root), and
+// every knob the CLI reads from the environment that could
 // steer it elsewhere (AGENTSYNC_* by prefix, GROK_HOME, NO_COLOR) is
 // scrubbed, so nothing touches the developer's real ~/.agentsync.
 package testenv
@@ -17,16 +18,18 @@ import (
 
 // Env is a hermetic home for running agentsync.
 type Env struct {
+	Root          string   // the temp root everything below lives in
 	Home          string   // fake $HOME
 	AgentsyncHome string   // fake $AGENTSYNC_HOME (the canonical source tree)
 	Env           []string // os.Environ() with the hermetic overrides applied
 }
 
-// New creates a hermetic environment rooted in t.TempDir().
+// New creates a hermetic environment rooted in a new Root.
 func New(t *testing.T) *Env {
 	t.Helper()
-	root := t.TempDir()
+	root := Root(t)
 	e := &Env{
+		Root:          root,
 		Home:          filepath.Join(root, "home"),
 		AgentsyncHome: filepath.Join(root, "home", ".agentsync"),
 	}
@@ -55,6 +58,79 @@ func New(t *testing.T) *Env {
 		e.Env = append(e.Env, k+"="+v)
 	}
 	return e
+}
+
+// fallbackTemp is where Root goes when os.TempDir() lies below a
+// .agentsync tree.
+const fallbackTemp = "/tmp"
+
+// Root returns a new temp directory, removed when t ends, such that neither
+// it nor any ancestor holds a .agentsync entry. agentsync walks up from its
+// working directory looking for a project tree and, finding one, refuses a
+// command that names no scope (or, with one, may read it). A developer's
+// TMPDIR below the real home would otherwise put the real ~/.agentsync on
+// that walk. The directory is made under os.TempDir() when that is clear,
+// else under /tmp; when neither is, t fails.
+func Root(t testing.TB) string {
+	t.Helper()
+	base := os.TempDir()
+	if AgentsyncAncestor(base) != "" {
+		base = fallbackTemp
+		if owner := AgentsyncAncestor(base); owner != "" {
+			t.Fatalf("testenv: both TMPDIR and %s lie below %s/.agentsync; set TMPDIR elsewhere", fallbackTemp, owner)
+		}
+	}
+	dir, err := os.MkdirTemp(base, "agentsync-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { removeAll(dir) })
+	return dir
+}
+
+// removeAll deletes dir, first making every directory below it writable
+// (as t.TempDir's cleanup does) so a read-only tree is removed too.
+func removeAll(dir string) {
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	_ = os.RemoveAll(dir)
+}
+
+// AgentsyncAncestor returns the nearest of dir and its ancestors that holds
+// a .agentsync entry (of any type), checking both the path as given and
+// with its symlinks resolved; "" when there is none.
+func AgentsyncAncestor(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	paths := []string{abs}
+	if r, err := filepath.EvalSymlinks(abs); err == nil && r != abs {
+		paths = append(paths, r)
+	}
+	for _, p := range paths {
+		if owner := agentsyncAbove(p); owner != "" {
+			return owner
+		}
+	}
+	return ""
+}
+
+func agentsyncAbove(dir string) string {
+	for {
+		if _, err := os.Lstat(filepath.Join(dir, ".agentsync")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // scrubbed reports whether an inherited variable must not reach the child.

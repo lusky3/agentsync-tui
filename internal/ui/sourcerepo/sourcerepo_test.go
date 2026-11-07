@@ -100,12 +100,17 @@ func deps(home string, agent, git, chezmoi runner.Runner) ui.Deps {
 	return ui.Deps{Runner: agent, Git: git, Chezmoi: chezmoi, Scope: runner.ScopeUser, AgentsyncHome: home}
 }
 
+// wideView is the fixture's width: no line of a test view is cut, however
+// long the temp paths are.
+const wideView = 1000
+
 // open builds the screen over home and loads it.
 func open(t *testing.T, home string) *fixture {
 	t.Helper()
 	f := &fixture{t: t, home: home, git: &recGit{inner: gittest.NewGit(t)}, agent: runnertest.New()}
 	f.s = New(deps(home, f.agent, f.git, nil))
-	f.s.Update(tea.WindowSizeMsg{Width: 160, Height: 80})
+	// Wide enough that a long temp path (TMPDIR anywhere) is never cut.
+	f.s.Update(tea.WindowSizeMsg{Width: wideView, Height: 80})
 	drive(f.s, f.s.Init())
 	if !f.s.loaded {
 		t.Fatal("screen did not load")
