@@ -113,7 +113,9 @@ also get `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` unless you set
 yours is used. Variables that would point git at another repository
 (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the like) are removed
 from their environment, so a TUI started from a git hook still acts on the
-home's repository.
+home's repository, and `GIT_NO_REPLACE_OBJECTS=1` is set, so what the tab
+shows and scans is the commits as stored: a `git replace` object would
+change what `log` shows but not what a push sends.
 
 ### Navigation
 

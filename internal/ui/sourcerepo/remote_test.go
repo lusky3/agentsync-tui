@@ -873,3 +873,19 @@ func TestPushRefusedCredentialNamedPath(t *testing.T) {
 		t.Error("the token in the path is shown")
 	}
 }
+
+// A replacement object (git replace) hides a committed token from git
+// log, but a push sends the original commit: the guard reads outgoing
+// commits as stored (GIT_NO_REPLACE_OBJECTS), so the push is refused.
+func TestPushScansOriginalNotReplacementObjects(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "token", map[string]string{tomlX: baseTOML + "env = { API_KEY = \"" + ghpToken + "\" }\n"})
+	orig := head(t, home)
+	parent := strings.TrimSpace(gittest.Git(t, home, "rev-parse", "HEAD^"))
+	tree := strings.TrimSpace(gittest.Git(t, home, "rev-parse", "HEAD^^{tree}"))
+	clean := strings.TrimSpace(gittest.Git(t, home, "commit-tree", tree, "-p", parent, "-m", "clean"))
+	gittest.Git(t, home, "replace", orig, clean)
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3")
+}

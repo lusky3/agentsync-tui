@@ -83,7 +83,7 @@ func TestGitEnvHardened(t *testing.T) {
 	p.Env = baseEnv("GIT_ASKPASS=/usr/bin/askpass", "GIT_TERMINAL_PROMPT=1", "LC_ALL=fr_FR.UTF-8", "GIT_PAGER=less", "GIT_EDITOR=vim", "GIT_MERGE_AUTOEDIT=yes")
 	env := runFake(t, context.Background(), p, "-C", "/r", "status").env
 	for k, v := range map[string]string{
-		"LC_ALL": "C", "GIT_PAGER": "cat", "GIT_EDITOR": "true", "GIT_MERGE_AUTOEDIT": "no",
+		"LC_ALL": "C", "GIT_PAGER": "cat", "GIT_EDITOR": "true", "GIT_MERGE_AUTOEDIT": "no", "GIT_NO_REPLACE_OBJECTS": "1",
 		"GIT_TERMINAL_PROMPT": "0", "SSH_ASKPASS_REQUIRE": "never",
 	} {
 		if env[k] != v {
