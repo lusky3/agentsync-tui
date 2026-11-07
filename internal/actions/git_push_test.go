@@ -16,7 +16,7 @@ var goodBranches = []string{"main", "master", "feat/source-repo", "release-1.2",
 var badBranches = []string{
 	"", "-x", "--force", "@", "HEAD", "a..b", "a@{u}", "@{-1}", "a b", "a\tb", "a\nb", "a\x7fb",
 	"a~1", "a^", "a:b", ":main", "a?", "a*", "a[b", `a\b`, "a/", "/a", "a//b", "a.", "a.lock",
-	"a.lock/b", "a/.b", ".a", "+main", "a‮b", "\xff", strings.Repeat("a", 256),
+	"a.lock/b", "a/.b", ".a", "+main", "a\u202eb", "\xff", strings.Repeat("a", 256),
 }
 
 func TestValidBranchName(t *testing.T) {
