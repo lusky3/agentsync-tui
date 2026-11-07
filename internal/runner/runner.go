@@ -139,7 +139,21 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 	full := append(append(append([]string{}, args...), e.scopeArgs(args)...), "--no-input", "--color", "never")
 	cmd := exec.CommandContext(ctx, e.bin, full...)
 	setProcessGroup(cmd) // signals reach the helpers agentsync spawns too
-	grace := e.waitDelay()
+	cmd.Env = childEnv(e.Env)
+	res, err := runCore(ctx, cmd, args, e.waitDelay(), "")
+	if errors.Is(err, exec.ErrNotFound) {
+		return res, ErrNotInstalled
+	}
+	return res, err
+}
+
+// runCore runs cmd, whose process group (or session) and environment the
+// caller has set, and collects its result. args (the caller's argv without
+// global flags) and program ("" for agentsync) are what Shutdown reports
+// for it while it is live. The error is non-nil only for a spawn failure
+// (returned as is, so the caller can map exec.ErrNotFound) or for ctx's
+// end, never for a non-zero exit.
+func runCore(ctx context.Context, cmd *exec.Cmd, args []string, grace time.Duration, program string) (Result, error) {
 	// On cancel, interrupt rather than kill: a write such as `plugin upgrade
 	// --all` then gets the chance to finish or roll back. Only if it is
 	// still running grace later is it killed: the whole group by the timer,
@@ -157,12 +171,11 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 		return nil
 	}
 	cmd.WaitDelay = grace
-	cmd.Env = childEnv(e.Env)
 	out, errb := &capWriter{n: MaxStream}, &capWriter{n: MaxStream}
 	cmd.Stdout, cmd.Stderr = out, errb
 	err := cmd.Start()
 	if err == nil {
-		track(cmd, args, IsWrite(ctx)) // Shutdown can reach the group until Wait returns
+		trackAs(cmd, args, IsWrite(ctx), program) // Shutdown can reach the group until Wait returns
 		err = cmd.Wait()
 		untrack(cmd)
 	}
@@ -179,8 +192,6 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 	case err == nil:
 	case errors.As(err, &ee):
 		res.ExitCode = ee.ExitCode()
-	case errors.Is(err, exec.ErrNotFound):
-		return res, ErrNotInstalled
 	default:
 		return res, err
 	}
