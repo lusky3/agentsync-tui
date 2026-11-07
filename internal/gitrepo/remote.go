@@ -94,7 +94,9 @@ func outgoingRange(base, tip string) (string, bool) {
 // OutgoingNamesArgv lists, NUL-separated, every path any commit in
 // base..tip touches under the home pathspec, not only the net diff;
 // merges against their first parent, renames split into a deletion and an
-// addition so both names are listed. --full-history keeps every commit of
+// addition so both names are listed. --root lists a root commit's files
+// whatever log.showRoot says (a whole-history range, or an unrelated
+// history's second root, holds one). --full-history keeps every commit of
 // the range: without it a path-limited log may simplify away the side of
 // a merge that is TREESAME to its first parent (`merge -s ours`), whose
 // commits a push still publishes. base and tip are as outgoingRange
@@ -105,22 +107,22 @@ func OutgoingNamesArgv(r Repo, base, tip string) []string {
 		return nil
 	}
 	return []string{"-C", r.Top, "log", "--format=", "--name-only", "-z", "--no-renames",
-		"--full-history", "--diff-merges=first-parent", rng, "--", r.Pathspec}
+		"--root", "--full-history", "--diff-merges=first-parent", rng, "--", r.Pathspec}
 }
 
 // OutgoingPatchArgv is every commit's own patch in base..tip with no
 // context: git's own bytes (no external diff, no textconv, no colour),
 // fixed a/ b/ prefixes and no rename sections, so each file section's
 // header names one path twice. Merges diff against their first parent,
-// never a combined diff (AddedLines does not parse one); --full-history
-// as in OutgoingNamesArgv; base and tip as outgoingRange takes them.
+// never a combined diff (AddedLines does not parse one); --root and
+// --full-history as in OutgoingNamesArgv; base and tip as outgoingRange takes them.
 func OutgoingPatchArgv(r Repo, base, tip string) []string {
 	rng, ok := outgoingRange(base, tip)
 	if !ok {
 		return nil
 	}
 	return []string{"-C", r.Top, "log", "-p", "--no-ext-diff", "--no-textconv", "--no-color", "-U0",
-		"--no-renames", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
+		"--no-renames", "--root", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
 		"--format=%H", rng, "--", r.Pathspec}
 }
 

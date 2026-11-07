@@ -955,3 +955,31 @@ func TestPushToFetchURLScansOutgoingOnly(t *testing.T) {
 		t.Errorf("push needs typing: %q", d.Action.Warning)
 	}
 }
+
+// log.showRoot=false (user or repository config) makes git log leave out
+// the root commit's diff: a whole-history scan must still read it, or a
+// token the root added (and a later commit deleted) goes out unscanned.
+func TestWideScanReadsRootCommitWhatever(t *testing.T) {
+	gittest.Need(t)
+	home := filepath.Join(t.TempDir(), "home")
+	gittest.Init(t, home)
+	gittest.Commit(t, home, "root", map[string]string{"agentsync.toml": "# config\n",
+		tomlX: baseTOML + "env = { API_KEY = \"" + ghpToken + "\" }\n"})
+	gittest.Git(t, home, "rm", "-q", "--", tomlX)
+	gittest.Git(t, home, "commit", "-q", "--message=drop")
+	bare, mirror := gittest.Bare(t), filepath.Join(t.TempDir(), "mirror.git")
+	gittest.Git(t, home, "remote", "add", "origin", bare)
+	gittest.Git(t, home, "push", "-q", "-u", "origin", "main")
+	gittest.Git(t, "", "init", "-q", "--bare", mirror)
+	gittest.Git(t, home, "config", "remote.origin.pushurl", mirror)
+	gittest.Git(t, home, "config", "log.showRoot", "false")
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3")
+	for _, c := range f.git.all() {
+		if (slices.Contains(c, "--name-only") || slices.Contains(c, "-p")) && !slices.Contains(c, "--root") {
+			t.Errorf("outgoing log read without --root: %q", c)
+		}
+	}
+}
