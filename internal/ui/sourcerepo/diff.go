@@ -170,26 +170,48 @@ type capped struct {
 // toplevel.
 var errOutside = errors.New("the path leaves the repository through a symlink")
 
+// afterContained, when set (tests only), runs between readFile's
+// containment check and its read.
+var afterContained func()
+
 // readFile reads at most limit bytes of the file rel under top through
-// gitrepo.ReadRegular (no symlink, no FIFO, regular files only), once its
-// parent directory is known to resolve inside top.
+// gitrepo.ReadRegularIn (no symlink, no FIFO, regular files only, every
+// component resolved inside top), once its parent directory is known to
+// resolve inside top. The read is bound to top, so a parent swapped for a
+// symlink that leaves top after the check fails the read instead of
+// reading outside the repository.
 func readFile(top, rel string, limit int) (capped, error) {
-	full := filepath.Join(top, filepath.FromSlash(rel))
-	dir, err := filepath.EvalSymlinks(filepath.Dir(full))
-	if err != nil {
+	if err := parentInside(top, rel); err != nil {
 		return capped{}, err
 	}
-	if r, err := filepath.Rel(top, dir); err != nil || (r != "." && !filepath.IsLocal(r)) {
-		return capped{}, errOutside
+	if afterContained != nil {
+		afterContained()
 	}
-	b, err := gitrepo.ReadRegular(full, int64(limit)+1)
+	b, err := gitrepo.ReadRegularIn(top, rel, int64(limit)+1)
 	if err != nil {
+		if errors.Is(parentInside(top, rel), errOutside) {
+			return capped{}, errOutside
+		}
 		return capped{}, err
 	}
 	if len(b) > limit {
 		return capped{data: string(b[:limit]), cut: true}, nil
 	}
 	return capped{data: string(b)}, nil
+}
+
+// parentInside is nil when rel's parent directory under top resolves
+// inside top, errOutside when it resolves elsewhere, and the resolution's
+// error when it cannot be resolved.
+func parentInside(top, rel string) error {
+	dir, err := filepath.EvalSymlinks(filepath.Dir(filepath.Join(top, filepath.FromSlash(rel))))
+	if err != nil {
+		return err
+	}
+	if r, err := filepath.Rel(top, dir); err != nil || (r != "." && !filepath.IsLocal(r)) {
+		return errOutside
+	}
+	return nil
 }
 
 // errNote is a display-safe reason for a failed read: never the path's

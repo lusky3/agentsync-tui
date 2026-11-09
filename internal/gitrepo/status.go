@@ -558,7 +558,7 @@ func inspect(top, rel string) content {
 	if !parentWithin(top, full) {
 		return content{link: true}
 	}
-	f, kind, err := openRegular(full)
+	f, kind, err := openRegularIn(top, rel)
 	switch {
 	case err != nil:
 		return unreadable
@@ -607,7 +607,32 @@ const (
 // missing path, a symlink or a special file returns a nil file and no
 // error.
 func openRegular(p string) (*os.File, fileKind, error) {
-	fi, err := os.Lstat(p)
+	return openChecked(os.Lstat, openRegularFile, p)
+}
+
+// openRegularIn is openRegular for rel inside the directory top, bound to
+// it: the Lstat and the open both resolve every component through an
+// os.Root opened on top, so a parent directory swapped for a symlink that
+// leaves top after any earlier check cannot redirect them (the open fails
+// instead). A symlink inside top is still followed for a parent, never for
+// the file itself.
+func openRegularIn(top, rel string) (*os.File, fileKind, error) {
+	root, err := os.OpenRoot(top)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, fileMissing, nil
+	case err != nil:
+		return nil, fileRegular, err
+	}
+	defer func() { _ = root.Close() }()
+	return openChecked(root.Lstat, func(name string) (*os.File, error) {
+		return openRegularRootFile(root, name)
+	}, filepath.FromSlash(rel))
+}
+
+// openChecked is openRegular with the Lstat and the open supplied.
+func openChecked(lstat func(string) (os.FileInfo, error), open func(string) (*os.File, error), p string) (*os.File, fileKind, error) {
+	fi, err := lstat(p)
 	switch {
 	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
 		return nil, fileMissing, nil
@@ -618,7 +643,7 @@ func openRegular(p string) (*os.File, fileKind, error) {
 	case !fi.Mode().IsRegular():
 		return nil, fileSpecial, nil
 	}
-	f, err := openRegularFile(p)
+	f, err := open(p)
 	if err != nil {
 		return nil, fileRegular, err
 	}
@@ -649,6 +674,21 @@ func regularOnly(f *os.File) (*os.File, error) {
 // file was longer pass limit+1.
 func ReadRegular(name string, limit int64) ([]byte, error) {
 	f, kind, err := openRegular(name)
+	return readOpened(name, limit, f, kind, err)
+}
+
+// ReadRegularIn is ReadRegular for the slash-separated path rel inside the
+// directory top, bound to top (see openRegularIn): a parent directory that
+// is replaced by a symlink leaving top, even after the caller checked it,
+// makes the read fail rather than read outside top.
+func ReadRegularIn(top, rel string, limit int64) ([]byte, error) {
+	f, kind, err := openRegularIn(top, rel)
+	return readOpened(rel, limit, f, kind, err)
+}
+
+// readOpened reads at most limit bytes of what openRegular returned for
+// name, turning its kinds into ReadRegular's errors.
+func readOpened(name string, limit int64, f *os.File, kind fileKind, err error) ([]byte, error) {
 	switch {
 	case errors.Is(err, errChanged), errors.Is(err, syscall.ELOOP):
 		return nil, fmt.Errorf("%w: %w", ErrNotRegular, err)

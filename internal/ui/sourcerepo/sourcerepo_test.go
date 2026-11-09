@@ -316,6 +316,36 @@ func TestUntrackedDiffRefusedThroughSymlink(t *testing.T) {
 	}
 }
 
+// TestUntrackedDiffParentSwappedAfterCheck swaps the file's parent
+// directory for a symlink leaving the repository between readFile's
+// containment check and its read (the afterContained hook): the read is
+// bound to the toplevel, so the outside file is never shown.
+func TestUntrackedDiffParentSwappedAfterCheck(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, "skills/a/x.md", "INSIDE\n")
+	outside := t.TempDir()
+	write(t, outside, "x.md", "OUTSIDE CONTENT\n")
+	f := open(t, home)
+	f.s.list.Cursor = rowOf(f.s, "skills/a/x.md")
+	var once sync.Once
+	afterContained = func() {
+		once.Do(func() {
+			dir := filepath.Join(home, "skills", "a")
+			if err := os.Rename(dir, dir+".aside"); err != nil {
+				t.Error(err)
+			}
+			if err := os.Symlink(outside, dir); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	t.Cleanup(func() { afterContained = nil })
+	press(f.s, "d")
+	if v := view(f.s); strings.Contains(v, "OUTSIDE CONTENT") || !strings.Contains(v, "symlink is not followed") {
+		t.Errorf("read through the swapped parent:\n%s", v)
+	}
+}
+
 func TestUnusualNameShownQuotedNotSelectable(t *testing.T) {
 	home := newRepo(t)
 	odd := "skills/a\nb.md"

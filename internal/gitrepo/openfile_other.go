@@ -30,3 +30,12 @@ func openDir(name string) (*os.File, error) {
 	}
 	return os.Open(name)
 }
+
+// openRegularRootFile is openRegularFile for name inside root.
+func openRegularRootFile(root *os.Root, name string) (*os.File, error) {
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return regularOnly(f)
+}

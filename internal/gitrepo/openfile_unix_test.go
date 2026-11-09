@@ -170,3 +170,54 @@ func TestResolveHomeNeverBlocksOnFIFO(t *testing.T) {
 		}
 	}
 }
+
+// TestReadRegularInStaysInsideTop: a parent directory that is a symlink
+// leaving top (what a swap after a containment check leaves) fails the
+// read, where ReadRegular on the joined path would read the outside file.
+// A parent symlink inside top is followed; the file itself never is; a
+// FIFO is refused at once.
+func TestReadRegularInStaysInsideTop(t *testing.T) {
+	top, outside := t.TempDir(), t.TempDir()
+	write(t, outside, "x.md", "OUTSIDE")
+	if err := os.Symlink(outside, filepath.Join(top, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := ReadRegular(filepath.Join(top, "skills", "x.md"), 100); err != nil || string(b) != "OUTSIDE" {
+		t.Fatalf("control: ReadRegular through the parent link = %q, %v", b, err)
+	}
+	if b, err := ReadRegularIn(top, "skills/x.md", 100); err == nil || strings.Contains(string(b), "OUTSIDE") {
+		t.Errorf("ReadRegularIn read outside top: %q, %v", b, err)
+	}
+	write(t, top, "real/y.md", "INSIDE")
+	if err := os.Symlink("real", filepath.Join(top, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := ReadRegularIn(top, "alias/y.md", 100); err != nil || string(b) != "INSIDE" {
+		t.Errorf("parent link inside top = %q, %v", b, err)
+	}
+	if err := os.Symlink("y.md", filepath.Join(top, "real", "z.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadRegularIn(top, "real/z.md", 100); !errors.Is(err, ErrSymlink) {
+		t.Errorf("file link error %v, want ErrSymlink", err)
+	}
+	if _, err := ReadRegularIn(top, "real/missing", 100); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing error %v, want ErrNotExist", err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(top, "real", "fifo"), 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ReadRegularIn(top, "real/fifo", 100)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNotRegular) {
+			t.Errorf("fifo error %v, want ErrNotRegular", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReadRegularIn blocked on a FIFO")
+	}
+}

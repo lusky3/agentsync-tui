@@ -24,3 +24,12 @@ func openRegularFile(name string) (*os.File, error) {
 func openDir(name string) (*os.File, error) {
 	return os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
 }
+
+// openRegularRootFile is openRegularFile for name inside root.
+func openRegularRootFile(root *os.Root, name string) (*os.File, error) {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	return regularOnly(f)
+}
