@@ -219,7 +219,7 @@ func ParseStatus(out []byte, r Repo) (Status, error) {
 // records, and inside a file's key-material scan. It then returns ctx's
 // error and no status.
 func ParseStatusContext(ctx context.Context, out []byte, r Repo) (Status, error) {
-	p := parser{ctx: ctx, r: r, top: resolvePath(r.Top)}
+	p := parser{r: r, top: resolvePath(r.Top)}
 	recs := strings.Split(string(out), "\x00")
 	if n := len(recs); recs[n-1] == "" {
 		recs = recs[:n-1]
@@ -228,7 +228,7 @@ func ParseStatusContext(ctx context.Context, out []byte, r Repo) (Status, error)
 		if err := ctx.Err(); err != nil {
 			return Status{}, err
 		}
-		extra, err := p.record(recs, i)
+		extra, err := p.record(ctx, recs, i)
 		if err != nil {
 			return Status{}, fmt.Errorf("git status: record %d: %w", i+1, err)
 		}
@@ -241,7 +241,6 @@ func ParseStatusContext(ctx context.Context, out []byte, r Repo) (Status, error)
 }
 
 type parser struct {
-	ctx context.Context
 	r   Repo
 	top string
 	s   Status
@@ -249,7 +248,7 @@ type parser struct {
 
 // record parses recs[i] and returns how many following records it used
 // (1 for a rename's old path).
-func (p *parser) record(recs []string, i int) (int, error) {
+func (p *parser) record(ctx context.Context, recs []string, i int) (int, error) {
 	rec := recs[i]
 	if len(rec) < 3 || rec[1] != ' ' {
 		return 0, errRecord
@@ -259,16 +258,16 @@ func (p *parser) record(recs []string, i int) (int, error) {
 	case '#':
 		return 0, p.s.Branch.header(body)
 	case '1':
-		return 0, p.changed(rec)
+		return 0, p.changed(ctx, rec)
 	case '2':
 		if i+1 >= len(recs) || recs[i+1] == "" {
 			return 0, errNoOrig
 		}
-		return 1, p.renamed(rec, recs[i+1])
+		return 1, p.renamed(ctx, rec, recs[i+1])
 	case 'u':
-		return 0, p.unmerged(rec)
+		return 0, p.unmerged(ctx, rec)
 	case '?':
-		p.add(File{Path: body, Kind: Untracked})
+		p.add(ctx, File{Path: body, Kind: Untracked})
 		return 0, nil
 	case '!':
 		return 0, nil
@@ -327,18 +326,18 @@ func fields(rec string, n int) ([]string, string, error) {
 }
 
 // changed parses a `1 ` record: 8 fields, then the path.
-func (p *parser) changed(rec string) error {
+func (p *parser) changed(ctx context.Context, rec string) error {
 	f, name, err := fields(rec, 8)
 	if err != nil {
 		return err
 	}
-	p.add(File{Path: name, Kind: ordinaryKind(f[1])})
+	p.add(ctx, File{Path: name, Kind: ordinaryKind(f[1])})
 	return nil
 }
 
 // renamed parses a `2 ` record (9 fields, then the path) whose old path
 // is orig, the next record. A copy (C score) is listed as Added.
-func (p *parser) renamed(rec, orig string) error {
+func (p *parser) renamed(ctx context.Context, rec, orig string) error {
 	f, name, err := fields(rec, 9)
 	if err != nil {
 		return err
@@ -352,17 +351,17 @@ func (p *parser) renamed(rec, orig string) error {
 	default:
 		return errRecord
 	}
-	p.add(File{Path: name, Orig: orig, Kind: kind})
+	p.add(ctx, File{Path: name, Orig: orig, Kind: kind})
 	return nil
 }
 
 // unmerged parses a `u ` record: 10 fields, then the path.
-func (p *parser) unmerged(rec string) error {
+func (p *parser) unmerged(ctx context.Context, rec string) error {
 	_, name, err := fields(rec, 10)
 	if err != nil {
 		return err
 	}
-	p.add(File{Path: name, Kind: Conflict})
+	p.add(ctx, File{Path: name, Kind: Conflict})
 	return nil
 }
 
@@ -410,14 +409,14 @@ func validPath(p string) error { return actions.ValidGitPath(p) }
 
 // add classifies f and appends it, or counts it in Dropped when its path
 // (or a rename's old path) is not local or not under the home.
-func (p *parser) add(f File) {
+func (p *parser) add(ctx context.Context, f File) {
 	rel, ok := homeRelative(f.Path, p.r.Pathspec)
 	if !ok || !local(f.Path) || (f.Orig != "" && !local(f.Orig)) {
 		p.s.Dropped++
 		return
 	}
 	f.HomeRel = rel
-	c := inspect(p.ctx, p.top, f.Path)
+	c := inspect(ctx, p.top, f.Path)
 	f.Class, f.Note = Classify(rel, c.head, c.age)
 	f.Selectable = selectable(f.Class)
 	p.restrict(&f, c)
@@ -594,25 +593,27 @@ func inspect(ctx context.Context, top, rel string) content {
 	if err != nil {
 		return unreadable
 	}
-	age, err := scanKeys(io.MultiReader(bytes.NewReader(head), ctxReader{ctx, f}))
+	age, err := scanKeys(io.MultiReader(bytes.NewReader(head), ctxReader(ctx, f)))
 	if err != nil {
 		return unreadable
 	}
 	return content{head: head, age: age}
 }
 
-// ctxReader reads r until ctx ends, then returns ctx's error.
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
+// readFunc is an io.Reader made from a function.
+type readFunc func([]byte) (int, error)
 
-// Read implements io.Reader, failing with ctx's error once ctx ends.
-func (c ctxReader) Read(b []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return c.r.Read(b)
+// Read implements io.Reader by calling f.
+func (f readFunc) Read(b []byte) (int, error) { return f(b) }
+
+// ctxReader reads r until ctx ends, then returns ctx's error.
+func ctxReader(ctx context.Context, r io.Reader) io.Reader {
+	return readFunc(func(b []byte) (int, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		return r.Read(b)
+	})
 }
 
 // parentWithin reports whether full's parent directory, resolved, lies
@@ -750,7 +751,7 @@ func readOpened(ctx context.Context, name string, limit int64, f *os.File, kind 
 		return nil, &os.PathError{Op: "read", Path: name, Err: os.ErrNotExist}
 	}
 	defer func() { _ = f.Close() }()
-	return io.ReadAll(io.LimitReader(ctxReader{ctx, f}, max(limit, 0)))
+	return io.ReadAll(io.LimitReader(ctxReader(ctx, f), max(limit, 0)))
 }
 
 // HasKeyMaterial reports whether the file named name holds an age identity
