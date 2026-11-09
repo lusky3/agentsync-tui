@@ -695,7 +695,7 @@ func TestPushMultiLineBodyEditUnderPlainKey(t *testing.T) {
 	f := open(t, home)
 	d := onlyDo(t, press(f.s, "P"))
 	if d.Action.TypedConfirm {
-		t.Errorf("a plain body edit needs a typed push: %q", d.Action.Warning)
+		t.Errorf("a plain body edit under a plain key asked for a typed push: %q", d.Action.Warning)
 	}
 }
 
@@ -1040,7 +1040,7 @@ func TestWideScanCutIsRefused(t *testing.T) {
 	cutRead(f, "-p")
 	d := onlyDo(t, press(f.s, "P"))
 	if !d.Action.TypedConfirm {
-		t.Errorf("a cut narrow scan needs no typing: %q", d.Action.Warning)
+		t.Errorf("a cut narrow scan did not ask for a typed push: %q", d.Action.Warning)
 	}
 }
 
