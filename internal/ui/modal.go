@@ -28,6 +28,8 @@ type modal struct {
 	project string       // Deps.ProjectDir, shown in project scope
 }
 
+// newModal is the confirmation for act and the chain then; a step that
+// must be typed sets the verb to type.
 func newModal(act actions.Action, scope runner.Scope, project string, then ...actions.Action) *modal {
 	m := &modal{act: act, then: then, scope: scope, project: project, input: Field{Max: maxConfirmInput}}
 	// The first step that must be typed sets the verb (for add-then-commit

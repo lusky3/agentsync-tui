@@ -111,6 +111,7 @@ func (d Deps) Limits() Timeouts {
 // timeoutError is the RunMsg.Err of a network action that hit its bound.
 type timeoutError struct{ d time.Duration }
 
+// Error says how long the action ran before its bound stopped it.
 func (e timeoutError) Error() string {
 	if e.d < time.Second {
 		return "timed out after " + e.d.String()
@@ -167,6 +168,7 @@ func limitFor(act actions.Action, t Timeouts) time.Duration {
 // a command runs (statusLine); it stops with the run.
 type elapsedTick struct{}
 
+// elapsedTickCmd ticks once a second while an action runs.
 func elapsedTickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return elapsedTick{} })
 }

@@ -62,6 +62,7 @@ type commitState struct {
 	scroll ui.Scroll
 }
 
+// newCommitState is an empty commit view with the message's byte cap.
 func newCommitState() commitState { return commitState{field: ui.Field{Max: maxMessageBytes}} }
 
 // pendingCommit is the chain handed to the shell, until its outcome.
@@ -244,6 +245,8 @@ func scanFiles(ctx context.Context, in guardInput, unborn bool, files []gitrepo.
 	return out, ""
 }
 
+// scanFile scans one selected file for the commit: an untracked file
+// whole, a tracked one by its added lines; a deletion has nothing to scan.
 func scanFile(ctx context.Context, in guardInput, unborn bool, f gitrepo.File) ([]gitrepo.Finding, string) {
 	switch f.Kind {
 	case gitrepo.Deleted:
@@ -320,6 +323,7 @@ func postImage(top, rel string) (capped, error) {
 	return c, err
 }
 
+// notScanned is the soft finding for a file the scan skipped, as kind.
 func notScanned(f gitrepo.File, kind string) gitrepo.Finding {
 	return gitrepo.Finding{Path: mask.OneLine(mask.Text(f.HomeRel)), Kind: kind}
 }
@@ -434,6 +438,8 @@ var unscannedKinds = map[string]bool{
 	gitrepo.KindNotScannedBinary: true, gitrepo.KindNotScannedLarge: true, gitrepo.KindNotScannedPatch: true,
 }
 
+// countFindings splits fs into hard findings, skipped files and soft
+// possible secrets.
 func countFindings(fs []gitrepo.Finding) counts {
 	var c counts
 	for _, f := range fs {
@@ -474,6 +480,7 @@ func (c counts) summary() string {
 	return strings.Join(parts, ", ")
 }
 
+// plural is n followed by one, with an s unless n is 1.
 func plural(n int, one string) string {
 	if n == 1 {
 		return "1 " + one
@@ -537,6 +544,8 @@ func commitOutcome(p *pendingCommit, m ui.RunMsg, ok bool) string {
 	return "commit failed (" + outcomeOf(m) + "): nothing was committed"
 }
 
+// outcomeOf is a short, display-safe reason a run failed: the error's
+// first line, else the exit code.
 func outcomeOf(m ui.RunMsg) string {
 	if m.Err != nil {
 		return mask.FirstLine(m.Err.Error())
@@ -559,6 +568,8 @@ func restoreCommand(top string, paths []string) string {
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 
+// shellQuote is s, sanitised, quoted for a POSIX shell unless it holds
+// only safe characters.
 func shellQuote(s string) string {
 	s = mask.Sanitize(s)
 	if shellSafe.MatchString(s) {

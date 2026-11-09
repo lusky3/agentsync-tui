@@ -50,6 +50,7 @@ type netState struct {
 	urlNote      string            // why the URL was refused, display-safe
 }
 
+// newNetState is the idle network state with the URL field's byte cap.
 func newNetState() netState {
 	return netState{url: ui.Field{Max: maxURLBytes}}
 }
@@ -476,6 +477,7 @@ func pushHardRefusal(n int, top string, wide bool) []string {
 	return out
 }
 
+// inspectCommand is the command that shows the outgoing commits' patches.
 func inspectCommand(top string) string {
 	return gitC + shellQuote(top) + " log -p " + outgoingRange
 }
@@ -525,6 +527,7 @@ func stopped(m ui.RunMsg) bool {
 	return errors.Is(m.Err, context.DeadlineExceeded) || errors.Is(m.Err, context.Canceled)
 }
 
+// fetchOutcome is the note after a fetch.
 func fetchOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 	switch {
 	case ok:
@@ -553,6 +556,7 @@ func pullOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 	return "pull failed (" + outcomeOf(m) + ")"
 }
 
+// pushOutcome is the note after a push.
 func pushOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 	switch {
 	case ok:

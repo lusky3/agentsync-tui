@@ -34,6 +34,7 @@ type diffMsg struct {
 	note  string
 }
 
+// diffKey scrolls the diff, or leaves it on esc.
 func (s *Screen) diffKey(k string) tea.Cmd {
 	if s.diff.scroll.Key(k, len(s.diff.lines)) {
 		return nil

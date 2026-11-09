@@ -131,6 +131,8 @@ func AgentsyncAncestor(dir string) string {
 	return ""
 }
 
+// agentsyncAbove is the nearest of dir and its ancestors that holds a
+// .agentsync entry, or "".
 func agentsyncAbove(dir string) string {
 	for {
 		if _, err := os.Lstat(filepath.Join(dir, ".agentsync")); err == nil {

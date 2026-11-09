@@ -103,6 +103,7 @@ func (s *Screen) missingHeader(home string) []string {
 		theme.Dim.Render("Keep that repository PRIVATE: the home names your servers and agents."))
 }
 
+// urlView is the clone-URL field with its note and keys.
 func (s *Screen) urlView() []string {
 	out := append(s.header(), "",
 		theme.Bold.Render("Clone an agentsync home"),

@@ -47,6 +47,8 @@ var (
 // any other value.
 type GitRepo struct{ Top string }
 
+// check refuses a toplevel that is not an absolute, clean path free of
+// control characters.
 func (r GitRepo) check() error {
 	if !filepath.IsAbs(r.Top) || filepath.Clean(r.Top) != r.Top || HasControl(r.Top) {
 		return errors.New("invalid git toplevel: not an absolute, clean path")
@@ -112,6 +114,8 @@ func InStateDir(p string) bool {
 	})
 }
 
+// checkPaths refuses an empty or oversized path list and any path
+// ValidGitPath refuses, naming the path's position.
 func checkPaths(paths []string) error {
 	if len(paths) == 0 || len(paths) > maxGitPaths {
 		return fmt.Errorf("invalid paths: need 1 to %d, got %d", maxGitPaths, len(paths))
@@ -300,6 +304,7 @@ func withPaths(title string, head, paths []string) Action {
 	return Action{Program: ProgramGit, Title: title, Argv: argv, display: disp, more: len(paths) - shown}
 }
 
+// plural is n followed by one, with an s unless n is 1.
 func plural(n int, one string) string {
 	if n == 1 {
 		return "1 " + one

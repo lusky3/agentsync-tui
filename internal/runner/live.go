@@ -98,6 +98,7 @@ func trackAs(cmd *exec.Cmd, args []string, write bool, program string) {
 	live.cmds[cmd] = &child{cmd: cmd, args: args, write: write, program: program, started: time.Now()}
 }
 
+// untrack removes cmd from the live registry once it has ended.
 func untrack(cmd *exec.Cmd) {
 	live.mu.Lock()
 	defer live.mu.Unlock()
@@ -145,6 +146,7 @@ func Live() [][]string {
 	return out
 }
 
+// snapshot copies the live children under the registry's lock.
 func snapshot() []*child {
 	live.mu.Lock()
 	defer live.mu.Unlock()
@@ -211,6 +213,8 @@ type ending struct {
 	out      []Ended
 }
 
+// newEnding starts a Shutdown's record of children: each gets a deadline
+// of start plus readWait, or writeWait for a write.
 func newEnding(children []*child, start time.Time, readWait, writeWait time.Duration) *ending {
 	deadline := make(map[*child]time.Time, len(children))
 	for _, c := range children {
@@ -290,6 +294,7 @@ func (r *ending) orphanRest(now time.Time) {
 	}
 }
 
+// record notes how child c ended and how long after the start.
 func (r *ending) record(c *child, outcome string, now time.Time) {
 	r.out = append(r.out, Ended{Args: c.args, Program: c.program, Write: c.write, Outcome: outcome, Took: now.Sub(r.start)})
 }

@@ -42,6 +42,7 @@ func resolveVersion(v string, build func() (*debug.BuildInfo, bool)) string {
 	return v
 }
 
+// main runs the TUI and exits with run's status.
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -76,6 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runWith(args, stdout, stderr, defaultHooks)
 }
 
+// runWith is run with the process hooks supplied (tests replace them).
 func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	o, exit, ok := parseOptions(args, stderr)
 	if !ok {
@@ -241,12 +243,14 @@ type lastSignal struct {
 	sig os.Signal
 }
 
+// note records s as the last signal.
 func (l *lastSignal) note(s os.Signal) {
 	l.mu.Lock()
 	l.sig = s
 	l.mu.Unlock()
 }
 
+// get is the last signal noted, or nil.
 func (l *lastSignal) get() os.Signal {
 	l.mu.Lock()
 	defer l.mu.Unlock()

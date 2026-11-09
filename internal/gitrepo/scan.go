@@ -351,6 +351,8 @@ func looseFragments(s string) []string {
 // Proxy-Authorization, Cookie, Set-Cookie, X-Api-Key and any *-Api-Key.
 var authKeyRe = regexp.MustCompile(`^(?:(?:proxy-)?authorization|(?:set-)?cookie|(?:[a-z0-9]+-)*api-key)$`)
 
+// authKey reports a pair whose last key part names an authorization
+// header (authKeyRe).
 func authKey(p kv) bool { return authKeyRe.MatchString(strings.ToLower(p.lastKey())) }
 
 // authLiteral reports a header pair whose value, unquoted and after an
@@ -405,6 +407,7 @@ func multiLineOpener(pairs []kv) (found, auth bool) {
 	return found, false
 }
 
+// opensMultiLine reports a value that opens a multi-line string.
 func opensMultiLine(v string) bool { return openedDelim(strings.TrimSpace(v)) != "" }
 
 var (
@@ -429,6 +432,7 @@ func tokenWord(w string) bool {
 	return !mask.IsRef(w) && mask.TokenShaped(w)
 }
 
+// hasTokenWord reports whether any word of s is token-shaped.
 func hasTokenWord(s string) bool {
 	for _, w := range wordRe.FindAllString(s, -1) {
 		if tokenWord(w) {

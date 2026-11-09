@@ -68,6 +68,8 @@ func (s *Screen) isGit() bool {
 	return s.loaded && s.repo.Manager == gitrepo.Git && s.repo.Top != ""
 }
 
+// listView is the file list under the repository heading, with the
+// findings, notes and keys below it.
 func (s *Screen) listView() []string {
 	header := s.header()
 	var rows []string
@@ -133,6 +135,8 @@ func (s *Screen) header() []string {
 	return s.gitHeader()
 }
 
+// gitHeader is the repository, home, branch and upstream lines, and any
+// refusal.
 func (s *Screen) gitHeader() []string {
 	r, b := s.repo, s.status.Branch
 	out := []string{
@@ -148,6 +152,7 @@ func (s *Screen) gitHeader() []string {
 	return out
 }
 
+// branchText describes the branch: its name (masked), detached or unborn.
 func branchText(b gitrepo.Branch) string {
 	head := mask.Text(b.Head)
 	switch {
@@ -159,6 +164,7 @@ func branchText(b gitrepo.Branch) string {
 	return head
 }
 
+// upstreamText describes the upstream and how far ahead and behind it is.
 func upstreamText(b gitrepo.Branch) string {
 	if b.Upstream == "" {
 		return "no upstream"
@@ -207,6 +213,8 @@ func (s *Screen) rows() []string {
 	return out
 }
 
+// row is one file's line: its selection box, kind, path (and a rename's
+// old path), class and note.
 func (s *Screen) row(f gitrepo.File) string {
 	box := " - "
 	if f.Selectable {
@@ -268,6 +276,8 @@ func (s *Screen) findingLines(room int) []string {
 	return out
 }
 
+// findingLine is one finding: its file:line, severity, kind and masked
+// text.
 func findingLine(f gitrepo.Finding) string {
 	loc := f.Path
 	if f.Line > 0 {
@@ -284,6 +294,7 @@ func findingLine(f gitrepo.Finding) string {
 	return l
 }
 
+// diffView is the diff pane: its title, the masked patch and its keys.
 func (s *Screen) diffView() []string {
 	d := &s.diff
 	header := []string{theme.Bold.Render("diff: " + d.title)}
@@ -341,6 +352,7 @@ func (s *Screen) commitBody() []string {
 	return append(out, s.findingLines(math.MaxInt)...)
 }
 
+// joinNote joins two notes with "; ", either of which may be empty.
 func joinNote(a, b string) string {
 	if a == "" {
 		return b

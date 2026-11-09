@@ -426,4 +426,5 @@ func urlHost(u string) (host string, userinfo bool) {
 	return normHost(left), false
 }
 
+// normHost is a host name lower-cased without a trailing dot.
 func normHost(h string) string { return strings.TrimSuffix(strings.ToLower(h), ".") }

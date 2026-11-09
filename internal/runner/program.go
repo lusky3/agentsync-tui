@@ -13,6 +13,7 @@ import (
 // MissingError is returned by Program.Run when its binary is not installed.
 type MissingError struct{ Name string }
 
+// Error names the program that is not installed.
 func (e *MissingError) Error() string { return e.Name + " is not installed" }
 
 // Program is a Runner for a helper CLI other than agentsync: git (D1) and,

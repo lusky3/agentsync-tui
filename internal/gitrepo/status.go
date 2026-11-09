@@ -54,6 +54,7 @@ const (
 
 var kindNames = [...]string{"modified", "added", "deleted", "renamed", "untracked", "conflict", "type changed"}
 
+// String is the kind's name.
 func (k Kind) String() string {
 	if k < 0 || int(k) >= len(kindNames) {
 		return "unknown"
@@ -85,6 +86,7 @@ const (
 
 var classNames = [...]string{"owned", "other", "state", "sensitive", "vault", "unusual"}
 
+// String is the class's name.
 func (c Class) String() string {
 	if c < 0 || int(c) >= len(classNames) {
 		return "unknown"
@@ -466,6 +468,7 @@ func pathIssue(p string, special bool) string {
 	return ""
 }
 
+// joinNote joins two notes with "; ", either of which may be empty.
 func joinNote(a, b string) string {
 	if a == "" {
 		return b
@@ -473,6 +476,8 @@ func joinNote(a, b string) string {
 	return a + "; " + b
 }
 
+// selectable reports whether a file of class c may be selected for a
+// commit.
 func selectable(c Class) bool {
 	return c == Owned || c == Other || c == Vault
 }
@@ -602,6 +607,7 @@ type ctxReader struct {
 	r   io.Reader
 }
 
+// Read implements io.Reader, failing with ctx's error once ctx ends.
 func (c ctxReader) Read(b []byte) (int, error) {
 	if err := c.ctx.Err(); err != nil {
 		return 0, err

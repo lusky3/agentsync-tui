@@ -342,6 +342,7 @@ func SensitiveKey(k string) bool {
 	return sensitiveRe.MatchString(k)
 }
 
+// secretKey reports a key whose value is a secret (SensitiveKey).
 func secretKey(k string) bool { return SensitiveKey(k) }
 
 // walk masks a decoded JSON tree. Under a secret-bearing key every scalar

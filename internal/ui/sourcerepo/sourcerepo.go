@@ -357,6 +357,7 @@ func (s *Screen) keyPress(k tea.KeyPressMsg) tea.Cmd {
 	return s.listKey(k.String())
 }
 
+// listKey handles a key in the file list.
 func (s *Screen) listKey(k string) tea.Cmd {
 	if s.list.Key(k, len(s.status.Files)) {
 		return nil
@@ -390,6 +391,8 @@ func (s *Screen) current() (gitrepo.File, bool) {
 	return s.status.Files[s.list.Cursor], true
 }
 
+// toggle flips the selection of the file under the cursor, or says why
+// it cannot be selected.
 func (s *Screen) toggle() {
 	if why := s.writeBlocked(); why != "" {
 		s.note = why

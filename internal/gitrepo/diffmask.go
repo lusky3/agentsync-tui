@@ -246,6 +246,9 @@ func maskVisible(v string, nested bool) string {
 	return lead + maskVisibleTrimmed(t, nested) + trail
 }
 
+// maskVisibleTrimmed is maskVisible for a value already trimmed of
+// surrounding space: containers are masked element by element, a scalar
+// only when it is a credential, not plain or (nested) token-shaped.
 func maskVisibleTrimmed(t string, nested bool) string {
 	switch {
 	case container(t, '{', '}'):
@@ -357,6 +360,8 @@ func maskValue(v string) string {
 	return lead + maskTrimmed(t) + trail
 }
 
+// maskTrimmed masks a trimmed value through mask.Value: a quoted string's
+// contents, every element of an array or inline table, else the scalar.
 func maskTrimmed(t string) string {
 	switch {
 	case quotedString(t):

@@ -389,6 +389,7 @@ func InspectGitDir(gitDir string) GitDirState {
 	return s
 }
 
+// exists reports whether p exists, without following a final symlink.
 func exists(p string) bool {
 	_, err := os.Lstat(p)
 	return err == nil

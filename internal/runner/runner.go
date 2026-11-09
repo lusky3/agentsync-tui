@@ -90,6 +90,8 @@ type capWriter struct {
 	truncated bool
 }
 
+// Write keeps what fits in the cap and drops the rest, noting the cut; it
+// always reports the whole of p written.
 func (w *capWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	if room := w.n - w.buf.Len(); n > room {
@@ -135,6 +137,8 @@ func ScopeUnaware(args []string) bool {
 	return false
 }
 
+// scopeArgs are the scope flags appended to args: --project <dir> or
+// --scope user, none for a scope-unaware command.
 func (e *Exec) scopeArgs(args []string) []string {
 	if ScopeUnaware(args) {
 		return nil
