@@ -85,6 +85,13 @@ func trackedHome(t *testing.T, dir string) string {
 // open starts the TUI and moves to the last tab (Source repo).
 func open(t *testing.T, env *testenv.Env) *harness {
 	t.Helper()
+	return openTab(t, env, "the Source repo tab", func(f string) bool { return strings.Contains(f, "repo: ") })
+}
+
+// openTab is open that waits on ready, described as what, once on the
+// Source repo tab.
+func openTab(t *testing.T, env *testenv.Env, what string, ready func(string) bool) *harness {
+	t.Helper()
 	ex := runner.NewExec("agentsync", runner.ScopeUser, "")
 	ex.Env = env.Env
 	git := runner.NewGit("git")
@@ -107,7 +114,7 @@ func open(t *testing.T, env *testenv.Env) *harness {
 	})
 	h.wait("first tab", func(string) bool { return true })
 	h.tm.Send(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	h.wait("the Source repo tab", func(f string) bool { return strings.Contains(f, "repo: ") })
+	h.wait(what, ready)
 	return h
 }
 
