@@ -57,6 +57,9 @@ type commitState struct {
 	busy     bool   // a guard round is running
 	refusal  []string
 	findings []gitrepo.Finding // masked by the scan
+	// scroll is the viewport over the notes, refusal and findings below
+	// the message, so the key guidance stays on screen.
+	scroll ui.Scroll
 }
 
 func newCommitState() commitState { return commitState{field: ui.Field{Max: maxMessageBytes}} }
@@ -114,6 +117,9 @@ func (s *Screen) commitKey(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "enter":
 		return s.submit()
+	case "up", "down", "pgup", "pgdown":
+		s.commit.scroll.Key(k.String(), len(s.commitBody()))
+		return nil
 	}
 	if s.commit.busy {
 		return nil
@@ -140,6 +146,7 @@ func (s *Screen) submit() tea.Cmd {
 		return nil
 	}
 	s.commit.busy, s.commit.refusal, s.commit.findings = true, nil, nil
+	s.commit.scroll = ui.Scroll{}
 	gen, ctx := s.guards.Next(s.base)
 	in := guardInput{repo: s.repo, run: s.run, git: s.git, limit: s.limit, selected: selected, msg: msg}
 	return func() tea.Msg { return runGuards(ctx, gen, in) }

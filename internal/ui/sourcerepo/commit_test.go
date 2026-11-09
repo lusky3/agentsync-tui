@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -942,5 +943,70 @@ func TestCommitVisibleKeyOutsideEnvTableSoft(t *testing.T) {
 	d := onlyDo(t, commit(f.s, commitMsg))
 	if !d.Then[0].TypedConfirm {
 		t.Errorf("want a typed commit: %q", d.Then[0].Warning)
+	}
+}
+
+// manyLines is n lines "K<i> = <value>" for a TOML env table.
+func manyLines(n int, value string) string {
+	var b strings.Builder
+	for i := range n {
+		b.WriteString("K" + strconv.Itoa(i) + " = \"" + value + "\"\n")
+	}
+	return b.String()
+}
+
+// TestCommitFindingsScrollKeepKeys: on a 24-row terminal, 25 hard findings
+// do not push the key guidance off the screen; up/down and pgup/pgdown
+// scroll the refusal and findings, and the last finding line is reachable.
+func TestCommitFindingsScrollKeepKeys(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, tomlX, baseTOML+"[env]\n"+manyLines(25, ghpToken))
+	f := open(t, home)
+	f.s.Update(tea.WindowSizeMsg{Width: wideView, Height: 24})
+	if out := commit(f.s, commitMsg); len(out) != 0 {
+		t.Fatalf("emitted %v", out)
+	}
+	lines := strings.Split(view(f.s), "\n")
+	if len(lines) > 24 {
+		t.Errorf("view is %d lines on a 24-row terminal", len(lines))
+	}
+	if last := lines[len(lines)-1]; !strings.Contains(strings.Join(lines[max(len(lines)-2, 0):], " "), "enter check and commit") || !strings.Contains(last, "scroll") {
+		t.Errorf("key guidance not at the bottom:\n%s", strings.Join(lines, "\n"))
+	}
+	if v := view(f.s); strings.Contains(v, "5 more") {
+		t.Fatalf("the end of the list shows before scrolling:\n%s", v)
+	}
+	press(f.s, "pgdown", "pgdown", "pgdown")
+	if v := view(f.s); !strings.Contains(v, "5 more") || strings.Contains(v, ghpToken) {
+		t.Errorf("pgdown did not reach the end of the findings:\n%s", v)
+	}
+	press(f.s, "pgup", "pgup", "pgup", "up")
+	if v := view(f.s); !strings.Contains(v, "refused") {
+		t.Errorf("pgup did not return to the refusal:\n%s", v)
+	}
+	if f.s.commit.field.Value != commitMsg {
+		t.Errorf("scroll keys edited the message: %q", f.s.commit.field.Value)
+	}
+}
+
+// TestListFindingsFitTheScreen: soft findings listed under the files after
+// a typed commit is offered are cut to fit, so the keys stay visible.
+func TestListFindingsFitTheScreen(t *testing.T) {
+	home := newRepo(t)
+	var b strings.Builder
+	b.WriteString("# a\n")
+	for i := range 25 {
+		b.WriteString("id " + strconv.Itoa(i) + " is " + opaqueWord + strconv.Itoa(i) + "\n")
+	}
+	write(t, home, skillA, b.String())
+	f := open(t, home)
+	f.s.Update(tea.WindowSizeMsg{Width: wideView, Height: 24})
+	onlyDo(t, commit(f.s, commitMsg))
+	lines := strings.Split(view(f.s), "\n")
+	if len(lines) > 24 || !strings.Contains(lines[len(lines)-1], "home/end") {
+		t.Errorf("list view (%d lines) lost its keys:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if v := view(f.s); !strings.Contains(v, "more") {
+		t.Errorf("no count of the findings cut:\n%s", v)
 	}
 }

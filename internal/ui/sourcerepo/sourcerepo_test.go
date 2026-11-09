@@ -146,6 +146,7 @@ func drive(s *Screen, cmd tea.Cmd) []tea.Msg {
 var namedKeys = map[string]rune{
 	"esc": tea.KeyEscape, "enter": tea.KeyEnter, "up": tea.KeyUp, "down": tea.KeyDown,
 	"backspace": tea.KeyBackspace, "home": tea.KeyHome, "end": tea.KeyEnd, "tab": tea.KeyTab,
+	"pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown,
 }
 
 func key(s string) tea.KeyPressMsg {

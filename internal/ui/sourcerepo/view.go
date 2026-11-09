@@ -2,6 +2,7 @@ package sourcerepo
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -21,6 +22,9 @@ const (
 	initKeys    = "i clone from a URL • r refresh"
 	diffKeys    = "esc back • " + ui.ScrollKeys
 	commitKeys  = "enter check and commit • esc back • ctrl+u clear"
+	// commitScrollKeys scroll the refusal and findings in the commit view;
+	// j/k and space type into the message there.
+	commitScrollKeys = "↑/↓ pgup/pgdown scroll"
 	// maxFindings is how many findings the pane lists.
 	maxFindings = 20
 	stateWarn   = ".state/ is not ignored: add .state/ (no leading slash: it matches at any depth, skills/.state/ too) to .gitignore"
@@ -78,12 +82,19 @@ func (s *Screen) listView() []string {
 	case s.initBlocked() == "":
 		keys = initKeys
 	}
-	footer := s.findingLines()
+	var rest []string
 	if s.netBusy {
-		footer = append(footer, theme.Dim.Render(checkingNet))
+		rest = append(rest, theme.Dim.Render(checkingNet))
 	}
-	footer = append(footer, s.noteLines()...)
-	footer = append(footer, ui.KeyLines(keys, s.width)...)
+	rest = append(rest, s.noteLines()...)
+	rest = append(rest, ui.KeyLines(keys, s.width)...)
+	room := math.MaxInt
+	if s.height > 0 {
+		// One row of the list stays (frame keeps it); the findings get
+		// what the header, that row and the rest of the footer leave.
+		room = s.height - len(header) - 1 - len(rest)
+	}
+	footer := append(s.findingLines(room), rest...)
 	return s.list.Frame(header, rows, footer, s.height)
 }
 
@@ -232,8 +243,10 @@ func (s *Screen) noteLines() []string {
 }
 
 // findingLines lists the last scan's findings (masked by the scan): the
-// pre-push scan's when it found any, else the pre-commit scan's.
-func (s *Screen) findingLines() []string {
+// pre-push scan's when it found any, else the pre-commit scan's. At most
+// maxFindings are listed, fewer when the list would not fit in room lines
+// (the heading and a "… N more" line included).
+func (s *Screen) findingLines(room int) []string {
 	fs := s.commit.findings
 	if len(s.pushFindings) > 0 {
 		fs = s.pushFindings
@@ -241,12 +254,16 @@ func (s *Screen) findingLines() []string {
 	if len(fs) == 0 {
 		return nil
 	}
+	n := min(len(fs), maxFindings)
+	if n < len(fs) || 1+n > room {
+		n = min(n, max(room-2, 0))
+	}
 	out := []string{theme.Bold.Render(countFindings(fs).summary() + " (file:line, masked):")}
-	for _, f := range fs[:min(len(fs), maxFindings)] {
+	for _, f := range fs[:n] {
 		out = append(out, "  "+findingLine(f))
 	}
-	if n := len(fs) - maxFindings; n > 0 {
-		out = append(out, theme.Dim.Render("  … "+strconv.Itoa(n)+" more"))
+	if more := len(fs) - n; more > 0 {
+		out = append(out, theme.Dim.Render("  … "+strconv.Itoa(more)+" more"))
 	}
 	return out
 }
@@ -287,11 +304,27 @@ func (s *Screen) diffView() []string {
 	return d.scroll.Frame(header, body, ui.KeyLines(diffKeys, s.width), s.height)
 }
 
+// commitView is the message field over a scrolling body (commitBody) and
+// the key guidance, which always fits.
 func (s *Screen) commitView() []string {
 	c := &s.commit
-	out := append(s.header(), "",
+	header := append(s.header(), "",
 		theme.Bold.Render("Commit "+strconv.Itoa(len(s.selectedPaths()))+" selected file(s)"),
 		"message: "+mask.Text(c.field.Value)+"▏")
+	body := s.commitBody()
+	keys := commitKeys
+	if len(body) > 0 {
+		keys += " • " + commitScrollKeys
+	}
+	return c.scroll.Frame(header, body, ui.KeyLines(keys, s.width), s.height)
+}
+
+// commitBody is what the commit view shows below the message: the
+// message's refusal, the guard round's progress, its refusal and the
+// findings.
+func (s *Screen) commitBody() []string {
+	c := &s.commit
+	var out []string
 	if c.msgNote != "" {
 		out = append(out, theme.Bad.Render(mask.Sanitize(c.msgNote)))
 	}
@@ -305,8 +338,7 @@ func (s *Screen) commitView() []string {
 		}
 		out = append(out, l)
 	}
-	out = append(out, s.findingLines()...)
-	return append(out, ui.KeyLines(commitKeys, s.width)...)
+	return append(out, s.findingLines(math.MaxInt)...)
 }
 
 func joinNote(a, b string) string {
