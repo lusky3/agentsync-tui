@@ -13,10 +13,12 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui/reconcile"
 	"github.com/lusky3/agentsync-tui/internal/ui/secrets"
 	"github.com/lusky3/agentsync-tui/internal/ui/servers"
+	"github.com/lusky3/agentsync-tui/internal/ui/sourcerepo"
 )
 
-// Screens returns every screen in tab order (15 tabs). Digits 1-9 jump to the
-// first nine; tab and shift+tab reach the rest.
+// Screens returns every screen in tab order (16 tabs). Digits 1-9 jump to the
+// first nine; tab and shift+tab reach the rest. Source repo stays last, so
+// shift+tab from the first tab reaches it.
 func Screens(d ui.Deps) []ui.Screen {
 	return []ui.Screen{
 		servers.New(d),
@@ -34,5 +36,6 @@ func Screens(d ui.Deps) []ui.Screen {
 		library.New(d, library.LSP),
 		library.New(d, library.Memory),
 		health.New(d),
+		sourcerepo.New(d),
 	}
 }

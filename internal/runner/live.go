@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,15 @@ var live struct {
 	mu     sync.Mutex
 	cmds   map[*exec.Cmd]*child
 	killed map[*child]time.Time
+	// starting is read-held by runCore from just before Start until the
+	// child is tracked. The child runs (and can be seen running) before
+	// Start returns, so without it a Shutdown or KillAll that takes its
+	// snapshot in between would miss a child that is already running and
+	// leave it behind. Shutdown and KillAll hold it for their snapshot.
+	starting sync.RWMutex
+	// closed is set once Shutdown or KillAll has begun and stays set for
+	// the rest of the process: runCore then starts no new child.
+	closed atomic.Bool
 }
 
 // escalated is set by KillAll during a Shutdown, which then kills at once;
@@ -49,10 +59,16 @@ var live struct {
 // before any Shutdown, does not shorten a later one.
 var escalated atomic.Bool
 
-// markKilled notes that c's group was sent SIGKILL.
-func markKilled(c *child) {
+// killGroup sends SIGKILL to c's group and, if it was sent, marks c as
+// killed. Both happen under live.mu, so a Shutdown that sees the group gone
+// and then asks killedAt cannot fall between the kill and its mark and
+// report a killed child as exited. A group already gone exited on its own.
+func killGroup(c *child) {
 	live.mu.Lock()
 	defer live.mu.Unlock()
+	if signalGroup(c.cmd, os.Kill) != nil {
+		return
+	}
 	if live.killed == nil {
 		live.killed = map[*child]time.Time{}
 	}
@@ -82,6 +98,7 @@ func trackAs(cmd *exec.Cmd, args []string, write bool, program string) {
 	live.cmds[cmd] = &child{cmd: cmd, args: args, write: write, program: program, started: time.Now()}
 }
 
+// untrack removes cmd from the live registry once it has ended.
 func untrack(cmd *exec.Cmd) {
 	live.mu.Lock()
 	defer live.mu.Unlock()
@@ -103,6 +120,33 @@ func forgetKilled(done []*child) {
 	}
 }
 
+// startedSnapshot is snapshot once no Run is between Start and track:
+// every child started before it is in it. With the registry closed no new
+// start begins, so this waits only for those in progress, and only until a
+// KillAll escalates: exec can hang (a dead mount), and the escape must not.
+func startedSnapshot() []*child {
+	for !live.starting.TryLock() {
+		if escalated.Load() {
+			return snapshot()
+		}
+		time.Sleep(time.Millisecond)
+	}
+	defer live.starting.Unlock()
+	return snapshot()
+}
+
+// Live reports the argv of every child still running, as copies the
+// caller may change. Tests use it to check that nothing was left behind
+// without ending the registry, as a Shutdown would.
+func Live() [][]string {
+	var out [][]string
+	for _, c := range snapshot() {
+		out = append(out, slices.Clone(c.args))
+	}
+	return out
+}
+
+// snapshot copies the live children under the registry's lock.
 func snapshot() []*child {
 	live.mu.Lock()
 	defer live.mu.Unlock()
@@ -140,9 +184,10 @@ const killGrace = 2 * time.Second
 // SIGINT cannot outlive the TUI. A KillAll meanwhile ends the waits at
 // once. Nothing happens when no child is live.
 func Shutdown(sig os.Signal, readWait, writeWait time.Duration) []Ended {
-	escalated.Store(false) // escalation is scoped to this call
-	forgetKilled(nil)      // marks of children already reaped are stale
-	children := snapshot()
+	escalated.Store(false)  // escalation is scoped to this call
+	live.closed.Store(true) // nothing new starts from here on
+	forgetKilled(nil)       // marks of children already reaped are stale
+	children := startedSnapshot()
 	if len(children) == 0 {
 		return nil
 	}
@@ -168,6 +213,8 @@ type ending struct {
 	out      []Ended
 }
 
+// newEnding starts a Shutdown's record of children: each gets a deadline
+// of start plus readWait, or writeWait for a write.
 func newEnding(children []*child, start time.Time, readWait, writeWait time.Duration) *ending {
 	deadline := make(map[*child]time.Time, len(children))
 	for _, c := range children {
@@ -234,9 +281,7 @@ func (r *ending) killIfDue(c *child, now time.Time) {
 	if !escalated.Load() && now.Before(r.deadline[c]) {
 		return
 	}
-	if signalGroup(c.cmd, os.Kill) == nil {
-		markKilled(c)
-	}
+	killGroup(c)
 }
 
 // orphanRest records every child not gone as orphaned: even SIGKILL did not
@@ -249,18 +294,19 @@ func (r *ending) orphanRest(now time.Time) {
 	}
 }
 
+// record notes how child c ended and how long after the start.
 func (r *ending) record(c *child, outcome string, now time.Time) {
 	r.out = append(r.out, Ended{Args: c.args, Program: c.program, Write: c.write, Outcome: outcome, Took: now.Sub(r.start)})
 }
 
 // KillAll sends SIGKILL to every live child's process group at once and
 // makes a Shutdown in progress stop waiting: the second ctrl+c or SIGTERM
-// while the TUI is already going away.
+// while the TUI is already going away. Nothing new starts after it. It is
+// best effort and never waits for a start in progress, which may hang.
 func KillAll() {
 	escalated.Store(true)
+	live.closed.Store(true)
 	for _, c := range snapshot() {
-		if signalGroup(c.cmd, os.Kill) == nil { // a group already gone exited on its own
-			markKilled(c)
-		}
+		killGroup(c)
 	}
 }

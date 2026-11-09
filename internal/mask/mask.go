@@ -25,6 +25,13 @@ const refPat = `\$\{(?:secret:|env:)?[A-Za-z_][A-Za-z0-9_.\-]*\}`
 // The key must not sit inside a reference: "${secret:NAME}" is not a pair.
 const secretKeyPat = `(?:^|[^{]|[^$]\{)(?:token|secret|password|passwd|pwd|api[-_]?key|credential|private[-_]?key|access[-_]?key)`
 
+// headerSep follows a header name: an optional closing quote of a quoted
+// key, then ':' (a header line, JSON) or '=' (TOML), then any run of
+// blanks and opening quotes. A backtick (Markdown code), a TOML triple
+// quote or a quote nested in the value is neither part of the value nor
+// stops the scheme from being recognised.
+const headerSep = `["']?\s*[:=]\s*["'` + "`" + `\s]*`
+
 // wordKeyPat matches keys that are secrets only as whole words: "auth" and
 // "pat" (personal access token), so AUTH=, github_pat= and PAT: are masked
 // while oauth=, compat= and path= are not.
@@ -52,6 +59,11 @@ type rule struct {
 func kvRules(keyPat string) []rule {
 	return []rule{
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*)(\$\{[^}\s]*\}(?:\$\{[^}\s]*\}|[^\s"',;)}\]])*|(?:[^\s"'$]|\$[^{\s])[^\s]*)`), bare: true, kind: KindSecretAssignment},
+		// TOML multi-line strings: the value runs to the closing quotes or,
+		// on an opener line, to the end of the line. One or two quotes
+		// inside the value (TOML allows them) do not end it.
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*""")((?:\\.|"{1,2}(?:\\.|[^"\\\n])|[^"\\\n])+)`), kind: KindSecretAssignment},
+		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*''')((?:'{1,2}[^'\n]|[^'\n])+)`), kind: KindSecretAssignment},
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*")((?:\\.|[^"\\\n])+)"`), kind: KindSecretAssignment},
 		{re: regexp.MustCompile(`(?i)(` + keyPat + `["']?[ \t]*[:=][ \t]*')((?:\\.|[^'\\\n])+)'`), kind: KindSecretAssignment},
 	}
@@ -64,12 +76,28 @@ var (
 	// Each Text rule keeps group 1 and masks group 2 unless
 	// that group consists only of references.
 	textRules = append([]rule{
-		// Authorization-style headers with any scheme.
-		{re: regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["']?\s*:\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"']+)`), kind: KindAuthHeader},
-		{re: regexp.MustCompile(`(?i)(\bx-api-key["']?\s*:\s*["']?)([^\s"']+)`), kind: KindAuthHeader},
+		// Authorization-style headers with any scheme, as a header line
+		// ("Name: value") or a TOML/JSON pair ("Name" = "value"). The
+		// header rules have no left word boundary: a name glued to what
+		// precedes it ("{0Authorization = ...", "x_Cookie: ...") is still
+		// read, which masks more, never less. The first rule is for a
+		// scheme the second does not know (ApiKey, SSWS, Negotiate): it
+		// masks the word after the scheme and the second rule the scheme
+		// word itself, so no half of "<scheme> <secret>" stays visible.
+		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization` + headerSep + `[a-z][a-z0-9._~+/\-]*[ \t]+["'` + "`" + `]*)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization` + headerSep + `(?:(?:bearer|basic|token|digest)\s+["'` + "`" + `]*)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:[a-z0-9]+-)*api-key` + headerSep + `)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// Cookie headers: the whole cookie string is the secret.
-		{re: regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*:\s*["']?)([^\n"']+)`), kind: KindAuthHeader},
-		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"']+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:set-)?cookie` + headerSep + `)([^\s"'` + "`" + `][^\n"'` + "`" + `]*)`), kind: KindAuthHeader},
+		// The header-line rules as they were before the pair form: with
+		// one optional quote, a run of quotes around a reference makes
+		// them read a scheme word or a blank as the value. Kept so that
+		// what was a finding still is one; on the lines above they only
+		// re-mask a Mask.
+		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization["']?\s*:\s*["'` + "`" + `]?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(x-api-key["']?\s*:\s*["'` + "`" + `]?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:set-)?cookie["']?\s*:\s*["'` + "`" + `]?)([^\n"'` + "`" + `]+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)(\bBearer\s+)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// userinfo in URLs.
 		{re: regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)([^/\s@"']+)@`), kind: KindURLUserinfo},
 		// credential-looking query parameters.
@@ -86,6 +114,7 @@ var (
 		regexp.MustCompile(`xox[a-z]-[^\s"']+`),
 		regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 		regexp.MustCompile(`eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*`),
+		regexp.MustCompile(privateKeyPat),
 	}
 
 	schemeOnlyRe = regexp.MustCompile(`^\s*(?i:bearer|basic|token)?\s*[:\s]*$`)
@@ -98,6 +127,22 @@ var (
 // ${env:NAME} or ${NAME}.
 func IsRef(s string) bool { return wholeRef.MatchString(strings.TrimSpace(s)) }
 
+// textRefRe is a reference as the Text and Credential rules read one: an
+// agentsync reference, or an unbraced shell variable whose name is upper
+// case ($GITHUB_TOKEN, as docs and shell snippets write it). A lower-case
+// $word is not one: it is too easily the start of a literal password.
+var textRefRe = regexp.MustCompile(refPat + `|\$[A-Z_][A-Z0-9_]*\b`)
+
+// textRefsOnly is onlyRefs for the Text and Credential rules: shell
+// variables count as references, and backticks (template quoting) and ':'
+// separators may surround them.
+func textRefsOnly(s string) bool {
+	if !textRefRe.MatchString(s) {
+		return false
+	}
+	return strings.Trim(textRefRe.ReplaceAllString(s, ""), " \t:`") == ""
+}
+
 // onlyRefs: s holds at least one reference and nothing else but whitespace
 // and ':' separators (e.g. ${U}:${P}).
 func onlyRefs(s string) bool {
@@ -108,19 +153,23 @@ func onlyRefs(s string) bool {
 	return strings.Trim(rest, " \t:") == ""
 }
 
-// Value returns a configuration value for display. References pass through,
-// literal text containing a reference stays visible apart from token-shaped
-// secrets, and everything else becomes Mask. The decision never depends on
+// Value returns a configuration value for display. References pass through
+// (by the Text rule: ${...}, an upper-case $NAME, backtick-quoted; a token
+// shape in a reference's name is masked), a value
+// that is only an auth scheme and references stays visible apart from
+// token-shaped secrets, and everything else becomes Mask. The decision never depends on
 // the key the value belongs to, so an unrecognised key cannot leak a value.
 func Value(val string) string {
 	if strings.TrimSpace(val) == "" {
 		return Sanitize(val)
 	}
 	val = Sanitize(val)
-	if onlyRefs(val) {
-		return val
+	if textRefsOnly(val) {
+		// A reference stays, but not a token shape in its name.
+		return scrubShapes(val)
 	}
-	if refRe.MatchString(val) && schemeOnlyRe.MatchString(refRe.ReplaceAllString(val, "")) {
+	rest := strings.ReplaceAll(textRefRe.ReplaceAllString(val, ""), "`", "")
+	if textRefRe.MatchString(val) && schemeOnlyRe.MatchString(rest) {
 		return Text(val)
 	}
 	return Mask
@@ -138,21 +187,22 @@ func Text(s string) string {
 		s = re.ReplaceAllStringFunc(s, func(m string) string {
 			sub := re.FindStringSubmatch(m)
 			secret := sub[2]
-			if onlyRefs(secret) {
+			if !literal(secret, r.bare) {
 				return m
 			}
 			tail := ""
 			if r.bare {
 				// Trailing closers belong to the surrounding text.
-				keep := strings.TrimRight(secret, `,;)}]"'`)
-				if keep == "" {
-					return m
-				}
-				tail = secret[len(keep):]
+				tail = secret[len(strings.TrimRight(secret, closers)):]
 			}
 			return sub[1] + Mask + tail + m[len(sub[1])+len(secret):]
 		})
 	}
+	return scrubShapes(s)
+}
+
+// scrubShapes masks every known token shape in s (shapeRes).
+func scrubShapes(s string) string {
 	for _, re := range shapeRes {
 		s = re.ReplaceAllString(s, Mask)
 	}
@@ -292,6 +342,7 @@ func SensitiveKey(k string) bool {
 	return sensitiveRe.MatchString(k)
 }
 
+// secretKey reports a key whose value is a secret (SensitiveKey).
 func secretKey(k string) bool { return SensitiveKey(k) }
 
 // walk masks a decoded JSON tree. Under a secret-bearing key every scalar

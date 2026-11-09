@@ -22,7 +22,7 @@ import (
 // remote names and clone URLs are refused before an Action exists. None of
 // these builders can emit --force, --no-verify, -a, --amend, a forced or
 // wildcard refspec or a subcommand outside add, commit, fetch, pull and
-// push (D6, D11); push's only refspec is refs/heads/<b>:refs/heads/<b>.
+// push (D6, D11); push's only refspec is <object id>:refs/heads/<b>.
 
 // Limits on what the git builders accept.
 const (
@@ -33,6 +33,7 @@ const (
 	maxBranchBytes  = 255
 	// displayPaths is how many paths Display lists before "… (+N more)".
 	displayPaths = 10
+	sshScheme    = "ssh://"
 )
 
 var (
@@ -46,8 +47,10 @@ var (
 // any other value.
 type GitRepo struct{ Top string }
 
+// check refuses a toplevel that is not an absolute, clean path free of
+// control characters.
 func (r GitRepo) check() error {
-	if !filepath.IsAbs(r.Top) || filepath.Clean(r.Top) != r.Top || hasControl(r.Top) {
+	if !filepath.IsAbs(r.Top) || filepath.Clean(r.Top) != r.Top || HasControl(r.Top) {
 		return errors.New("invalid git toplevel: not an absolute, clean path")
 	}
 	return nil
@@ -58,9 +61,9 @@ func (r GitRepo) head(words ...string) []string {
 	return append([]string{"-C", r.Top}, words...)
 }
 
-// hasControl reports control (including \n and \t) or format characters,
+// HasControl reports control (including \n and \t) or format characters,
 // or invalid UTF-8.
-func hasControl(s string) bool {
+func HasControl(s string) bool {
 	if !utf8.ValidString(s) || mask.Sanitize(s) != s {
 		return true
 	}
@@ -88,7 +91,7 @@ func ValidGitPath(p string) error {
 		return errors.New("invalid path: empty")
 	case len(p) > maxGitPathBytes:
 		return errors.New("invalid path: too long")
-	case strings.IndexByte(p, 0) >= 0, hasControl(p):
+	case strings.IndexByte(p, 0) >= 0, HasControl(p):
 		return errors.New("invalid path: control or format character, or invalid UTF-8")
 	case !filepath.IsLocal(p):
 		return errors.New("invalid path: not inside the repository")
@@ -96,21 +99,23 @@ func ValidGitPath(p string) error {
 		return errors.New("invalid path: names the whole tree")
 	case strings.HasPrefix(p, ":"):
 		return errors.New("invalid path: pathspec magic")
-	case inStateDir(p):
+	case InStateDir(p):
 		return errors.New("invalid path: inside the state directory")
 	}
 	return nil
 }
 
-// inStateDir reports whether any component of p, split on '/' and '\'
+// InStateDir reports whether any component of p, split on '/' and '\'
 // (git on Windows reads both as separators), is ".state" in any case
 // (macOS and Windows filesystems fold case).
-func inStateDir(p string) bool {
+func InStateDir(p string) bool {
 	return slices.ContainsFunc(strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }), func(c string) bool {
 		return strings.EqualFold(c, ".state")
 	})
 }
 
+// checkPaths refuses an empty or oversized path list and any path
+// ValidGitPath refuses, naming the path's position.
 func checkPaths(paths []string) error {
 	if len(paths) == 0 || len(paths) > maxGitPaths {
 		return fmt.Errorf("invalid paths: need 1 to %d, got %d", maxGitPaths, len(paths))
@@ -135,7 +140,7 @@ func ValidCommitMessage(m string) error {
 		return errors.New("invalid commit message: invalid UTF-8")
 	case utf8.RuneCountInString(m) > maxCommitRunes:
 		return fmt.Errorf("invalid commit message: over %d characters", maxCommitRunes)
-	case hasControl(m):
+	case HasControl(m):
 		return errors.New("invalid commit message: must be one line without control or format characters")
 	}
 	if kind, ok := mask.Credential(m); ok {
@@ -181,7 +186,7 @@ func ValidBranchName(b string) error {
 		return bad
 	case strings.Contains(b, ".."), strings.Contains(b, "@{"), strings.Contains(b, "//"):
 		return bad
-	case strings.ContainsAny(b, " ~^:?*[\\+\x7f"), hasControl(b):
+	case strings.ContainsAny(b, " ~^:?*[\\+\x7f"), HasControl(b):
 		return bad
 	}
 	for _, c := range strings.Split(b, "/") {
@@ -207,7 +212,7 @@ func ValidCloneURL(u string) error {
 		return bad("empty")
 	case len(u) > maxCloneURL:
 		return bad("too long")
-	case hasControl(u), strings.ContainsFunc(u, unicode.IsSpace):
+	case HasControl(u), strings.ContainsFunc(u, unicode.IsSpace):
 		return bad("whitespace, control or format character")
 	case strings.Contains(u, "::"):
 		return bad(`"<transport>::" URLs are not allowed`)
@@ -226,7 +231,7 @@ func ValidCloneURL(u string) error {
 	switch {
 	case strings.HasPrefix(u, "https://"):
 		return checkSchemeURL(u, false)
-	case strings.HasPrefix(u, "ssh://"):
+	case strings.HasPrefix(u, sshScheme):
 		return checkSchemeURL(u, true)
 	case strings.Contains(u, "://"):
 		return bad("use https:// or ssh://")
@@ -299,6 +304,7 @@ func withPaths(title string, head, paths []string) Action {
 	return Action{Program: ProgramGit, Title: title, Argv: argv, display: disp, more: len(paths) - shown}
 }
 
+// plural is n followed by one, with an s unless n is 1.
 func plural(n int, one string) string {
 	if n == 1 {
 		return "1 " + one
@@ -362,17 +368,38 @@ func GitPull(r GitRepo) (Action, error) {
 	return a, nil
 }
 
+// ValidObjectID reports whether s is a full git object id: exactly 40
+// (sha1) or 64 (sha256) lowercase hex digits. Nothing else (a ref name, an
+// abbreviation, a revision expression) is accepted.
+func ValidObjectID(s string) error {
+	if len(s) != 40 && len(s) != 64 {
+		return errors.New("invalid object id: not 40 or 64 hex digits")
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return errors.New("invalid object id: not lowercase hex")
+		}
+	}
+	return nil
+}
+
 // GitPush builds `-C <top> push --no-follow-tags --no-recurse-submodules
-// <remote> refs/heads/<branch>:refs/heads/<branch>` (D6): one explicit,
-// non-forced, single-branch refspec. An explicit refspec overrides the
-// repository's remote.<remote>.push refspecs (which take precedence over
-// push.default and can force every branch) and push.default itself;
+// <remote> <sha>^{commit}:refs/heads/<branch>` (D6, Ruling 32): one
+// explicit, non-forced, single-branch refspec whose source is the commit
+// the caller scanned, so a commit made on the branch after the scan is
+// never sent. The source is peeled (^{commit}): git resolves a bare
+// 40-hex push source to a ref of that name when one exists
+// (refs/heads/<sha>), which could point at an unscanned commit.
+// git still updates the remote-tracking ref through the fetch refspec. An
+// explicit refspec overrides the repository's remote.<remote>.push
+// refspecs (which take precedence over push.default and can force every
+// branch) and push.default itself;
 // --no-follow-tags overrides push.followTags, and --no-recurse-submodules
 // overrides push.recurseSubmodules (on-demand would push submodule commits
 // to other repositories, check would gate on them). A non-fast-forward is
 // rejected by git, never forced. remote.<remote>.mirror makes git refuse
 // the push outright.
-func GitPush(r GitRepo, remote, branch string) (Action, error) {
+func GitPush(r GitRepo, remote, branch, sha string) (Action, error) {
 	if err := r.check(); err != nil {
 		return Action{}, err
 	}
@@ -382,8 +409,10 @@ func GitPush(r GitRepo, remote, branch string) (Action, error) {
 	if err := ValidBranchName(branch); err != nil {
 		return Action{}, err
 	}
-	ref := "refs/heads/" + branch
-	a := gitAction("Push", r.head("push", "--no-follow-tags", "--no-recurse-submodules", remote, ref+":"+ref))
+	if err := ValidObjectID(sha); err != nil {
+		return Action{}, err
+	}
+	a := gitAction("Push", r.head("push", "--no-follow-tags", "--no-recurse-submodules", remote, sha+"^{commit}:refs/heads/"+branch))
 	a.Network = true
 	return a, nil
 }
@@ -394,6 +423,27 @@ func InitFromURL(u string) (Action, error) {
 	if err := ValidCloneURL(u); err != nil {
 		return Action{}, err
 	}
-	argv := []string{"init", u}
-	return Action{Title: "Clone agentsync home", Argv: argv, Network: true, display: append([]string(nil), argv...)}, nil
+	return Action{Title: "Clone agentsync home", Argv: []string{"init", u}, Network: true,
+		display: []string{"init", cloneURLDisplay(u)}, premasked: true}, nil
+}
+
+// cloneURLDisplay is a valid clone URL masked for display, an ssh:// user
+// name kept visible: ValidCloneURL allows a user name but no password
+// there, and a plain name (git, deploy.bot) is not a secret. A user name
+// mask.Text would change or that is token-shaped (mask.TokenShaped, which
+// also reads shapes mask.Text leaves alone) stays masked, as does anything
+// else mask.Text masks. The scp form user@host:path has no userinfo for
+// mask.Text to mask.
+func cloneURLDisplay(u string) string {
+	masked := mask.Text(u)
+	rest, ok := strings.CutPrefix(u, sshScheme)
+	if !ok {
+		return masked
+	}
+	user, _, hasUser := strings.Cut(rest, "@")
+	hidden := sshScheme + mask.Mask + "@"
+	if !hasUser || !urlUserRe.MatchString(user) || mask.Text(user) != user || mask.TokenShaped(user) || !strings.HasPrefix(masked, hidden) {
+		return masked
+	}
+	return sshScheme + user + "@" + masked[len(hidden):]
 }

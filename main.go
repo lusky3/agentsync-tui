@@ -42,6 +42,7 @@ func resolveVersion(v string, build func() (*debug.BuildInfo, bool)) string {
 	return v
 }
 
+// main runs the TUI and exits with run's status.
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -76,6 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runWith(args, stdout, stderr, defaultHooks)
 }
 
+// runWith is run with the process hooks supplied (tests replace them).
 func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	o, exit, ok := parseOptions(args, stderr)
 	if !ok {
@@ -96,6 +98,21 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 	// cancels it on quit so no agentsync child outlives the TUI.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	deps := buildDeps(ctx, cancel, o, scope, projectDir)
+	a := ui.NewApp(deps, app.Screens(deps)...)
+	if err := runProgram(a, h); err != nil {
+		_, _ = fmt.Fprintln(stderr, progName+":", err)
+		return 1
+	}
+	return 0
+}
+
+// buildDeps wires the screens' dependencies. Git is always the hardened
+// git Program (runner.NewGit: its pre-args carry --literal-pathspecs, so no
+// other runner may stand in for it); a missing git binary is reported by
+// the Source repo tab. Chezmoi is wired only when chezmoi is on PATH, at
+// the path found there.
+func buildDeps(ctx context.Context, cancel context.CancelFunc, o options, scope runner.Scope, projectDir string) ui.Deps {
 	withScope := func(s runner.Scope) (runner.Runner, func(args ...string) *exec.Cmd) {
 		e := runner.NewExec("agentsync", s, projectDir)
 		return e, e.Interactive
@@ -109,15 +126,14 @@ func runWith(args []string, stdout, stderr io.Writer, h hooks) int {
 		LogPath:       logPath(),
 		Timeouts:      &ui.Timeouts{Read: o.readTimeout, Write: o.writeTimeout},
 		WithScope:     withScope,
+		Git:           runner.NewGit("git"),
+	}
+	if path, err := exec.LookPath("chezmoi"); err == nil {
+		deps.Chezmoi = runner.NewChezmoi(path)
 	}
 	// The initial runner is the same pair a scope switch would build.
 	deps.Runner, deps.Interactive = withScope(scope)
-	a := ui.NewApp(deps, app.Screens(deps)...)
-	if err := runProgram(a, h); err != nil {
-		_, _ = fmt.Fprintln(stderr, progName+":", err)
-		return 1
-	}
-	return 0
+	return deps
 }
 
 // options are the command-line settings runWith acts on.
@@ -137,11 +153,11 @@ func parseOptions(args []string, stderr io.Writer) (o options, exit int, ok bool
 	fs.StringVar(&o.scope, "scope", "", "agentsync scope: user or project (default user; --project implies project)")
 	fs.StringVar(&o.project, "project", "", "project directory (implies --scope project)")
 	fs.DurationVar(&o.readTimeout, "read-timeout", ui.DefaultReadTimeout,
-		"bound on network reads (import previews, plugin outdated); 0 = none. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
+		"bound on network reads (import previews, plugin outdated, git fetch/pull/push); 0 = none, except network git (fetch, pull, push), which keeps the 2m default. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
 	debugLog := fs.String("debug-log", "",
 		"append a masked sample (4 KiB per stream, parse error, exit code) of every read whose output could not be parsed to this file, for bug reports; off by default")
 	fs.DurationVar(&o.writeTimeout, "write-timeout", 0,
-		"bound on every write (apply, import, plugin upgrade, ...); 0 = none. A write cut off partway can leave agentsync's state and the destination files out of step")
+		"bound on every write (apply, import, plugin upgrade, git add and commit, ...); 0 = none, except git add and commit, which keep a 2m bound. An agentsync write cut off partway can leave agentsync's state and the destination files out of step")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return o, 0, false
@@ -227,12 +243,14 @@ type lastSignal struct {
 	sig os.Signal
 }
 
+// note records s as the last signal.
 func (l *lastSignal) note(s os.Signal) {
 	l.mu.Lock()
 	l.sig = s
 	l.mu.Unlock()
 }
 
+// get is the last signal noted, or nil.
 func (l *lastSignal) get() os.Signal {
 	l.mu.Lock()
 	defer l.mu.Unlock()

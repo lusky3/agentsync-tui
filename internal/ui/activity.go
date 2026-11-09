@@ -35,11 +35,13 @@ type entry struct {
 	Duration time.Duration
 }
 
+// String is the entry as the activity pane shows it.
 func (e entry) String() string {
 	return fmt.Sprintf("%s  %-13s %7s  %s", e.Time.Format("15:04:05"), e.Outcome,
 		e.Duration.Round(time.Millisecond), logSafe(e.Display))
 }
 
+// fileLine is the entry as one tab-separated line of the log file.
 func (e entry) fileLine() string {
 	return strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Outcome,
 		e.Duration.Round(time.Millisecond).String(), logSafe(e.Display)}, "\t") + "\n"
@@ -64,6 +66,8 @@ func outcome(res runner.Result, err error) string {
 		return "timeout"
 	case errors.Is(err, runner.ErrNotInstalled):
 		return "not-installed"
+	case errors.Is(err, runner.ErrShuttingDown):
+		return "not-started"
 	default:
 		return "error"
 	}
@@ -80,6 +84,7 @@ type activityLog struct {
 	fileErr error // first file error, surfaced once
 }
 
+// newActivityLog is an empty log that also appends to path when it is set.
 func newActivityLog(path string) *activityLog {
 	return &activityLog{path: path, ring: make([]entry, ringSize)}
 }

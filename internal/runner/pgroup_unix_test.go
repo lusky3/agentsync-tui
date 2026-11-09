@@ -115,6 +115,7 @@ func pgidGone(pgid int) bool { return errors.Is(syscall.Kill(-pgid, 0), syscall.
 // ignores SIGINT is orphaned. It returns within the wait plus a short kill
 // grace, with Run's own pipe wait (WaitDelay) not holding it up.
 func TestShutdownTerminatesLiveGroups(t *testing.T) {
+	t.Cleanup(reopen)
 	for _, c := range []struct {
 		name string
 		sig  os.Signal
@@ -129,6 +130,7 @@ func TestShutdownTerminatesLiveGroups(t *testing.T) {
 // reports the kill as an exit, not an error.
 func checkShutdownEndsGroup(t *testing.T, sig os.Signal) {
 	t.Helper()
+	t.Cleanup(reopen)
 	self, child, done := spawn(t, 10*time.Second)
 	if pgidGone(self) || !alive(child) {
 		t.Fatal("precondition: group running")

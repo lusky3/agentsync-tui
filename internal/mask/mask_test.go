@@ -529,3 +529,50 @@ func TestHunkWalksContainersInsideArgs(t *testing.T) {
 		}
 	}
 }
+
+// CodeRabbit (PR #4): a quote inside a triple-quoted value, a header scheme
+// Text does not know, and a reference whose name is a token shape must not
+// leave the secret visible.
+func TestTextMasksWholeSecretValue(t *testing.T) {
+	for in, secret := range map[string]string{
+		`password = """abc"def-hunter2secret"""`:    "hunter2secret",
+		`password = '''abc'def-hunter2secret'''`:    "hunter2secret",
+		`password = """abc""def-hunter2secret`:      "hunter2secret",
+		`Authorization = 'ApiKey hunter2abc'`:       "hunter2abc",
+		`Authorization: ApiKey hunter2abc`:          "hunter2abc",
+		`"Authorization": "SSWS hunter2abc"`:        "hunter2abc",
+		`Proxy-Authorization = "Negotiate hunter2"`: "hunter2",
+	} {
+		if got := Text(in); strings.Contains(got, secret) {
+			t.Errorf("Text(%q) = %q shows %q", in, got, secret)
+		}
+		if _, ok := Credential(in); !ok {
+			t.Errorf("Credential(%q) found nothing", in)
+		}
+	}
+	for in, want := range map[string]string{
+		`Authorization: Bearer $GH_TOKEN`:    `Authorization: Bearer $GH_TOKEN`,
+		`password = """${secret:PW}"""`:      `password = """${secret:PW}"""`,
+		`Authorization = "Basic ${env:B64}"`: `Authorization = "Basic ${env:B64}"`,
+	} {
+		if got := Text(in); got != want {
+			t.Errorf("Text(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestValueScrubsTokenShapedReference(t *testing.T) {
+	for in, leak := range map[string]string{
+		"$AKIAABCDEFGHIJKLMNOP":                           "AKIAABCDEFGHIJKLMNOP",
+		"${env:ghp_abcdefghijklmnopqrstuvwxyz0123456789}": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+	} {
+		if got := Value(in); strings.Contains(got, leak) {
+			t.Errorf("Value(%q) = %q", in, got)
+		}
+	}
+	for _, in := range []string{"$GITHUB_TOKEN", "${secret:API_KEY}", "${env:HOME}"} {
+		if got := Value(in); got != in {
+			t.Errorf("Value(%q) = %q, want it unchanged", in, got)
+		}
+	}
+}

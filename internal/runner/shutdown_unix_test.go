@@ -58,6 +58,7 @@ func TestMarkWrite(t *testing.T) {
 // grace; a child that exits on the signal is reported as exited. Each
 // outcome names the child's argv and whether it was a write.
 func TestShutdownOutcomesAndKinds(t *testing.T) {
+	t.Cleanup(reopen)
 	rself, rchild, _ := spawnKind(t, false)
 	wself, wchild, _ := spawnKind(t, true)
 	startExitingOnInt(t, "status", "--json")
@@ -122,6 +123,7 @@ func byKind(ended []Ended) (read, write, exited *Ended) {
 // already going away) skips the remaining grace: every group is killed at
 // once and Shutdown returns with the outcomes, bounded.
 func TestKillAllEscalatesShutdown(t *testing.T) {
+	t.Cleanup(reopen)
 	self, child, _ := spawnKind(t, true)
 	done := make(chan []Ended, 1)
 	start := time.Now()
@@ -148,7 +150,9 @@ func TestKillAllEscalatesShutdown(t *testing.T) {
 // before a Shutdown) does not make the next Shutdown kill at once, so a
 // child that exits on the signal is reported as exited.
 func TestKillAllDoesNotEscalateALaterShutdown(t *testing.T) {
+	t.Cleanup(reopen)
 	KillAll()
+	reopen() // KillAll also ends the registry; this test is about escalation alone
 	wd, _ := os.Getwd()
 	logPath := filepath.Join(t.TempDir(), "trap.log")
 	e := NewExec(filepath.Join(wd, "testdata", "trap-int.sh"), ScopeUser, "")
@@ -169,6 +173,7 @@ func TestKillAllDoesNotEscalateALaterShutdown(t *testing.T) {
 // Under escalation a child that had already exited on the signal is still
 // "exited"; only what KillAll (or the deadline) actually killed is "killed".
 func TestEscalationLabelsByWhatHappened(t *testing.T) {
+	t.Cleanup(reopen)
 	self, child, _ := spawnKind(t, true) // ignores everything but SIGKILL
 	wd, _ := os.Getwd()
 	logPath := filepath.Join(t.TempDir(), "trap.log")
@@ -203,6 +208,7 @@ func TestEscalationLabelsByWhatHappened(t *testing.T) {
 // that is never reaped while Shutdown runs: killed, it stays a zombie, so
 // its group never reads as gone (Linux keeps a zombie signalable).
 func TestShutdownReportsOrphanedGroup(t *testing.T) {
+	t.Cleanup(reopen)
 	if runtime.GOOS != "linux" {
 		t.Skip("relies on Linux zombie semantics")
 	}
@@ -228,6 +234,7 @@ func TestShutdownReportsOrphanedGroup(t *testing.T) {
 // the signal still holds the group. Shutdown itself must kill it rather
 // than wait out the rest of the grace.
 func TestKillAllEscalatesGroupOfReapedLeader(t *testing.T) {
+	t.Cleanup(reopen)
 	self, child, done := spawn(t, 100*time.Millisecond) // short WaitDelay
 	ended := make(chan []Ended, 1)
 	start := time.Now()
@@ -257,5 +264,24 @@ func TestKillAllEscalatesGroupOfReapedLeader(t *testing.T) {
 	}
 	if !pgidGone(self) || alive(child) {
 		t.Error("group survived KillAll")
+	}
+}
+
+// Live returns copies: changing what it returned changes neither a later
+// Live nor what Shutdown reports.
+func TestLiveReturnsCopies(t *testing.T) {
+	t.Cleanup(reopen)
+	spawnKind(t, false)
+	first := Live()
+	if len(first) != 1 || len(first[0]) == 0 || first[0][0] != "plugin" {
+		t.Fatalf("Live() = %q", first)
+	}
+	first[0][0] = "changed"
+	if again := Live(); len(again) != 1 || again[0][0] != "plugin" {
+		t.Errorf("a later Live() = %q", again)
+	}
+	ended := Shutdown(os.Interrupt, 100*time.Millisecond, 100*time.Millisecond)
+	if len(ended) != 1 || ended[0].Args[0] != "plugin" {
+		t.Errorf("Ended = %+v", ended)
 	}
 }

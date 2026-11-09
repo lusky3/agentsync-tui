@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -113,6 +114,16 @@ func waitFrame(t *testing.T, s *snap, what string, ok func(string) bool) string 
 	}
 }
 
+// squash drops every space and box border from s.
+func squash(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || r == '│' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func writeFile(t *testing.T, p, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -174,9 +185,11 @@ func TestProjectScopeReadsProjectHome(t *testing.T) {
 	// project home; reading the user home would report "list changed".
 	tm.Send(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	f = waitFrame(t, m, "disable modal", func(f string) bool { return strings.Contains(f, "Run it?") })
-	flat := strings.Join(strings.Fields(strings.ReplaceAll(f, "│", " ")), " ")
+	// The modal wraps a long project path anywhere, so compare without
+	// spaces and borders: the test must not depend on TMPDIR's length.
+	flat := squash(f)
 	for _, want := range []string{"mcp disable projsrv", "scope: project — " + projectDir} {
-		if !strings.Contains(flat, want) {
+		if !strings.Contains(flat, squash(want)) {
 			t.Errorf("modal missing %q:\n%s", want, f)
 		}
 	}
@@ -201,8 +214,8 @@ func TestProjectScopeReadsProjectHome(t *testing.T) {
 	})
 	tm.Send(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	f = waitFrame(t, m, "user disable modal", func(f string) bool { return strings.Contains(f, "Run it?") })
-	flat = strings.Join(strings.Fields(strings.ReplaceAll(f, "│", " ")), " ")
-	if !strings.Contains(flat, "mcp disable usersrv") || !strings.Contains(flat, "scope: user") || strings.Contains(flat, projectDir) {
+	flat = squash(f)
+	if !strings.Contains(flat, squash("mcp disable usersrv")) || !strings.Contains(flat, squash("scope: user")) || strings.Contains(flat, squash(projectDir)) {
 		t.Errorf("user-scope modal:\n%s", f)
 	}
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})

@@ -28,6 +28,8 @@ type modal struct {
 	project string       // Deps.ProjectDir, shown in project scope
 }
 
+// newModal is the confirmation for act and the chain then; a step that
+// must be typed sets the verb to type.
 func newModal(act actions.Action, scope runner.Scope, project string, then ...actions.Action) *modal {
 	m := &modal{act: act, then: then, scope: scope, project: project, input: Field{Max: maxConfirmInput}}
 	// The first step that must be typed sets the verb (for add-then-commit
@@ -50,10 +52,12 @@ func (m *modal) steps() []actions.Action {
 }
 
 // cancelModal closes the dialog without running the action (or any step of
-// its chain) and drops any queued follow-ups.
-func (a *App) cancelModal() {
-	a.setStatus(statusInfo, "not run: "+titles(a.modal.steps()))
+// its chain), drops any queued follow-ups and tells the screens (NotRunMsg).
+func (a *App) cancelModal() tea.Cmd {
+	steps := a.modal.steps()
+	a.setStatus(statusInfo, "not run: "+titles(steps))
 	a.modal, a.queue = nil, nil
+	return a.notRun(steps)
 }
 
 // modalKey handles a key while the modal has focus.
@@ -61,8 +65,7 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 	m := a.modal
 	s := k.String()
 	if s == "esc" {
-		a.cancelModal()
-		return nil
+		return a.cancelModal()
 	}
 	if m.verb == "" {
 		// Only y runs it. Enter is refused because the forms (servers,
@@ -75,7 +78,7 @@ func (a *App) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		case "enter":
 			m.hint = "press y to run it"
 		case "n":
-			a.cancelModal()
+			return a.cancelModal()
 		}
 		return nil
 	}

@@ -157,6 +157,7 @@ func awaitGone(t *testing.T, child int) {
 // Shutdown reports a live Program child under its program's name, so the
 // activity log can say "git …" rather than "agentsync …".
 func TestEndedCarriesProgram(t *testing.T) {
+	t.Cleanup(reopen)
 	self, child, _ := startSpawnChild(t, context.Background(), 10*time.Second)
 	ended := Shutdown(os.Interrupt, 300*time.Millisecond, 300*time.Millisecond)
 	if len(ended) != 1 || ended[0].Program != "git" || ended[0].Args[len(ended[0].Args)-1] != "status" {

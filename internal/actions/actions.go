@@ -50,6 +50,11 @@ type Action struct {
 	// pre-masked copy of Argv that Display renders instead of running the
 	// generic mask.Args heuristics over Argv.
 	display []string
+	// premasked marks display as already masked by its builder: Display
+	// only sanitises it rather than running mask.Text over it again. It is
+	// set only by builders whose display copy is produced entirely by mask
+	// functions.
+	premasked bool
 	// more, when positive, is the number of trailing argv elements display
 	// leaves out; Display ends with "… (+more more)".
 	more int
@@ -106,7 +111,11 @@ func (a Action) Display() string {
 	if a.display != nil {
 		shown = make([]string, len(a.display))
 		for i, s := range a.display {
-			shown[i] = mask.Text(s)
+			if a.premasked {
+				shown[i] = mask.Sanitize(s)
+			} else {
+				shown[i] = mask.Text(s)
+			}
 		}
 	}
 	for _, s := range shown {

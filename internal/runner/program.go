@@ -13,6 +13,7 @@ import (
 // MissingError is returned by Program.Run when its binary is not installed.
 type MissingError struct{ Name string }
 
+// Error names the program that is not installed.
 func (e *MissingError) Error() string { return e.Name + " is not installed" }
 
 // Program is a Runner for a helper CLI other than agentsync: git (D1) and,
@@ -94,16 +95,19 @@ func (p *Program) run(ctx context.Context, env, args []string) (Result, error) {
 // env is the child environment without the BatchMode decision: childEnv
 // (no git or ssh prompts) with, for git, the R2 names scrubbed and the D1
 // values set (GIT_OPTIONAL_LOCKS=0 only for a read), and for chezmoi
-// LC_ALL=C and NO_COLOR=1.
+// LC_ALL=C and NO_COLOR=1. Git also gets GIT_NO_REPLACE_OBJECTS=1: a
+// replacement object (git replace) changes what log, diff and cat-file
+// show but not what a push sends, so the scans read the objects as
+// stored.
 func (p *Program) env(ctx context.Context) []string {
 	set := []string{"LC_ALL=C", "NO_COLOR=1"}
 	drop := []string{"LC_ALL", "NO_COLOR"}
 	if p.git {
-		set = []string{"LC_ALL=C", "GIT_PAGER=cat", "GIT_EDITOR=true", "GIT_MERGE_AUTOEDIT=no"}
+		set = []string{"LC_ALL=C", "GIT_PAGER=cat", "GIT_EDITOR=true", "GIT_MERGE_AUTOEDIT=no", "GIT_NO_REPLACE_OBJECTS=1"}
 		if !IsWrite(ctx) {
 			set = append(set, "GIT_OPTIONAL_LOCKS=0")
 		}
-		drop = append([]string{"LC_ALL", "GIT_PAGER", "GIT_EDITOR", "GIT_MERGE_AUTOEDIT", "GIT_OPTIONAL_LOCKS"}, gitScrubbed...)
+		drop = append([]string{"LC_ALL", "GIT_PAGER", "GIT_EDITOR", "GIT_MERGE_AUTOEDIT", "GIT_NO_REPLACE_OBJECTS", "GIT_OPTIONAL_LOCKS"}, gitScrubbed...)
 	}
 	base := childEnv(p.Env)
 	out := make([]string, 0, len(base)+len(set))

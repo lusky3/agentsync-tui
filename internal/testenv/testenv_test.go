@@ -18,10 +18,11 @@ func under(dir, path string) bool {
 
 func TestEnvPathsAreUnderTempDir(t *testing.T) {
 	realHome, _ := os.UserHomeDir()
-	tmp := t.TempDir()
-	// New's own TempDir is a sibling inside the same per-test root.
 	env := New(t)
-	root := filepath.Dir(tmp)
+	root := env.Root
+	if owner := AgentsyncAncestor(root); owner != "" {
+		t.Errorf("Root %q sits under %s/.agentsync", root, owner)
+	}
 	for name, p := range map[string]string{"Home": env.Home, "AgentsyncHome": env.AgentsyncHome} {
 		if !under(root, p) {
 			t.Errorf("%s %q not under test temp root %q", name, p, root)
@@ -53,7 +54,7 @@ func TestInitDoesNotTouchRealHome(t *testing.T) {
 	env := New(t)
 	env.Init(t)
 	realHome, _ := os.UserHomeDir()
-	if !under(filepath.Dir(t.TempDir()), env.AgentsyncHome) || under(realHome, env.AgentsyncHome) && !under(filepath.Dir(t.TempDir()), env.AgentsyncHome) {
+	if !under(env.Root, env.AgentsyncHome) || under(realHome, env.AgentsyncHome) && !under(env.Root, env.AgentsyncHome) {
 		t.Fatalf("AgentsyncHome %q is not a temp path", env.AgentsyncHome)
 	}
 	entries, err := os.ReadDir(env.AgentsyncHome)
@@ -85,4 +86,77 @@ func TestEnvScrubsCLIKnobs(t *testing.T) {
 			t.Errorf("inherited %s=%q", k, v)
 		}
 	}
+}
+
+// agentsync walks up from its working directory looking for a project
+// tree (.agentsync/) and refuses a command that names no scope when it
+// finds one. A TMPDIR below a directory holding .agentsync (a developer's
+// TMPDIR under a real ~ with ~/.agentsync) must not let any agentsync child
+// see that tree: the hermetic root moves elsewhere and the CLI stays on the
+// fake home.
+func TestTMPDIRBelowAnAgentsyncTreeIsAvoided(t *testing.T) {
+	x := outerTree(t)
+	work := filepath.Join(x, "work")
+	t.Setenv("TMPDIR", work)
+	if got := AgentsyncAncestor(work); got != x && got != mustEval(t, x) {
+		t.Fatalf("AgentsyncAncestor(%q) = %q, want %q", work, got, x)
+	}
+	// A subtest: its t.TempDir and New's root are made after TMPDIR changed.
+	t.Run("hermetic", func(t *testing.T) {
+		env := New(t)
+		wantOutside(t, x, env)
+		if _, err := exec.LookPath("agentsync"); err != nil {
+			t.Skip("agentsync not on PATH")
+		}
+		env.Init(t)
+		// No --scope: agentsync decides from its working directory (the fake home).
+		if _, se, code := env.Agentsync(t, "--no-input", "mcp", "add", "regress", "--command", "echo"); code != 0 {
+			t.Fatalf("mcp add without a scope exit %d: %s", code, se)
+		}
+		if _, err := os.Stat(filepath.Join(env.AgentsyncHome, "mcp", "regress.toml")); err != nil {
+			t.Errorf("the server was not written to the fake home: %v", err)
+		}
+		if entries, _ := os.ReadDir(filepath.Join(x, ".agentsync", "mcp")); len(entries) != 0 {
+			t.Errorf("the outer tree was written: %v", entries)
+		}
+	})
+}
+
+// outerTree makes X/.agentsync/mcp and X/work in a new temp dir X.
+func outerTree(t *testing.T) string {
+	t.Helper()
+	x, err := os.MkdirTemp("", "outer-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(x) })
+	for _, d := range []string{filepath.Join(x, ".agentsync", "mcp"), filepath.Join(x, "work")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return x
+}
+
+// wantOutside asserts none of env's paths lies under x and the fake home
+// has no .agentsync ancestor.
+func wantOutside(t *testing.T, x string, env *Env) {
+	t.Helper()
+	for name, p := range map[string]string{"Root": env.Root, "Home": env.Home, "AgentsyncHome": env.AgentsyncHome} {
+		if under(x, p) || under(mustEval(t, x), mustEval(t, p)) {
+			t.Errorf("%s %q is under %s, which holds .agentsync", name, p, x)
+		}
+	}
+	if owner := AgentsyncAncestor(env.Home); owner != "" {
+		t.Errorf("fake home %q sits under %s/.agentsync", env.Home, owner)
+	}
+}
+
+func mustEval(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return p
+	}
+	return r
 }

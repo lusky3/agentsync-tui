@@ -23,6 +23,15 @@ const (
 // ErrNotInstalled is returned when the agentsync binary cannot be found.
 var ErrNotInstalled = errors.New("agentsync is not installed (see https://agentsync.cc for install instructions)")
 
+// ErrShuttingDown is returned, without starting anything, by a run asked
+// for once Shutdown (or KillAll) has begun: a child started then could
+// outlive the TUI.
+var ErrShuttingDown = errors.New("not started: agentsync-tui is shutting down")
+
+// afterStartHook, set only by tests, runs between a child's Start and its
+// tracking, so a test can call Shutdown in that gap.
+var afterStartHook func()
+
 // Result is the outcome of a completed CLI invocation.
 type Result struct {
 	Stdout, Stderr string
@@ -81,6 +90,8 @@ type capWriter struct {
 	truncated bool
 }
 
+// Write keeps what fits in the cap and drops the rest, noting the cut; it
+// always reports the whole of p written.
 func (w *capWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	if room := w.n - w.buf.Len(); n > room {
@@ -126,6 +137,8 @@ func ScopeUnaware(args []string) bool {
 	return false
 }
 
+// scopeArgs are the scope flags appended to args: --project <dir> or
+// --scope user, none for a scope-unaware command.
 func (e *Exec) scopeArgs(args []string) []string {
 	if ScopeUnaware(args) {
 		return nil
@@ -150,12 +163,33 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 	return res, err
 }
 
+// startTracked starts cmd and tracks it, so Shutdown can reach the group
+// until Wait returns. A Shutdown's snapshot waits until the child is
+// tracked (live.starting); once Shutdown or KillAll has begun nothing is
+// started and the error is ErrShuttingDown.
+func startTracked(cmd *exec.Cmd, args []string, write bool, program string) error {
+	live.starting.RLock()
+	defer live.starting.RUnlock()
+	if live.closed.Load() {
+		return ErrShuttingDown
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if afterStartHook != nil {
+		afterStartHook()
+	}
+	trackAs(cmd, args, write, program)
+	return nil
+}
+
 // runCore runs cmd, whose process group (or session) and environment the
 // caller has set, and collects its result. args (the caller's argv without
 // global flags) and program ("" for agentsync) are what Shutdown reports
 // for it while it is live. The error is non-nil only for a spawn failure
-// (returned as is, so the caller can map exec.ErrNotFound) or for ctx's
-// end, never for a non-zero exit.
+// (returned as is, so the caller can map exec.ErrNotFound), for a run asked
+// for once shutdown has begun (ErrShuttingDown) or for ctx's end, never
+// for a non-zero exit.
 func runCore(ctx context.Context, cmd *exec.Cmd, args []string, grace time.Duration, program string) (Result, error) {
 	// On cancel, interrupt rather than kill: a write such as `plugin upgrade
 	// --all` then gets the chance to finish or roll back. Only if it is
@@ -176,9 +210,8 @@ func runCore(ctx context.Context, cmd *exec.Cmd, args []string, grace time.Durat
 	cmd.WaitDelay = grace
 	out, errb := &capWriter{n: MaxStream}, &capWriter{n: MaxStream}
 	cmd.Stdout, cmd.Stderr = out, errb
-	err := cmd.Start()
+	err := startTracked(cmd, args, IsWrite(ctx), program)
 	if err == nil {
-		trackAs(cmd, args, IsWrite(ctx), program) // Shutdown can reach the group until Wait returns
 		err = cmd.Wait()
 		untrack(cmd)
 	}

@@ -40,6 +40,17 @@ type DoMsg struct {
 	Scope  runner.Scope
 }
 
+// NotRunMsg is broadcast to every screen when a requested action will not
+// run: its confirm modal was cancelled, or the shell refused the request
+// (busy, no project, the scope changed). Actions is the whole chain, in
+// order. A screen that remembers an action until its RunMsg drops it here.
+type NotRunMsg struct{ Actions []actions.Action }
+
+// notRun broadcasts a NotRunMsg for chain.
+func (a *App) notRun(chain []actions.Action) tea.Cmd {
+	return tea.Batch(a.broadcast(NotRunMsg{Actions: chain})...)
+}
+
 // DefaultReadTimeout is the default bound on network reads (Timeouts.Read).
 const DefaultReadTimeout = 120 * time.Second
 
@@ -55,19 +66,24 @@ const GitLocalWriteBound = 2 * time.Minute
 // bound.
 const LocalReadBound = 30 * time.Second
 
-// Timeouts bound the commands the shell runs; zero means no bound. Past a
-// bound the run is cancelled like ctrl+c (SIGINT, then SIGKILL after
-// runner.InterruptGrace) and reported, and logged, as a timeout.
+// Timeouts bound the commands the shell runs. For agentsync commands zero
+// means no bound; git commands are always bounded (R3, see gitLimit): a
+// zero Read leaves network git (fetch, pull, push) at DefaultReadTimeout,
+// and a zero Write leaves local git writes (add, commit) at
+// GitLocalWriteBound. Past a bound the run is cancelled like ctrl+c
+// (SIGINT, then SIGKILL after runner.InterruptGrace) and reported, and
+// logged, as a timeout.
 type Timeouts struct {
 	// Read bounds network reads: ReadOnly actions with Network set (import
-	// dry runs of plugins or a whole agent) and the plugins screen's
-	// `plugin outdated`. Local reads, the screens' and the ReadOnly
-	// actions without Network (apply/revert/import previews, check), use
-	// Local, which it can lower.
+	// dry runs of plugins or a whole agent), the plugins screen's
+	// `plugin outdated`, and git fetch, pull and push. Local reads, the
+	// screens' and the ReadOnly actions without Network (apply/revert/import
+	// previews, check, git status and diff), use Local, which it can lower.
 	Read time.Duration
-	// Write bounds every non-ReadOnly action. The default is none: a write
-	// such as `plugin upgrade --all` cut off partway can leave agentsync's
-	// state and the destination files out of step.
+	// Write bounds every non-ReadOnly action. For agentsync the default is
+	// none: a write such as `plugin upgrade --all` cut off partway can leave
+	// agentsync's state and the destination files out of step. Git add and
+	// commit fall back to GitLocalWriteBound.
 	Write time.Duration
 }
 
@@ -95,6 +111,7 @@ func (d Deps) Limits() Timeouts {
 // timeoutError is the RunMsg.Err of a network action that hit its bound.
 type timeoutError struct{ d time.Duration }
 
+// Error says how long the action ran before its bound stopped it.
 func (e timeoutError) Error() string {
 	if e.d < time.Second {
 		return "timed out after " + e.d.String()
@@ -151,6 +168,7 @@ func limitFor(act actions.Action, t Timeouts) time.Duration {
 // a command runs (statusLine); it stops with the run.
 type elapsedTick struct{}
 
+// elapsedTickCmd ticks once a second while an action runs.
 func elapsedTickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return elapsedTick{} })
 }
@@ -238,15 +256,15 @@ func (a *App) requestChain(act actions.Action, then []actions.Action, scope runn
 	switch {
 	case a.running != nil || a.modal != nil:
 		a.setStatus(statusFail, "busy: another action is in progress")
-		return nil
+		return a.notRun(chain)
 	case a.noProject:
 		a.setStatus(statusFail, noProjectText)
-		return nil
+		return a.notRun(chain)
 	case scope != "" && scope != a.scope && bound:
 		// Built under the other scope (an s between the key and its Cmd):
 		// its ids came from that scope's list, so it must not run here.
 		a.setStatus(statusFail, "not run: "+titles(chain)+": scope changed since it was built ("+sanitizeScope(scope)+" → "+sanitizeScope(a.scope)+")")
-		return nil
+		return a.notRun(chain)
 	case readOnly:
 		return a.start(act, then)
 	}
