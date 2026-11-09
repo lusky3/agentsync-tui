@@ -25,7 +25,11 @@ func openDir(name string) (*os.File, error) {
 	return os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
 }
 
-// openRegularRootFile is openRegularFile for name inside root.
+// openRegularRootFile opens name inside root for reading and refuses
+// anything fstat does not call a regular file. It does not refuse a
+// symlink: os.Root.OpenFile adds O_NOFOLLOW itself but still follows a
+// final-component link whose target stays inside root. openChecked's Lstat
+// and SameFile check refuse a symlinked file; use it through openRegularIn.
 func openRegularRootFile(root *os.Root, name string) (*os.File, error) {
 	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {

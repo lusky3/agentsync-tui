@@ -259,7 +259,7 @@ func scanFile(ctx context.Context, in guardInput, unborn bool, f gitrepo.File) (
 
 // scanUntracked scans a new file whole (a symlink: its target).
 func scanUntracked(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrepo.Finding, string) {
-	b, err := bounded(ctx, in.limit, func(context.Context) (capped, error) { return readNew(in.repo.Top, f.Path) })
+	b, err := bounded(ctx, in.limit, func(ctx context.Context) (capped, error) { return readNew(ctx, in.repo.Top, f.Path) })
 	if err != nil {
 		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
 	}
@@ -268,13 +268,13 @@ func scanUntracked(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrep
 
 // readNew is what committing rel would record: a symlink's target, or the
 // regular file's first scanReadLimit bytes.
-func readNew(top, rel string) (capped, error) {
+func readNew(ctx context.Context, top, rel string) (capped, error) {
 	full := filepath.Join(top, filepath.FromSlash(rel))
 	if fi, err := os.Lstat(full); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		target, err := os.Readlink(full)
 		return capped{data: target}, err
 	}
-	return readFile(top, rel, scanReadLimit)
+	return readFile(ctx, top, rel, scanReadLimit)
 }
 
 // scanTracked scans the added lines of a tracked file's diff against HEAD,
@@ -301,7 +301,7 @@ func scanTracked(ctx context.Context, in guardInput, unborn bool, f gitrepo.File
 	if len(lines) == 0 {
 		return out, ""
 	}
-	post, err := bounded(ctx, in.limit, func(context.Context) (capped, error) { return postImage(in.repo.Top, f.Path) })
+	post, err := bounded(ctx, in.limit, func(ctx context.Context) (capped, error) { return postImage(ctx, in.repo.Top, f.Path) })
 	if err != nil {
 		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
 	}
@@ -315,8 +315,8 @@ func scanTracked(ctx context.Context, in guardInput, unborn bool, f gitrepo.File
 // first maxScanned bytes (cut past them: an added line past the cut is
 // still scanned, but soft, as its multi-line context is not known). A symlink's diff is its target,
 // which has no multi-line strings: it gives no context.
-func postImage(top, rel string) (capped, error) {
-	c, err := readFile(top, rel, maxScanned)
+func postImage(ctx context.Context, top, rel string) (capped, error) {
+	c, err := readFile(ctx, top, rel, maxScanned)
 	if errors.Is(err, gitrepo.ErrSymlink) {
 		return capped{}, nil
 	}

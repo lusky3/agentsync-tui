@@ -84,7 +84,7 @@ func (s *Screen) openDiff() tea.Cmd {
 // as context) and the whole is capped at ui.MaxOutput.
 func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo, unborn bool, f gitrepo.File, limit time.Duration) diffMsg {
 	if f.Kind == gitrepo.Untracked {
-		b, err := bounded(ctx, limit, func(context.Context) (capped, error) { return readFile(repo.Top, f.Path, ui.MaxOutput) })
+		b, err := bounded(ctx, limit, func(ctx context.Context) (capped, error) { return readFile(ctx, repo.Top, f.Path, ui.MaxOutput) })
 		if err != nil {
 			return diffMsg{gen: gen, note: notShown + errNote(err)}
 		}
@@ -111,7 +111,7 @@ func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo
 // Without it gitrepo.PatchMasker follows only the diff's own table
 // headers and masks removed lines past the file's start as env values.
 func worktreePost(ctx context.Context, repo gitrepo.Repo, f gitrepo.File, limit time.Duration) string {
-	b, err := bounded(ctx, limit, func(context.Context) (capped, error) { return readFile(repo.Top, f.Path, maxScanned) })
+	b, err := bounded(ctx, limit, func(ctx context.Context) (capped, error) { return readFile(ctx, repo.Top, f.Path, maxScanned) })
 	if err != nil {
 		return ""
 	}
@@ -180,15 +180,15 @@ var afterContained func()
 // component resolved inside top), once its parent directory is known to
 // resolve inside top. The read is bound to top, so a parent swapped for a
 // symlink that leaves top after the check fails the read instead of
-// reading outside the repository.
-func readFile(top, rel string, limit int) (capped, error) {
+// reading outside the repository. It stops reading when ctx ends.
+func readFile(ctx context.Context, top, rel string, limit int) (capped, error) {
 	if err := parentInside(top, rel); err != nil {
 		return capped{}, err
 	}
 	if afterContained != nil {
 		afterContained()
 	}
-	b, err := gitrepo.ReadRegularIn(top, rel, int64(limit)+1)
+	b, err := gitrepo.ReadRegularInContext(ctx, top, rel, int64(limit)+1)
 	if err != nil {
 		if errors.Is(parentInside(top, rel), errOutside) {
 			return capped{}, errOutside

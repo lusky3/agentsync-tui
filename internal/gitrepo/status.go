@@ -648,8 +648,12 @@ func openRegular(p string) (*os.File, fileKind, error) {
 // it: the Lstat and the open both resolve every component through an
 // os.Root opened on top, so a parent directory swapped for a symlink that
 // leaves top after any earlier check cannot redirect them (the open fails
-// instead). A symlink inside top is still followed for a parent, never for
-// the file itself.
+// instead). A symlink inside top is still followed for a parent. For the
+// file itself, os.Root.OpenFile follows a final-component symlink whose
+// target stays inside top (its own O_NOFOLLOW only stops the first step), so
+// what refuses a symlinked file is openChecked's Lstat, which reports the
+// link, and its SameFile check, which refuses a link swapped in after the
+// Lstat.
 func openRegularIn(top, rel string) (*os.File, fileKind, error) {
 	root, err := os.OpenRoot(top)
 	switch {
@@ -664,7 +668,10 @@ func openRegularIn(top, rel string) (*os.File, fileKind, error) {
 	}, filepath.FromSlash(rel))
 }
 
-// openChecked is openRegular with the Lstat and the open supplied.
+// openChecked is openRegular with the Lstat and the open supplied. The Lstat
+// (a symlink is reported, not opened) and the SameFile check after the open
+// (the opened file is the one Lstat saw) are what refuse a symlinked final
+// component; open alone need not (os.Root.OpenFile follows an in-root link).
 func openChecked(lstat func(string) (os.FileInfo, error), open func(string) (*os.File, error), p string) (*os.File, fileKind, error) {
 	fi, err := lstat(p)
 	switch {
@@ -708,7 +715,7 @@ func regularOnly(f *os.File) (*os.File, error) {
 // file was longer pass limit+1.
 func ReadRegular(name string, limit int64) ([]byte, error) {
 	f, kind, err := openRegular(name)
-	return readOpened(name, limit, f, kind, err)
+	return readOpened(context.Background(), name, limit, f, kind, err)
 }
 
 // ReadRegularIn is ReadRegular for the slash-separated path rel inside the
@@ -716,13 +723,20 @@ func ReadRegular(name string, limit int64) ([]byte, error) {
 // is replaced by a symlink leaving top, even after the caller checked it,
 // makes the read fail rather than read outside top.
 func ReadRegularIn(top, rel string, limit int64) ([]byte, error) {
+	return ReadRegularInContext(context.Background(), top, rel, limit)
+}
+
+// ReadRegularInContext is ReadRegularIn that stops reading when ctx ends,
+// returning ctx's error.
+func ReadRegularInContext(ctx context.Context, top, rel string, limit int64) ([]byte, error) {
 	f, kind, err := openRegularIn(top, rel)
-	return readOpened(rel, limit, f, kind, err)
+	return readOpened(ctx, rel, limit, f, kind, err)
 }
 
 // readOpened reads at most limit bytes of what openRegular returned for
-// name, turning its kinds into ReadRegular's errors.
-func readOpened(name string, limit int64, f *os.File, kind fileKind, err error) ([]byte, error) {
+// name, turning its kinds into ReadRegular's errors; it stops when ctx
+// ends.
+func readOpened(ctx context.Context, name string, limit int64, f *os.File, kind fileKind, err error) ([]byte, error) {
 	switch {
 	case errors.Is(err, errChanged), errors.Is(err, syscall.ELOOP):
 		return nil, fmt.Errorf("%w: %w", ErrNotRegular, err)
@@ -736,7 +750,7 @@ func readOpened(name string, limit int64, f *os.File, kind fileKind, err error) 
 		return nil, &os.PathError{Op: "read", Path: name, Err: os.ErrNotExist}
 	}
 	defer func() { _ = f.Close() }()
-	return io.ReadAll(io.LimitReader(f, max(limit, 0)))
+	return io.ReadAll(io.LimitReader(ctxReader{ctx, f}, max(limit, 0)))
 }
 
 // HasKeyMaterial reports whether the file named name holds an age identity

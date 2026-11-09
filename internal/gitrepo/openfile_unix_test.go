@@ -3,6 +3,7 @@
 package gitrepo
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -219,5 +220,49 @@ func TestReadRegularInStaysInsideTop(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("ReadRegularIn blocked on a FIFO")
+	}
+}
+
+// TestRootOpenFollowsInRootLinkOpenCheckedRefuses pins where the "never a
+// symlinked file" guarantee lives: openRegularRootFile alone follows a
+// final-component link whose target is inside the root (os.Root does), and
+// openRegularIn (openChecked's Lstat and SameFile) refuses it.
+func TestRootOpenFollowsInRootLinkOpenCheckedRefuses(t *testing.T) {
+	top := t.TempDir()
+	write(t, top, "real.md", "INSIDE")
+	if err := os.Symlink("real.md", filepath.Join(top, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	f, err := openRegularRootFile(root, "link.md")
+	if err != nil {
+		t.Fatalf("openRegularRootFile did not follow the in-root link (%v): os.Root semantics changed, revisit these comments", err)
+	}
+	_ = f.Close()
+	f, kind, err := openRegularIn(top, "link.md")
+	if f != nil {
+		_ = f.Close()
+	}
+	if f != nil || kind != fileLink || err != nil {
+		t.Errorf("openRegularIn(link) = file %v, kind %v, err %v; want no file, fileLink", f != nil, kind, err)
+	}
+}
+
+// TestReadRegularInContextStops: an ended context stops the read with its
+// error; a live one reads the file.
+func TestReadRegularInContextStops(t *testing.T) {
+	top := t.TempDir()
+	write(t, top, "a.md", strings.Repeat("x", 1<<16))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ReadRegularInContext(ctx, top, "a.md", 1<<20); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled read error %v, want context.Canceled", err)
+	}
+	if b, err := ReadRegularInContext(context.Background(), top, "a.md", 1<<20); err != nil || len(b) != 1<<16 {
+		t.Errorf("live read = %d bytes, %v", len(b), err)
 	}
 }

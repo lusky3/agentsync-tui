@@ -40,13 +40,19 @@ func httpsGitServer(t *testing.T, root string) (base, caFile string) {
 
 // setEnv replaces (or adds) k in env.Env.
 func setEnv(env *testenv.Env, k, v string) {
+	unsetEnv(env, k)
+	env.Env = append(env.Env, k+"="+v)
+}
+
+// unsetEnv drops k from env.Env.
+func unsetEnv(env *testenv.Env, k string) {
 	out := env.Env[:0]
 	for _, kv := range env.Env {
 		if name, _, _ := strings.Cut(kv, "="); name != k {
 			out = append(out, kv)
 		}
 	}
-	env.Env = append(out, k+"="+v)
+	env.Env = out
 }
 
 // TestSourceRepoBootstrapClonesIntoConfiguredHome drives the bootstrap
@@ -77,6 +83,13 @@ func TestSourceRepoBootstrapClonesIntoConfiguredHome(t *testing.T) {
 	setEnv(env, "SSL_CERT_FILE", caFile)
 	setEnv(env, "GIT_CONFIG_NOSYSTEM", "1")
 	setEnv(env, "GIT_CONFIG_GLOBAL", os.DevNull)
+	// The clone goes to a loopback server: a developer's proxy must not see
+	// it (or intercept its TLS).
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		unsetEnv(env, k)
+	}
+	setEnv(env, "NO_PROXY", "*")
+	setEnv(env, "no_proxy", "*")
 
 	h := openTab(t, env, "the bootstrap prompt", func(f string) bool { return strings.Contains(f, "No agentsync home at") })
 	h.key("i")

@@ -193,10 +193,16 @@ func readStatus(ctx context.Context, git runner.Runner, repo gitrepo.Repo, limit
 	return st, ""
 }
 
-// maxWorkers bounds the bounded workers alive at once. A worker abandoned
-// on time keeps its slot until it returns, so refreshes over a slow file
+// maxWorkers bounds the bounded workers alive at once. The cap is
+// process-global: workerSlots is shared by every Screen and every kind of
+// bounded call (status parse, file reads, scans). A worker abandoned on
+// time keeps its slot until it returns, so refreshes over a slow file
 // cannot pile up readers; when every slot is held, a new bounded call waits
-// for one within its own limit.
+// for one within its own limit and then fails as a timeout. The workers
+// honour their context between reads (ctxReader), but a worker stuck in an
+// uninterruptible read (a hung network filesystem) keeps its slot until
+// that read returns or the process exits; once all four are stuck, every
+// bounded call fails closed and the scans refuse with "cannot scan".
 const maxWorkers = 4
 
 var workerSlots = make(chan struct{}, maxWorkers)
@@ -204,6 +210,7 @@ var workerSlots = make(chan struct{}, maxWorkers)
 // bounded runs fn on its own goroutine and gives up when ctx ends or limit
 // passes; a late result is dropped. fn gets a context that ends when
 // bounded returns, so a worker that honours it stops instead of running on.
+// fn runs in one of the process-global maxWorkers slots.
 func bounded[T any](ctx context.Context, limit time.Duration, fn func(context.Context) (T, error)) (T, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
