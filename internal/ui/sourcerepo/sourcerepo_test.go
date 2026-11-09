@@ -2,6 +2,7 @@ package sourcerepo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -641,5 +643,55 @@ func TestDiffMasksVisibleKeyInEnvTable(t *testing.T) {
 			t.Errorf("%s: diff pane:\n%s", c.path, d)
 		}
 		press(f.s, "esc")
+	}
+}
+
+// TestBoundedCancelsAbandonedWorker: when the limit passes, the worker's
+// context ends too, so a worker that honours it stops.
+func TestBoundedCancelsAbandonedWorker(t *testing.T) {
+	stopped := make(chan struct{})
+	_, err := bounded(context.Background(), 20*time.Millisecond, func(ctx context.Context) (int, error) {
+		<-ctx.Done()
+		close(stopped)
+		return 0, ctx.Err()
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error %v, want DeadlineExceeded", err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the abandoned worker was not cancelled")
+	}
+}
+
+// TestBoundedLimitsWorkers: workers abandoned on time keep their slots
+// until they return, so with every slot held a new call gives up within
+// its limit without starting another worker; once they return it runs.
+func TestBoundedLimitsWorkers(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(free)
+	for range maxWorkers {
+		_, err := bounded(context.Background(), 5*time.Millisecond, func(context.Context) (int, error) {
+			<-release // ignores its context, like a read stuck in the kernel
+			return 0, nil
+		})
+		if err == nil {
+			t.Fatal("a stuck worker returned")
+		}
+	}
+	ran := false
+	_, err := bounded(context.Background(), 50*time.Millisecond, func(context.Context) (int, error) {
+		ran = true
+		return 1, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || ran {
+		t.Errorf("with every slot held: error %v, ran %v", err, ran)
+	}
+	free()
+	if v, err := bounded(context.Background(), 5*time.Second, func(context.Context) (int, error) { return 1, nil }); v != 1 || err != nil {
+		t.Errorf("after the release: %v, %v", v, err)
 	}
 }

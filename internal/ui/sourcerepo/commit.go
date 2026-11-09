@@ -256,7 +256,7 @@ func scanFile(ctx context.Context, in guardInput, unborn bool, f gitrepo.File) (
 
 // scanUntracked scans a new file whole (a symlink: its target).
 func scanUntracked(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrepo.Finding, string) {
-	b, err := bounded(ctx, in.limit, func() (capped, error) { return readNew(in.repo.Top, f.Path) })
+	b, err := bounded(ctx, in.limit, func(context.Context) (capped, error) { return readNew(in.repo.Top, f.Path) })
 	if err != nil {
 		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
 	}
@@ -298,7 +298,7 @@ func scanTracked(ctx context.Context, in guardInput, unborn bool, f gitrepo.File
 	if len(lines) == 0 {
 		return out, ""
 	}
-	post, err := bounded(ctx, in.limit, func() (capped, error) { return postImage(in.repo.Top, f.Path) })
+	post, err := bounded(ctx, in.limit, func(context.Context) (capped, error) { return postImage(in.repo.Top, f.Path) })
 	if err != nil {
 		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
 	}

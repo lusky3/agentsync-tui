@@ -83,7 +83,7 @@ func (s *Screen) openDiff() tea.Cmd {
 // as context) and the whole is capped at ui.MaxOutput.
 func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo, unborn bool, f gitrepo.File, limit time.Duration) diffMsg {
 	if f.Kind == gitrepo.Untracked {
-		b, err := bounded(ctx, limit, func() (capped, error) { return readFile(repo.Top, f.Path, ui.MaxOutput) })
+		b, err := bounded(ctx, limit, func(context.Context) (capped, error) { return readFile(repo.Top, f.Path, ui.MaxOutput) })
 		if err != nil {
 			return diffMsg{gen: gen, note: notShown + errNote(err)}
 		}
@@ -110,7 +110,7 @@ func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo
 // Without it gitrepo.PatchMasker follows only the diff's own table
 // headers and masks removed lines past the file's start as env values.
 func worktreePost(ctx context.Context, repo gitrepo.Repo, f gitrepo.File, limit time.Duration) string {
-	b, err := bounded(ctx, limit, func() (capped, error) { return readFile(repo.Top, f.Path, maxScanned) })
+	b, err := bounded(ctx, limit, func(context.Context) (capped, error) { return readFile(repo.Top, f.Path, maxScanned) })
 	if err != nil {
 		return ""
 	}

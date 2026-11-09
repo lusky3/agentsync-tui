@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"os/exec"
@@ -798,5 +799,24 @@ func TestDeletedSensitiveNoteIsKindAware(t *testing.T) {
 	}
 	if mod.Note != noteSensitive {
 		t.Fatalf("modified note = %q, want %q", mod.Note, noteSensitive)
+	}
+}
+
+// TestParseStatusContextStops: an ended context stops the parse with its
+// error, and a key scan it ends marks the file unreadable (fail closed).
+func TestParseStatusContextStops(t *testing.T) {
+	r := atRoot(t)
+	write(t, r.Top, "skills/a.md", strings.Repeat("x", 3*ageReadBuf))
+	out := []byte(untracked("skills/a.md") + "\x00")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ParseStatusContext(ctx, out, r); !errors.Is(err, context.Canceled) {
+		t.Errorf("ParseStatusContext(cancelled) error %v, want context.Canceled", err)
+	}
+	if c := inspect(ctx, r.Top, "skills/a.md"); !c.unreadable {
+		t.Errorf("inspect(cancelled) = %+v, want unreadable", c)
+	}
+	if s := parse(t, out, r); len(s.Files) != 1 || s.Files[0].Class != Owned {
+		t.Errorf("uncancelled parse: %+v", s.Files)
 	}
 }

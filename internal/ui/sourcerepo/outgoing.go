@@ -182,7 +182,7 @@ func scanMessages(ctx context.Context, in netInput, base, tip string) ([]gitrepo
 	if cut && base == "" {
 		return nil, []string{whyWideCut}
 	}
-	fs, err := bounded(ctx, in.limit, func() ([]gitrepo.Finding, error) { return messageFindings(out), nil })
+	fs, err := bounded(ctx, in.limit, func(context.Context) ([]gitrepo.Finding, error) { return messageFindings(out), nil })
 	if err != nil {
 		return nil, scanRefusal(in, err)
 	}
@@ -262,7 +262,7 @@ func scanSection(ctx context.Context, in netInput, sec filePatch) ([]gitrepo.Fin
 		}
 	}
 	rel := homeRel(in.repo.Pathspec, sec.path)
-	fs, err := bounded(ctx, in.limit, func() ([]gitrepo.Finding, error) {
+	fs, err := bounded(ctx, in.limit, func(context.Context) ([]gitrepo.Finding, error) {
 		var out []gitrepo.Finding
 		if binaryRe.MatchString(sec.body) {
 			out = append(out, notScanned(gitrepo.File{HomeRel: rel}, gitrepo.KindNotScannedBinary))

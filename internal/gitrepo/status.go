@@ -2,6 +2,7 @@ package gitrepo
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -209,22 +210,36 @@ var (
 // symlink) and scanning it whole for an age identity. A record outside the
 // pinned grammar is an error whose message never echoes the record.
 func ParseStatus(out []byte, r Repo) (Status, error) {
-	p := parser{r: r, top: resolvePath(r.Top)}
+	return ParseStatusContext(context.Background(), out, r)
+}
+
+// ParseStatusContext is ParseStatus that stops when ctx ends: between
+// records, and inside a file's key-material scan. It then returns ctx's
+// error and no status.
+func ParseStatusContext(ctx context.Context, out []byte, r Repo) (Status, error) {
+	p := parser{ctx: ctx, r: r, top: resolvePath(r.Top)}
 	recs := strings.Split(string(out), "\x00")
 	if n := len(recs); recs[n-1] == "" {
 		recs = recs[:n-1]
 	}
 	for i := 0; i < len(recs); i++ {
+		if err := ctx.Err(); err != nil {
+			return Status{}, err
+		}
 		extra, err := p.record(recs, i)
 		if err != nil {
 			return Status{}, fmt.Errorf("git status: record %d: %w", i+1, err)
 		}
 		i += extra
 	}
+	if err := ctx.Err(); err != nil {
+		return Status{}, err
+	}
 	return p.s, nil
 }
 
 type parser struct {
+	ctx context.Context
 	r   Repo
 	top string
 	s   Status
@@ -400,7 +415,7 @@ func (p *parser) add(f File) {
 		return
 	}
 	f.HomeRel = rel
-	c := inspect(p.top, f.Path)
+	c := inspect(p.ctx, p.top, f.Path)
 	f.Class, f.Note = Classify(rel, c.head, c.age)
 	f.Selectable = selectable(f.Class)
 	p.restrict(&f, c)
@@ -549,8 +564,8 @@ var unreadable = content{age: true, unreadable: true}
 // (age identity, private-key header) of the whole file. A symlink (or a path whose parent resolves outside
 // top) is not read; a directory or special file is not read; a missing
 // file has no content; a failed read counts as an age identity and is
-// marked unreadable.
-func inspect(top, rel string) content {
+// marked unreadable, as does a scan that ctx ended.
+func inspect(ctx context.Context, top, rel string) content {
 	if strings.HasSuffix(rel, "/") {
 		return content{special: true}
 	}
@@ -574,11 +589,24 @@ func inspect(top, rel string) content {
 	if err != nil {
 		return unreadable
 	}
-	age, err := scanKeys(io.MultiReader(bytes.NewReader(head), f))
+	age, err := scanKeys(io.MultiReader(bytes.NewReader(head), ctxReader{ctx, f}))
 	if err != nil {
 		return unreadable
 	}
 	return content{head: head, age: age}
+}
+
+// ctxReader reads r until ctx ends, then returns ctx's error.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(b []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(b)
 }
 
 // parentWithin reports whether full's parent directory, resolved, lies

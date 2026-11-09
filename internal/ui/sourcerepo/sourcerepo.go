@@ -184,8 +184,8 @@ func readStatus(ctx context.Context, git runner.Runner, repo gitrepo.Repo, limit
 	if strings.HasSuffix(res.Stdout, runner.TruncatedMark) {
 		return gitrepo.Status{}, "git status: too many changes to list"
 	}
-	st, err := bounded(ctx, limit, func() (gitrepo.Status, error) {
-		return gitrepo.ParseStatus([]byte(res.Stdout), repo)
+	st, err := bounded(ctx, limit, func(ctx context.Context) (gitrepo.Status, error) {
+		return gitrepo.ParseStatusContext(ctx, []byte(res.Stdout), repo)
 	})
 	if err != nil {
 		return gitrepo.Status{}, mask.FirstLine(err.Error())
@@ -193,25 +193,40 @@ func readStatus(ctx context.Context, git runner.Runner, repo gitrepo.Repo, limit
 	return st, ""
 }
 
+// maxWorkers bounds the bounded workers alive at once. A worker abandoned
+// on time keeps its slot until it returns, so refreshes over a slow file
+// cannot pile up readers; when every slot is held, a new bounded call waits
+// for one within its own limit.
+const maxWorkers = 4
+
+var workerSlots = make(chan struct{}, maxWorkers)
+
 // bounded runs fn on its own goroutine and gives up when ctx ends or limit
-// passes; a late result is dropped.
-func bounded[T any](ctx context.Context, limit time.Duration, fn func() (T, error)) (T, error) {
+// passes; a late result is dropped. fn gets a context that ends when
+// bounded returns, so a worker that honours it stops instead of running on.
+func bounded[T any](ctx context.Context, limit time.Duration, fn func(context.Context) (T, error)) (T, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
+	var zero T
+	select {
+	case workerSlots <- struct{}{}:
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
 	type result struct {
 		v   T
 		err error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		v, err := fn()
+		defer func() { <-workerSlots }()
+		v, err := fn(ctx)
 		ch <- result{v, err}
 	}()
 	select {
 	case r := <-ch:
 		return r.v, r.err
 	case <-ctx.Done():
-		var zero T
 		return zero, ctx.Err()
 	}
 }
