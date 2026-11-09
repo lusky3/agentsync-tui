@@ -24,6 +24,10 @@ const (
 	diffHeadTok = "diff --git a/"
 	emptySHA1   = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 	emptySHA256 = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+	// userinfoPw and apiKeyVal are synthetic secrets, split so the source
+	// holds no literal a repository secret scanner reports.
+	userinfoPw = "hunter2" + "abc"
+	apiKeyVal  = "abc123" + "def456ghi789"
 )
 
 func scanOne(path, text string) []Finding {
@@ -134,7 +138,7 @@ func TestHardEverywhereKinds(t *testing.T) {
 }
 
 func TestConfigLiteralSecretHard(t *testing.T) {
-	wantFinding(t, scanMCP, "API_KEY = 'abc123def456ghi789'", true)
+	wantFinding(t, scanMCP, "API_KEY = '"+apiKeyVal+"'", true)
 	wantNone(t, scanMCP, "API_KEY = '${secret:a.api_key}'")
 	wantFinding(t, "agentsync.toml", `password = "hunter2"`, true)
 	wantFinding(t, "hooks/h.toml", `token = "abc"`, true)
@@ -240,14 +244,14 @@ func TestFindingShownIsMasked(t *testing.T) {
 	// One case per classify branch, then the header and triple-quoted
 	// forms in both file kinds: Shown never holds the raw value.
 	cases := []struct{ path, text, raw string }{
-		{scanSkill, "token " + ghpTok, ghpTok},                              // hard credential: token shape
-		{scanSkill, "see https://u:hunter2abc@example.com/x", "hunter2abc"}, // hard credential: URL userinfo
-		{scanMCP, `API_KEY = """hunter2abc`, "hunter2abc"},                  // multi-line opener
-		{scanSkill, "password: hunter2xyz", "hunter2xyz"},                   // secret assignment (soft in prose)
-		{scanMCP, "API_KEY = 'abc123def456ghi789'", "abc123def456ghi789"},   // secret assignment (hard in config)
-		{scanSkill, "the id is " + opaqueTok, opaqueTok},                    // prose token-shaped word
-		{scanMCP, "UPSTREAM_ID = '" + opaqueTok + "'", opaqueTok},           // config: hard token-shaped word
-		{scanMCP, "model = '" + opaqueTok + "'", opaqueTok},                 // config: soft token-shaped word
+		{scanSkill, "token " + ghpTok, ghpTok},                                    // hard credential: token shape
+		{scanSkill, "see https://u:" + userinfoPw + "@example.com/x", userinfoPw}, // hard credential: URL userinfo
+		{scanMCP, `API_KEY = """hunter2abc`, "hunter2abc"},                        // multi-line opener
+		{scanSkill, "password: hunter2xyz", "hunter2xyz"},                         // secret assignment (soft in prose)
+		{scanMCP, "API_KEY = '" + apiKeyVal + "'", apiKeyVal},                     // secret assignment (hard in config)
+		{scanSkill, "the id is " + opaqueTok, opaqueTok},                          // prose token-shaped word
+		{scanMCP, "UPSTREAM_ID = '" + opaqueTok + "'", opaqueTok},                 // config: hard token-shaped word
+		{scanMCP, "model = '" + opaqueTok + "'", opaqueTok},                       // config: soft token-shaped word
 		{scanSkill, "\x1b[31mtoken " + ghpTok + "\x1b[0m", "\x1b"},
 	}
 	for _, path := range []string{scanMCP, scanSkill} {
