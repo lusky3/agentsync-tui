@@ -15,7 +15,10 @@ import (
 
 // reopen undoes the end of the registry that a Shutdown or KillAll makes
 // for the rest of the process, so the next test can start children.
-func reopen() { live.closed.Store(false) }
+func reopen() {
+	live.closed.Store(false)
+	live.killedAll.Store(false)
+}
 
 // trapExec is trap-int.sh in the mode that exits on SIGINT, logging to log.
 func trapExec(t *testing.T, log string) *Exec {
@@ -125,4 +128,28 @@ func TestKillAllDoesNotWaitForAStart(t *testing.T) {
 		t.Fatal("Shutdown waited for the start despite KillAll")
 	}
 	release.Do(live.starting.RUnlock)
+}
+
+// A KillAll that comes while a child is between its Start and its
+// tracking (its snapshot cannot see the child, and it never waits for a
+// start) still ends it: the child is killed as soon as it is tracked, so
+// it cannot outlive the TUI. The hook calls KillAll in that gap; the child
+// ignores SIGINT, so only SIGKILL stops it.
+func TestKillAllInStartGapKillsTheChild(t *testing.T) {
+	t.Cleanup(reopen)
+	t.Cleanup(func() { afterStartHook = nil })
+	afterStartHook = KillAll
+	e := trapExec(t, filepath.Join(t.TempDir(), "trap.log"))
+	e.Env = append(e.Env, "TRAP_MODE=ignore")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := e.Run(ctx, "gap")
+	afterStartHook = nil
+	if ctx.Err() != nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("the child started in the gap survived KillAll (err %v after %v)", err, time.Since(start))
+	}
+	if l := Live(); len(l) != 0 {
+		t.Errorf("still live: %v", l)
+	}
 }
