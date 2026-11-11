@@ -152,6 +152,16 @@ func OutgoingMessagesArgv(r Repo, base, tip string) []string {
 	return []string{"-C", r.Top, "log", "--format=%H%x00%B%x00", rng, "--"}
 }
 
+// CommitObjectArgv prints the raw commit object sha, as a push sends it:
+// its headers and its whole message, a NUL byte included (git log's %B
+// stops at one).
+func CommitObjectArgv(r Repo, sha string) []string {
+	if actions.ValidObjectID(sha) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "cat-file", "commit", sha}
+}
+
 // BlobArgv prints the content of path (relative to the toplevel) as
 // commit sha records it: the raw blob, no textconv or filter, so a push
 // scan reads an outgoing commit's file the way the push publishes it.

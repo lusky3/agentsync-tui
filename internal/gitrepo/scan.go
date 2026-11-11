@@ -33,6 +33,9 @@ const (
 	// KindContextNotChecked: an added line past the 1 MiB of its file read for
 	// context, so whether it sits in a multi-line value is not known.
 	KindContextNotChecked = "multi-line context not checked beyond 1 MiB"
+	// KindNULInCommit: a commit object holding a NUL byte; git log shows
+	// its message only up to it, so the rest was not scanned (hard).
+	KindNULInCommit = "NUL byte in the commit: the rest of its message is not shown or scanned"
 )
 
 const (

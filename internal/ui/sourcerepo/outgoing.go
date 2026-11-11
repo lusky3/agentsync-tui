@@ -189,6 +189,43 @@ func scanMessages(ctx context.Context, in netInput, base, tip string) ([]gitrepo
 	if cut {
 		fs = append(fs, gitrepo.Finding{Path: messagesPath, Kind: gitrepo.KindNotScannedPatch})
 	}
+	nfs, r := nulCommits(ctx, in, messageSHAs(out))
+	if r != nil {
+		return nil, r
+	}
+	return append(fs, nfs...), nil
+}
+
+// messageSHAs is the commit ids of an OutgoingMessagesArgv output.
+func messageSHAs(out string) []string {
+	fields := strings.Split(out, "\x00")
+	var shas []string
+	for i := 0; i+1 < len(fields); i += 2 {
+		shas = append(shas, strings.TrimSpace(fields[i]))
+	}
+	return shas
+}
+
+// nulCommits reads each outgoing commit object whole (CommitObjectArgv):
+// git log's %B ends a message at a NUL byte, so whatever follows one was
+// not scanned, yet the push sends it. A commit holding a NUL is a hard
+// finding (git itself refuses to make one; hash-object --literally or a
+// fetch can bring one in). A read that fails refuses the push.
+func nulCommits(ctx context.Context, in netInput, shas []string) ([]gitrepo.Finding, []string) {
+	var fs []gitrepo.Finding
+	for _, sha := range shas {
+		argv := gitrepo.CommitObjectArgv(in.repo, sha)
+		if argv == nil {
+			return nil, []string{whyBadRange}
+		}
+		res, err := ui.Read(ctx, in.git, in.limit, argv...)
+		if note := ui.ReadNote("git cat-file", res, err); note != "" {
+			return nil, []string{refused + note}
+		}
+		if strings.IndexByte(res.Stdout, 0) >= 0 {
+			fs = append(fs, gitrepo.Finding{Path: "commit " + sha[:min(len(sha), 12)], Hard: true, Kind: gitrepo.KindNULInCommit})
+		}
+	}
 	return fs, nil
 }
 

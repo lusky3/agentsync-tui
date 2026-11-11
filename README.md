@@ -198,7 +198,7 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   upstream's remote. A push is never forced and never sends another branch,
   a tag or a submodule, whatever the repository's push configuration says.
   Everything else it runs is read-only: `status`, `diff`, `rev-parse`,
-  `log`, `for-each-ref`, `config --get`, `remote get-url`, `rev-list` and,
+  `log`, `cat-file`, `for-each-ref`, `config --get`, `remote get-url`, `rev-list` and,
   for a push only, `ls-remote` of the branch (its one network read). It
   never runs `--force`, `reset`, `clean`, `checkout`, `restore`, `stash`,
   `rebase`, `--no-verify`, `remote add`/`set-url` or a `config` write, and it
@@ -209,7 +209,8 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   finds a likely secret, HEAD is detached, a merge, rebase, cherry-pick,
   revert or bisect is in progress, or `index.lock` is present (the TUI never
   deletes it). A push is scanned the same way first, the messages of the
-  outgoing commits included. When the remote pushes to a URL other than the
+  outgoing commits included (a commit holding a NUL byte, which hides the
+  rest of its message from `git log`, is refused). When the remote pushes to a URL other than the
   one it fetches from (a `pushurl`, a `pushInsteadOf`, a second `url`), the
   fetched upstream does not tell what that URL lacks, so the branch's whole
   history is scanned instead. Otherwise the guard first asks the remote
