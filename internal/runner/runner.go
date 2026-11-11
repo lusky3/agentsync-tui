@@ -165,7 +165,8 @@ func (e *Exec) Run(ctx context.Context, args ...string) (Result, error) {
 
 // startTracked starts cmd and tracks it, so Shutdown can reach the group
 // until Wait returns. A Shutdown's snapshot waits until the child is
-// tracked (live.starting); once Shutdown or KillAll has begun nothing is
+// tracked (live.starting); KillAll's does not, so a child tracked after a
+// KillAll is killed at once. Once Shutdown or KillAll has begun nothing is
 // started and the error is ErrShuttingDown.
 func startTracked(cmd *exec.Cmd, args []string, write bool, program string) error {
 	live.starting.RLock()
@@ -179,7 +180,9 @@ func startTracked(cmd *exec.Cmd, args []string, write bool, program string) erro
 	if afterStartHook != nil {
 		afterStartHook()
 	}
-	trackAs(cmd, args, write, program)
+	if c := trackAs(cmd, args, write, program); live.killedAll.Load() {
+		killGroup(c) // a KillAll's snapshot came before this child was tracked
+	}
 	return nil
 }
 
