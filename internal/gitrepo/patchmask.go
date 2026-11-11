@@ -28,10 +28,12 @@ import (
 // header or env key (its closing line included) is the secret's and is
 // masked whole, whatever it looks like: on the added side as the
 // post-image says (contextOf), on the removed side as the pre-image's
-// state is followed, each side on its own; a removed or context line
-// whose pre-image state is not known counts as one (fail closed).
+// state is followed, each side on its own; in a config file a removed or
+// context line whose pre-image state is not known counts as one (fail
+// closed).
 type PatchMasker struct {
 	homeRel   string
+	config    bool // IsConfigFile(homeRel)
 	env       map[int]bool
 	bodies    map[int]mlOpener // post-image lines in a secret multi-line body
 	post      []string         // the post-image's lines; nil when unknown
@@ -80,7 +82,7 @@ func (s *tableState) feed(l string) {
 // ("" when unknown; a post-image cut short must end at a whole line).
 func NewPatchMasker(homeRel, post string) *PatchMasker {
 	c := contextOf(post)
-	m := &PatchMasker{homeRel: homeRel, env: c.env, bodies: c.bodies, postGapAt: 1}
+	m := &PatchMasker{homeRel: homeRel, config: IsConfigFile(homeRel), env: c.env, bodies: c.bodies, postGapAt: 1}
 	if post != "" {
 		m.havePost = true
 		m.post = strings.Split(strings.TrimSuffix(post, "\n"), "\n")
@@ -157,9 +159,10 @@ func (m *PatchMasker) added(body string) lineAt {
 
 // oldLine follows a removed (or context) line on the pre-image's side: it
 // is under an env table, or in a secret's body, when the state before it
-// says so, or when the state is not known.
+// says so, or when the state is not known (a body only in a config file).
 func (m *PatchMasker) oldLine(body string) lineAt {
-	at := lineAt{env: m.old.env || !m.oldKnown, body: m.old.inSecretBody() || !m.oldKnown}
+	unknown := !m.oldKnown
+	at := lineAt{env: m.old.env || unknown, body: m.old.inSecretBody() || unknown && m.config}
 	m.old.feed(body)
 	return at
 }
