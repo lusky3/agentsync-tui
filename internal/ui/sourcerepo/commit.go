@@ -534,12 +534,12 @@ func commitOutcome(p *pendingCommit, m ui.RunMsg, ok bool) string {
 	case ok:
 		return "committed: " + p.subject
 	case m.Err != nil && !errors.As(m.Err, new(*runner.MissingError)):
-		t := shellQuote(p.top)
+		t := quotePath(p.top)
 		return "the commit was stopped (" + outcomeOf(m) + "); it may have been recorded. Check before retrying or unstaging" +
-			runOutside + "\n  " + gitC + t + " log -1\n  " + gitC + t + statusCmd
+			runOutside + "\n  " + gitC + t + " log -1\n  " + gitC + t + statusCmd + maskedPathNote(p.top)
 	case p.added:
 		return "commit failed (" + outcomeOf(m) + "); the selected files are now staged. " +
-			"To unstage them, run outside the TUI:\n  " + restoreCommand(p.top, p.add)
+			"To unstage them, run outside the TUI:\n  " + restoreCommand(p.top, p.add) + maskedPathNote(append([]string{p.top}, p.add...)...)
 	}
 	return "commit failed (" + outcomeOf(m) + "): nothing was committed"
 }
@@ -556,7 +556,7 @@ func outcomeOf(m ui.RunMsg) string {
 // restoreCommand is the unstage command, as text for the user (R4): the
 // TUI never runs it (D11). Its paths are taken literally.
 func restoreCommand(top string, paths []string) string {
-	words := []string{"git", "-C", shellQuote(top), "--literal-pathspecs", "restore", "--staged", "--"}
+	words := []string{"git", "-C", quotePath(top), "--literal-pathspecs", "restore", "--staged", "--"}
 	for _, p := range paths[:min(len(paths), shownPaths)] {
 		words = append(words, shellQuote(mask.Text(p)))
 	}
@@ -564,6 +564,33 @@ func restoreCommand(top string, paths []string) string {
 		words = append(words, "… (+"+strconv.Itoa(n)+" more)")
 	}
 	return strings.Join(words, " ")
+}
+
+// whyMaskedPath follows commands with a part masked as a possible secret.
+const whyMaskedPath = "(" + mask.Mask + " stands for a part masked as a possible secret: put the real text back before running)"
+
+// quotePath is a path (or a name) in a command shown for running outside
+// the TUI: masked as the heading shows it (mask.Text), then quoted.
+func quotePath(p string) string { return shellQuote(mask.Text(p)) }
+
+// maskedPathNote is a line break and whyMaskedPath when quotePath masks
+// part of any of parts, else "".
+func maskedPathNote(parts ...string) string {
+	for _, p := range parts {
+		if mask.Text(p) != mask.Sanitize(p) {
+			return "\n" + whyMaskedPath
+		}
+	}
+	return ""
+}
+
+// withPathNote is lines with whyMaskedPath added when quotePath masks
+// part of any of parts.
+func withPathNote(lines []string, parts ...string) []string {
+	if maskedPathNote(parts...) != "" {
+		lines = append(lines, whyMaskedPath)
+	}
+	return lines
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)

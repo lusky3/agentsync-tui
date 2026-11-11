@@ -1,6 +1,7 @@
 package sourcerepo
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -1008,5 +1009,33 @@ func TestListFindingsFitTheScreen(t *testing.T) {
 	}
 	if v := view(f.s); !strings.Contains(v, "more") {
 		t.Errorf("no count of the findings cut:\n%s", v)
+	}
+}
+
+// A repository path holding a credential shape is masked in every command
+// the screen shows for running outside the TUI, as in its heading, with a
+// line saying the masked part must be put back first; a plain path is
+// shown as is, with no such line.
+func TestGuidanceMasksRepositoryPath(t *testing.T) {
+	top := "/srv/" + ghpToken + "/home"
+	p := &pendingCommit{top: top, add: []string{skillA}, added: true}
+	stopped := ui.RunMsg{Err: context.DeadlineExceeded}
+	failed := ui.RunMsg{Result: runner.Result{ExitCode: 1}}
+	texts := map[string]string{
+		"stopped commit": commitOutcome(p, stopped, false),
+		"staged commit":  commitOutcome(p, failed, false),
+		"no upstream":    strings.Join(noUpstream(top, "main"), "\n"),
+		"below root":     strings.Join(belowRoot(top), "\n"),
+		"stopped pull":   pullOutcome(&pendingNet{top: top}, stopped, false),
+		"push refusal":   strings.Join(pushHardRefusal(1, top, ""), "\n"),
+	}
+	for name, txt := range texts {
+		if strings.Contains(txt, ghpToken) || !strings.Contains(txt, "/srv/") || !strings.Contains(txt, whyMaskedPath) {
+			t.Errorf("%s:\n%s", name, txt)
+		}
+	}
+	if txt := commitOutcome(&pendingCommit{top: "/srv/home"}, stopped, false); strings.Contains(txt, whyMaskedPath) ||
+		!strings.Contains(txt, "git -C /srv/home log -1") {
+		t.Errorf("plain path:\n%s", txt)
 	}
 }

@@ -105,7 +105,7 @@ func (s *Screen) header() []string {
 	if !s.loaded {
 		return []string{theme.Dim.Render(whyLoading)}
 	}
-	home := shellQuote(s.repo.Home)
+	home := quotePath(s.repo.Home)
 	switch s.repo.Manager {
 	case gitrepo.Unknown:
 		return []string{
@@ -123,12 +123,12 @@ func (s *Screen) header() []string {
 		}
 		return out
 	case gitrepo.None:
-		return []string{
+		return withPathNote([]string{
 			theme.Bold.Render(whyNone) + ": " + home,
 			"To version the home, run these outside the TUI (it runs neither):",
 			"  " + gitC + home + " init",
 			"  " + gitC + home + " remote add origin <url>",
-		}
+		}, s.repo.Home)
 	case gitrepo.Missing:
 		return s.missingHeader(home)
 	}
