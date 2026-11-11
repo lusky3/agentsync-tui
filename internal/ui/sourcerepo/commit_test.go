@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
+	"github.com/lusky3/agentsync-tui/internal/gitrepo"
 	"github.com/lusky3/agentsync-tui/internal/gitrepo/gittest"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
@@ -924,13 +925,20 @@ func TestCommitRefusedVisibleKeyInEnvTable(t *testing.T) {
 
 // The same for a new file: it is its own context.
 func TestCommitRefusedVisibleKeyInEnvTableNewFile(t *testing.T) {
+	const newPath = "mcp/y.toml"
 	home := newRepo(t)
-	write(t, home, tomlX, envTableTOML+"name = '"+opaqueWord+"'\n")
+	write(t, home, newPath, envTableTOML+"name = '"+opaqueWord+"'\n")
 	f := open(t, home)
+	if i := rowOf(f.s, newPath); i < 0 || f.s.status.Files[i].Kind != gitrepo.Untracked {
+		t.Fatalf("the new file is not listed as untracked: %+v", f.s.status.Files)
+	}
+	if !f.s.sel[newPath] {
+		selectRow(t, f.s, newPath)
+	}
 	if out := commit(f.s, commitMsg); len(out) != 0 {
 		t.Fatalf("emitted %v", out)
 	}
-	wantView(t, f.s, "refused", "mcp/x.toml:8")
+	wantView(t, f.s, "refused", newPath+":8")
 }
 
 // Outside an env table a visible key's token-shaped value stays soft
