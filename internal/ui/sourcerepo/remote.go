@@ -219,11 +219,13 @@ func (s *Screen) emitNet(act actions.Action, err error, p pendingNet) tea.Cmd {
 }
 
 // netInput is what a pull or push guard round needs, copied off the screen.
+// limit bounds each local read, netLimit the push guard's one network read
+// (RemoteBranchArgv).
 type netInput struct {
-	repo  gitrepo.Repo
-	git   runner.Runner
-	limit time.Duration
-	op    netOp
+	repo            gitrepo.Repo
+	git             runner.Runner
+	limit, netLimit time.Duration
+	op              netOp
 }
 
 // netMsg carries one finished pull or push guard round.
@@ -237,17 +239,28 @@ type netMsg struct {
 
 // pushPlan is what the push guard found: the commit it scanned (the push
 // sends exactly that commit, Ruling 32), the push URLs (unmasked), the
-// scan's findings, and whether the scan covered tip's whole history (wide:
-// a push URL is not the fetch URL).
+// scan's findings, and, when the scan covered tip's whole history, why
+// (wide: whyWide or whyNoBranch; "" for base..tip).
 type pushPlan struct {
 	sha      string
 	urls     []string
 	findings []gitrepo.Finding
-	wide     bool
+	wide     string
 }
 
 // whyWide says why a push scan covered the branch's whole history.
 const whyWide = "a push URL is not the fetch URL, so it may lack more than the fetched upstream does: the branch's whole history was scanned"
+
+// whyNoBranch says why a push scan covered the branch's whole history: the
+// remote has no such branch now (a new, empty repository behind an old
+// remote-tracking ref, for one), so it may lack all of it.
+func whyNoBranch(branch string) string {
+	return "the remote has no " + mask.Text(branch) + ", so it may lack the branch's whole history: all of it was scanned"
+}
+
+// whyMoved refuses a push whose remote branch is not where the
+// remote-tracking ref says: the scan's base is not known to be there.
+const whyMoved = refused + "the remote's branch is not where it was last fetched: fetch (f) first"
 
 // startNet checks what the last refresh read, then starts the guard round
 // of a pull or push in the background.
@@ -258,7 +271,7 @@ func (s *Screen) startNet(op netOp) tea.Cmd {
 	}
 	s.netBusy, s.busyOp, s.note, s.pushFindings, s.commit.findings = true, op, "", nil, nil
 	gen, ctx := s.nets.Next(s.base)
-	in := netInput{repo: s.repo, git: s.git, limit: s.limit, op: op}
+	in := netInput{repo: s.repo, git: s.git, limit: s.limit, netLimit: s.netLimit, op: op}
 	return func() tea.Msg { return runNet(ctx, gen, in) }
 }
 
@@ -312,15 +325,48 @@ func pushGuard(ctx context.Context, in netInput, b gitrepo.Branch, r remoteInfo)
 	if why != "" {
 		return pushPlan{}, []string{why}
 	}
-	wide := !onlyFetchURL(ctx, in, r.name, urls)
-	if wide {
+	wide := ""
+	if !onlyFetchURL(ctx, in, r.name, urls) {
+		wide = whyWide
+	} else if wide, why = remoteHolds(ctx, in, r.name, b.Head, base); why != "" {
+		return pushPlan{}, []string{why}
+	}
+	if wide != "" {
 		base = ""
 	}
 	fs, refusal := scanOutgoing(ctx, in, base, tip)
-	if wide && refusal != nil {
-		refusal = append(refusal, whyWide)
+	if wide != "" && refusal != nil {
+		refusal = append(refusal, wide)
 	}
 	return pushPlan{sha: tip, urls: urls, findings: fs, wide: wide}, refusal
+}
+
+// remoteHolds asks the remote (the push goes to its fetch URL, onlyFetchURL)
+// where its branch is, so the fetched upstream is known to still be the
+// destination's before the scan leaves base's history out: the
+// remote-tracking ref outlives a `remote set-url` to another repository. The
+// branch at base: "" (scan base..tip). No such branch: whyNoBranch (scan
+// the whole history). Anywhere else, or a read that fails: a refusal (why).
+func remoteHolds(ctx context.Context, in netInput, remote, branch, base string) (wide, why string) {
+	argv := gitrepo.RemoteBranchArgv(in.repo, remote, branch)
+	if argv == nil {
+		return "", refused + whyBadRemote
+	}
+	res, err := ui.Read(ctx, in.git, in.netLimit, argv...)
+	if note := ui.ReadNote("git ls-remote", res, err); note != "" {
+		return "", refused + note
+	}
+	for _, l := range strings.Split(res.Stdout, "\n") {
+		id, ref, ok := strings.Cut(strings.TrimSuffix(l, "\r"), "\t")
+		switch {
+		case !ok || ref != headsPrefix+branch:
+		case id == base:
+			return "", ""
+		default:
+			return "", whyMoved
+		}
+	}
+	return whyNoBranch(branch), ""
 }
 
 // onlyFetchURL reports whether urls, every URL a push to remote goes to,
@@ -449,8 +495,8 @@ func (s *Screen) onNet(m netMsg) tea.Cmd {
 	}
 	warn := append(pushWarnings(m.push.urls), "scanned against "+mask.Text(m.remote)+"/"+mask.Text(m.head)+
 		" as last fetched; fetch (f) first if the remote may have been rewritten")
-	if m.push.wide {
-		warn = append(warn, whyWide)
+	if m.push.wide != "" {
+		warn = append(warn, m.push.wide)
 	}
 	if len(m.push.findings) > 0 {
 		act.TypedConfirm = true
@@ -460,19 +506,19 @@ func (s *Screen) onNet(m netMsg) tea.Cmd {
 	return s.emitNet(act, nil, p)
 }
 
-// pushHardRefusal explains hard findings in the outgoing commits (wide:
-// in the branch's whole history, which a push URL other than the fetch
-// URL may lack).
-func pushHardRefusal(n int, top string, wide bool) []string {
+// pushHardRefusal explains hard findings in the outgoing commits (wide,
+// when not "": in the branch's whole history, which the destination may
+// lack, and why).
+func pushHardRefusal(n int, top string, wide string) []string {
 	out := []string{
 		refused + plural(n, "hard finding") + " (likely secrets) in the outgoing commits, listed below; a push would publish them in history",
 		"to inspect them" + runOutside,
 		"  " + inspectCommand(top),
 	}
-	if wide {
+	if wide != "" {
 		out[0] = refused + plural(n, "hard finding") + " (likely secrets) in the branch's history, listed below; a push would publish them in history"
 		out[2] = "  " + gitC + shellQuote(top) + " log -p HEAD"
-		out = append(out, whyWide)
+		out = append(out, wide)
 	}
 	return out
 }

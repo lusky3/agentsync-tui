@@ -1057,3 +1057,31 @@ func TestPushRefusedVisibleKeyInEnvTable(t *testing.T) {
 		t.Error("the value is shown")
 	}
 }
+
+// The fetched upstream tells what the destination holds only while it is
+// still the destination's: after `remote set-url` to a new, empty
+// repository the old remote-tracking ref stays, but the push would
+// publish the whole history there. The guard asks the remote where its
+// branch is; without one there, the whole history is scanned.
+func TestPushToEmptiedRemoteScansWholeHistory(t *testing.T) {
+	home, bare := newTracked(t)
+	pushFromOther(t, bare, map[string]string{tomlX: baseTOML + "env = { API_KEY = \"" + ghpToken + "\" }\n"})
+	gittest.Git(t, home, "pull", "-q", "--ff-only")
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	gittest.Git(t, home, "remote", "set-url", "origin", gittest.Bare(t))
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", "mcp/x.toml:3", "has no main")
+}
+
+// A remote whose branch is not where the remote-tracking ref says (moved
+// on since the last fetch, or another repository behind the same name)
+// is refused until a fetch: the scan's base is not known to be there.
+func TestPushRefusedWhenRemoteBranchMovedSinceFetch(t *testing.T) {
+	home, bare := newTracked(t)
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	pushFromOther(t, bare, map[string]string{"skills/b/SKILL.md": "# b\n"})
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "is not where it was last fetched", "fetch (f) first")
+}

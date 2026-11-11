@@ -4,7 +4,8 @@ import "github.com/lusky3/agentsync-tui/internal/actions"
 
 // The read argv of the Source repo tab's network keys (fetch, pull, push).
 // Each starts `-C <top>`; the git Program adds the fixed hardening. None
-// of them writes or touches the network. A function returns nil when an
+// of them writes, and only RemoteBranchArgv touches the network (the push
+// guard's one network read). A function returns nil when an
 // argument fails its check, so a caller can never run a half-built argv.
 
 // UpstreamArgv reads the upstream of branch head: one line per matching
@@ -44,6 +45,18 @@ func FetchURLArgv(r Repo, remote string) []string {
 		return nil
 	}
 	return []string{"-C", r.Top, "remote", "get-url", remote}
+}
+
+// RemoteBranchArgv asks remote (over the network, at its fetch URL) where
+// its branch is: at most one line "<object id> TAB refs/heads/<branch>"
+// among the lines ls-remote prints (a pattern also matches a longer ref
+// ending in it, so callers keep only the exact ref), none when the remote
+// has no such branch.
+func RemoteBranchArgv(r Repo, remote, branch string) []string {
+	if actions.ValidRemoteName(remote) != nil || actions.ValidBranchName(branch) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "ls-remote", "--refs", remote, "refs/heads/" + branch}
 }
 
 // BranchCommitArgv prints the object id of the commit branch points at,

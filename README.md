@@ -198,7 +198,8 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   upstream's remote. A push is never forced and never sends another branch,
   a tag or a submodule, whatever the repository's push configuration says.
   Everything else it runs is read-only: `status`, `diff`, `rev-parse`,
-  `log`, `for-each-ref`, `config --get`, `remote get-url` and `rev-list`. It
+  `log`, `for-each-ref`, `config --get`, `remote get-url`, `rev-list` and,
+  for a push only, `ls-remote` of the branch (its one network read). It
   never runs `--force`, `reset`, `clean`, `checkout`, `restore`, `stash`,
   `rebase`, `--no-verify`, `remote add`/`set-url` or a `config` write, and it
   never creates a remote or a hosted repository. A commit is refused when
@@ -211,7 +212,11 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   outgoing commits included. When the remote pushes to a URL other than the
   one it fetches from (a `pushurl`, a `pushInsteadOf`, a second `url`), the
   fetched upstream does not tell what that URL lacks, so the branch's whole
-  history is scanned instead. That scan is bounded: a history with more than
+  history is scanned instead. Otherwise the guard first asks the remote
+  where its branch is: at the fetched upstream, only the outgoing commits
+  are scanned; absent (a new, empty repository behind an old
+  remote-tracking ref after `remote set-url`), the whole history is; anywhere
+  else, the push is refused until you fetch. That scan is bounded: a history with more than
   2000 paths or 20000 file changes, or one whose log is too large to read in
   full, or whose scan takes longer than two minutes (whatever
   `--read-timeout` says), is refused, and you push
