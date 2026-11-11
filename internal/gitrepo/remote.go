@@ -134,9 +134,9 @@ func OutgoingPatchArgv(r Repo, base, tip string) []string {
 	if !ok {
 		return nil
 	}
-	return []string{"-C", r.Top, "log", "-p", "--no-ext-diff", "--no-textconv", "--no-color", "-U0",
-		"--no-renames", "--root", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
-		"--format=%H", rng, "--", r.Pathspec}
+	argv := append([]string{"-C", r.Top, "log", "-p"}, plainPatch...)
+	return append(argv, "-U0", "--no-renames", "--root", "--full-history", "--diff-merges=first-parent",
+		"--src-prefix=a/", "--dst-prefix=b/", "--format=%H", rng, "--", r.Pathspec)
 }
 
 // OutgoingMessagesArgv prints the raw message of every commit in

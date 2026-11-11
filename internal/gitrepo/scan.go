@@ -73,9 +73,13 @@ func DiffArgv(r Repo, unborn bool, path string, unified int) []string {
 			base = emptyTreeSHA256
 		}
 	}
-	return []string{"-C", r.Top, "diff", "--no-ext-diff", "--no-textconv", "--no-color",
-		"-U" + strconv.Itoa(unified), base, "--", path}
+	argv := append([]string{"-C", r.Top, "diff"}, plainPatch...)
+	return append(argv, "-U"+strconv.Itoa(unified), base, "--", path)
 }
+
+// plainPatch makes a patch git's own bytes: no external diff driver, no
+// textconv filter, no colour.
+var plainPatch = []string{"--no-ext-diff", "--no-textconv", "--no-color"}
 
 // StoredAttrs are the attributes that make git store something other than
 // a new file's bytes: a clean filter and a working-tree encoding.
@@ -107,8 +111,8 @@ func StoredDiffArgv(r Repo, path string) []string {
 	if actions.ValidGitPath(path) != nil {
 		return nil
 	}
-	return []string{"-C", r.Top, "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "-U0",
-		"--", "/dev/null", path}
+	argv := append([]string{"-C", r.Top, "diff", "--no-index"}, plainPatch...)
+	return append(argv, "-U0", "--", "/dev/null", path)
 }
 
 // Line is one added line of a patch: N is its line number in the new file.
