@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -682,4 +683,24 @@ func TestInspectSequencerAfterManualCommit(t *testing.T) {
 	if InspectGitDir(gd).InProgress == "" {
 		t.Fatal("sequence in progress not reported")
 	}
+}
+
+// An agentsync.toml over the read cap may name a custom backup author the
+// TUI cannot read, so a repository without the agentsync.managed marker
+// is refused rather than offered as a source repository; with the marker
+// it is refused as a backup, as always.
+func TestOversizeConfigRefused(t *testing.T) {
+	big := "[destination_directory_git_backup]\nauthor_email = \"big@example.invalid\"\n# " +
+		strings.Repeat("x", maxConfigBytes) + "\n"
+	home := filepath.Join(t.TempDir(), "home")
+	gittest.Init(t, home)
+	if err := os.WriteFile(filepath.Join(home, tomlName), []byte(big), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commitAs(t, home, "big@example.invalid", "settings.json")
+	if r := detect(t, home); r.Manager != Git || r.Refusal != RefusalConfigTooLarge {
+		t.Fatalf("Manager %v Refusal %q, want the oversize refusal", r.Manager, r.Refusal)
+	}
+	gittest.Git(t, home, "config", "--local", "agentsync.managed", "true")
+	wantBackup(t, home)
 }

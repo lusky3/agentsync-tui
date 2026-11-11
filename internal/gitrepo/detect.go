@@ -67,6 +67,9 @@ const (
 	RefusalUnknown   = "the repository could not be inspected"
 	RefusalOutside   = "the home is outside the repository"
 	RefusalBackup    = "this is agentsync's local-only destination history; it must never be committed or pushed"
+	// RefusalConfigTooLarge: agentsync.toml is over the read cap, so a
+	// custom backup author it may name is not known.
+	RefusalConfigTooLarge = "agentsync.toml is over 1 MiB: the TUI cannot tell whether this is agentsync's destination history"
 )
 
 // Repo is the result of Detect. Pathspec is "." or the slash-separated
@@ -268,9 +271,13 @@ func detectGit(ctx context.Context, git runner.Runner, r Repo, timeout time.Dura
 	if r.ObjectFormat, err = objectFormat(ctx, git, top, timeout); err != nil {
 		return r, err
 	}
-	backup, err := isBackupRepo(ctx, git, top, BackupAuthor(r.ResolvedHome), timeout)
-	if backup {
+	author, known := backupAuthor(r.ResolvedHome)
+	backup, err := isBackupRepo(ctx, git, top, author, timeout)
+	switch {
+	case backup:
 		r.Refusal = RefusalBackup
+	case err == nil && !known:
+		r.Refusal = RefusalConfigTooLarge
 	}
 	return r, err
 }
@@ -406,15 +413,26 @@ const maxConfigBytes = 1 << 20
 // agentsync.toml (a stow-style home) is followed only to a regular file
 // inside the resolved home (configPath). Falling back to the default can
 // miss a custom author, so a backup repository committing as one is then
-// recognised only by Detect's other rules (the agentsync.managed marker).
+// recognised only by Detect's other rules (the agentsync.managed marker;
+// a file over the cap, which may name one, is refused).
 func BackupAuthor(home string) string {
+	a, _ := backupAuthor(home)
+	return a
+}
+
+// backupAuthor is BackupAuthor; known is false when agentsync.toml is
+// over maxConfigBytes, so a custom author it names was not read.
+func backupAuthor(home string) (author string, known bool) {
 	name, ok := configPath(home)
 	if !ok {
-		return DefaultBackupAuthor
+		return DefaultBackupAuthor, true
 	}
 	b, err := ReadRegular(name, maxConfigBytes+1)
-	if err != nil || len(b) > maxConfigBytes {
-		return DefaultBackupAuthor
+	switch {
+	case err != nil:
+		return DefaultBackupAuthor, true
+	case len(b) > maxConfigBytes:
+		return DefaultBackupAuthor, false
 	}
 	var cfg struct {
 		Backup struct {
@@ -422,9 +440,9 @@ func BackupAuthor(home string) string {
 		} `toml:"destination_directory_git_backup"`
 	}
 	if toml.Unmarshal(b, &cfg) != nil || cfg.Backup.AuthorEmail == "" {
-		return DefaultBackupAuthor
+		return DefaultBackupAuthor, true
 	}
-	return cfg.Backup.AuthorEmail
+	return cfg.Backup.AuthorEmail, true
 }
 
 // configPath is the file BackupAuthor reads: <home>/agentsync.toml, or,
