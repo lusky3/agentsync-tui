@@ -210,7 +210,8 @@ func messageSHAs(out string) []string {
 // git log's %B ends a message at a NUL byte, so whatever follows one was
 // not scanned, yet the push sends it. A commit holding a NUL is a hard
 // finding (git itself refuses to make one; hash-object --literally or a
-// fetch can bring one in). A read that fails refuses the push.
+// fetch can bring one in). A read that fails, or that the runner cut (the
+// NUL may lie past the cut), refuses the push.
 func nulCommits(ctx context.Context, in netInput, shas []string) ([]gitrepo.Finding, []string) {
 	var fs []gitrepo.Finding
 	for _, sha := range shas {
@@ -222,8 +223,13 @@ func nulCommits(ctx context.Context, in netInput, shas []string) ([]gitrepo.Find
 		if note := ui.ReadNote("git cat-file", res, err); note != "" {
 			return nil, []string{refused + note}
 		}
-		if strings.IndexByte(res.Stdout, 0) >= 0 {
-			fs = append(fs, gitrepo.Finding{Path: "commit " + sha[:min(len(sha), 12)], Hard: true, Kind: gitrepo.KindNULInCommit})
+		short := sha[:min(len(sha), 12)]
+		raw, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+		if cut {
+			return nil, []string{refused + "commit " + short + " is over 4 MiB: push it outside the TUI"}
+		}
+		if strings.IndexByte(raw, 0) >= 0 {
+			fs = append(fs, gitrepo.Finding{Path: "commit " + short, Hard: true, Kind: gitrepo.KindNULInCommit})
 		}
 	}
 	return fs, nil
