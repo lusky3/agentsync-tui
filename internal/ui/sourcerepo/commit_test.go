@@ -1039,3 +1039,34 @@ func TestGuidanceMasksRepositoryPath(t *testing.T) {
 		t.Errorf("plain path:\n%s", txt)
 	}
 }
+
+// git add stores what a clean filter (or a working-tree-encoding) makes
+// of the worktree file, not the file itself: a filter that expands a
+// reference into a credential would commit it although the file holds
+// only the reference. A new file with such an attribute is scanned as git
+// will store it (a tracked one already is: git diff applies the filter).
+func TestCommitScansCleanFilteredContent(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "attrs", map[string]string{".gitattributes": "mcp/*.toml filter=expand\n"})
+	gittest.Git(t, home, "config", "filter.expand.clean", "sed s/REF/"+ghpToken+"/")
+	write(t, home, "mcp/new.toml", "[x]\nk = 'REF'\n")
+	write(t, home, tomlX, baseTOML+"k = 'REF'\n")
+	for _, p := range []string{"mcp/new.toml", tomlX} {
+		f := open(t, home)
+		for _, q := range f.s.selectedPaths() {
+			if q != p {
+				selectRow(t, f.s, q)
+			}
+		}
+		if got := f.s.selectedPaths(); len(got) != 1 || got[0] != p {
+			t.Fatalf("selected %v, want only %s", got, p)
+		}
+		if out := commit(f.s, commitMsg); len(out) != 0 {
+			t.Fatalf("%s: emitted %v", p, out)
+		}
+		wantView(t, f.s, "refused: 1 hard finding", p)
+		if strings.Contains(view(f.s), ghpToken) {
+			t.Errorf("%s: token shown", p)
+		}
+	}
+}
