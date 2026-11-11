@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
+	"github.com/lusky3/agentsync-tui/internal/gitrepo"
 	"github.com/lusky3/agentsync-tui/internal/gitrepo/gittest"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
@@ -1084,4 +1085,27 @@ func TestPushRefusedWhenRemoteBranchMovedSinceFetch(t *testing.T) {
 	f := open(t, home)
 	wantNothing(t, press(f.s, "P"))
 	wantView(t, f.s, "is not where it was last fetched", "fetch (f) first")
+}
+
+// git log's %B ends a message at a NUL byte, so a token after one is never
+// scanned, yet a push sends the whole commit object. git refuses to make
+// such a commit; one written with hash-object --literally (or fetched from
+// elsewhere) is refused as a hard finding.
+func TestPushRefusedNULInCommitMessage(t *testing.T) {
+	home, _ := newTracked(t)
+	tree := strings.TrimSpace(gittest.Git(t, home, "rev-parse", "HEAD^{tree}"))
+	obj := "tree " + tree + "\nparent " + head(t, home) + "\nauthor t <t@example.invalid> 1 +0000\n" +
+		"committer t <t@example.invalid> 1 +0000\n\nsubject\n\x00" + ghpToken + "\n"
+	p := filepath.Join(t.TempDir(), "commit")
+	if err := os.WriteFile(p, []byte(obj), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := strings.TrimSpace(gittest.Git(t, home, "hash-object", "--literally", "-t", "commit", "-w", p))
+	gittest.Git(t, home, "update-ref", "refs/heads/main", c)
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", gitrepo.KindNULInCommit)
+	if strings.Contains(view(f.s), ghpToken) {
+		t.Error("the token after the NUL is shown")
+	}
 }
