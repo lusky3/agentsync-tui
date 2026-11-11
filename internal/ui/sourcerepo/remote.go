@@ -232,6 +232,7 @@ type netInput struct {
 // netMsg carries one finished pull or push guard round.
 type netMsg struct {
 	gen          int
+	top          string // the repository the round read
 	op           netOp
 	refusal      []string // display-safe lines; nil when every guard passed
 	push         pushPlan
@@ -276,6 +277,14 @@ func (s *Screen) startNet(op netOp) tea.Cmd {
 	return func() tea.Msg { return runNet(ctx, gen, in) }
 }
 
+// repoChanged drops a guard result read in another repository than the
+// screen now shows (its argv would name this one): it says so and
+// refreshes.
+func (s *Screen) repoChanged() tea.Cmd {
+	s.note = whyRepoChanged
+	return s.Refresh()
+}
+
 // cancelNet drops a running guard round.
 func (s *Screen) cancelNet() {
 	s.nets.Supersede()
@@ -285,7 +294,7 @@ func (s *Screen) cancelNet() {
 // runNet re-reads the status and upstream, then checks the git dir and,
 // for a push, everything the push would publish.
 func runNet(ctx context.Context, gen int, in netInput) netMsg {
-	m := netMsg{gen: gen, op: in.op}
+	m := netMsg{gen: gen, top: in.repo.Top, op: in.op}
 	sn, note := readSnapshot(ctx, in.git, in.repo, in.limit)
 	if note != "" {
 		m.refusal = []string{refused + note}
@@ -476,6 +485,10 @@ func pushURLs(ctx context.Context, in netInput, remote string) ([]string, string
 // emits the pull or push.
 func (s *Screen) onNet(m netMsg) tea.Cmd {
 	s.netBusy, s.pushFindings = false, m.push.findings
+	if m.top != s.repo.Top {
+		s.pushFindings = nil
+		return s.repoChanged()
+	}
 	if len(m.refusal) > 0 {
 		s.note = strings.Join(m.refusal, "\n")
 		return nil
@@ -626,6 +639,7 @@ type unpushedMsg struct {
 	gen  int
 	n    int
 	note string // the push note it extends
+	top  string // the repository it counted in
 }
 
 // countUnpushed reads, in the background, how many commits were made on
@@ -636,21 +650,21 @@ func (s *Screen) countUnpushed(p *pendingNet) tea.Cmd {
 		return nil
 	}
 	gen, ctx := s.nets.Next(s.base)
-	git, limit, note := s.git, s.limit, s.note
+	git, limit, note, top := s.git, s.limit, s.note, s.repo.Top
 	return func() tea.Msg {
 		res, err := ui.Read(ctx, git, limit, argv...)
 		n, perr := strconv.Atoi(strings.TrimSpace(res.Stdout))
 		if ui.ReadNote("git rev-list", res, err) != "" || perr != nil {
 			n = 0
 		}
-		return unpushedMsg{gen: gen, n: n, note: note}
+		return unpushedMsg{gen: gen, n: n, note: note, top: top}
 	}
 }
 
 // onUnpushed extends the push note when local commits were left behind,
-// unless the note has changed since.
+// unless the note or the repository has changed since.
 func (s *Screen) onUnpushed(m unpushedMsg) {
-	if m.n > 0 && s.note == m.note {
+	if m.n > 0 && s.note == m.note && m.top == s.repo.Top {
 		s.note += "; " + strconv.Itoa(m.n) + " newer local commit(s) were not pushed (made after the scan)" +
 			" — press P again to scan and push them"
 	}

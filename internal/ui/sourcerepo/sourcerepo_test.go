@@ -757,3 +757,53 @@ func TestRepoChangeCancelsPullGuard(t *testing.T) {
 		t.Errorf("a fresh pull in the new repository emitted %v", out)
 	}
 }
+
+// switchRepo points the screen at home2's repository without dropRepoWork,
+// as if a guard result arrived from a path that bypassed it.
+func switchRepo(t *testing.T, f *fixture, home2 string) {
+	t.Helper()
+	m := load(context.Background(), 0, f.git, nil, home2, f.s.limit)
+	f.s.repo = m.repo
+	f.s.applySnapshot(m.snap)
+}
+
+// A guard result acts only on the repository it read: delivered after the
+// screen moved to another one (even without dropRepoWork), it emits
+// nothing and the screen refreshes.
+func TestGuardResultBoundToItsRepository(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, skillA, "# a\n")
+	f := open(t, home)
+	press(f.s, "c")
+	typeText(f.s, commitMsg)
+	_, guard := f.s.Update(key("enter"))
+	msg := guard()
+	other := newRepo(t)
+	write(t, other, skillA, "# b\n")
+	switchRepo(t, f, other)
+	_, next := f.s.Update(msg)
+	if out := drive(f.s, next); len(out) != 0 {
+		t.Fatalf("commit guard result emitted %v in another repository", out)
+	}
+	wantView(t, f.s, whyRepoChanged)
+
+	pull, _ := newTracked(t)
+	g := open(t, pull)
+	oldTop := g.s.repo.Top
+	_, guard = g.s.Update(key("p"))
+	msg = guard()
+	other2, _ := newTracked(t)
+	switchRepo(t, g, other2)
+	_, next = g.s.Update(msg)
+	if out := drive(g.s, next); len(out) != 0 {
+		t.Fatalf("pull guard result emitted %v in another repository", out)
+	}
+	wantView(t, g.s, whyRepoChanged)
+
+	switchRepo(t, g, other2) // the refresh above went back to the home
+	g.s.note = "pushed"
+	g.s.onUnpushed(unpushedMsg{n: 2, note: "pushed", top: oldTop})
+	if g.s.note != "pushed" {
+		t.Errorf("unpushed count from another repository extended the note: %q", g.s.note)
+	}
+}

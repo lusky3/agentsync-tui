@@ -86,6 +86,7 @@ type guardInput struct {
 // guardMsg carries one finished guard round.
 type guardMsg struct {
 	gen      int
+	top      string // the repository the round read
 	msg      string
 	refusal  string // display-safe; "" when every guard passed
 	changed  bool   // a selected file is no longer listed; status is fresh
@@ -158,7 +159,7 @@ func (s *Screen) submit() tea.Cmd {
 // status re-read, agentsync check, the git dir state, a detached HEAD, the
 // repository's refusal, then the scan of every selected file.
 func runGuards(ctx context.Context, gen int, in guardInput) guardMsg {
-	m := guardMsg{gen: gen, msg: in.msg}
+	m := guardMsg{gen: gen, top: in.repo.Top, msg: in.msg}
 	st, note := readStatus(ctx, in.git, in.repo, in.limit)
 	if note != "" {
 		m.refusal = refused + note
@@ -452,6 +453,10 @@ func inHome(pathspec, p string) bool {
 // list is refreshed, and a clean or soft round emits the chain.
 func (s *Screen) onGuard(m guardMsg) tea.Cmd {
 	s.commit.busy = false
+	if m.top != s.repo.Top {
+		s.mode = modeList
+		return s.repoChanged()
+	}
 	switch {
 	case m.changed:
 		s.kept = m.kept

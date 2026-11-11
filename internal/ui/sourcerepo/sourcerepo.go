@@ -48,6 +48,9 @@ const (
 	whyMissing   = "no agentsync home"
 	whyNoChanges = "nothing to commit: no file is selected"
 	notShown     = "content not shown: "
+	// whyRepoChanged: a guard result read another repository than the
+	// screen now shows; it is dropped and the screen refreshed.
+	whyRepoChanged = "repository changed: refreshed"
 )
 
 // Screen is the Source repo tab.
