@@ -218,10 +218,12 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   are scanned; absent (a new, empty repository behind an old
   remote-tracking ref after `remote set-url`), the whole history is; anywhere
   else, the push is refused until you fetch. That scan is bounded: a history with more than
-  2000 paths or 20000 file changes, or one whose log is too large to read in
-  full, or whose scan takes longer than two minutes (whatever
-  `--read-timeout` says), is refused, and you push
-  it outside the TUI. Your hooks and signing
+  2000 paths, 20000 file changes or 10000 commits, one whose commit
+  messages are too large to read in full (narrow or whole-history scan), a
+  whole-history scan whose patches are, or a scan that takes longer than
+  two minutes (whatever `--read-timeout` says), is refused, and you push
+  it outside the TUI. (Outgoing patches cut short in a narrow scan are
+  listed as not scanned and need a typed `push`.) Your hooks and signing
   run as configured, with no terminal (see above). Git commands are always
   bounded (see Usage). agentsync's own destination-backup repositories are
   recognised (by commit author and the `agentsync.managed` marker) and

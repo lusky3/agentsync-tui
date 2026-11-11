@@ -38,10 +38,28 @@ const whyTooManyChanges = refused + "too many changes to scan; review and push o
 // own bound: the default network bound, ui.DefaultReadTimeout.
 var outgoingScanBound = ui.DefaultReadTimeout
 
-// whyWideCut refuses a whole-history push scan (base "") whose patch or
-// message read the runner cut: the unread part may be anything the push
+// whyWideCut refuses a whole-history push scan (base "") whose patch
+// read the runner cut: the unread part may be anything the push
 // destination lacks.
 const whyWideCut = refused + "the outgoing history is too large to scan completely; push it outside the TUI"
+
+// whyMessagesCut refuses a push whose commit-message read the runner cut,
+// in a narrow scan as in a wide one (Ruling 53): the unread messages would
+// be published unscanned.
+const whyMessagesCut = refused + "the outgoing commit messages are too large to scan completely; push outside the TUI"
+
+// maxCommits is how many outgoing commits the push guard reads one by one
+// (CommitObjectArgv, for a NUL byte). Past it, or when the commit list
+// itself was cut, the push is refused (whyTooManyCommits).
+var maxCommits = 10000
+
+// whyTooManyCommits refuses a push with more outgoing commits than
+// maxCommits, or whose commit list the runner cut.
+const whyTooManyCommits = refused + "too many outgoing commits to check; review and push outside the TUI"
+
+// whyBadCommitList refuses a push whose commit list holds a line that is
+// not an object id.
+const whyBadCommitList = refused + "cannot read the list of outgoing commits"
 
 // gitLog names the outgoing log reads in a refusal.
 const gitLog = "git log"
@@ -166,10 +184,16 @@ func scanOutgoingRange(ctx context.Context, in netInput, base, tip string) ([]gi
 
 // scanMessages scans the message of every outgoing commit as prose (R5):
 // the push publishes the messages with the commits, and a commit made
-// outside the TUI never met ValidCommitMessage. A list the runner cut
-// short is a soft finding (not scanned in full), or in a whole-history
-// scan (base "") a refusal (whyWideCut).
+// outside the TUI never met ValidCommitMessage. A message list the runner
+// cut short refuses the push, narrow or wide (Ruling 53). Every commit
+// object is then checked for a NUL byte (nulCommits), the commits taken
+// from their own complete list (outgoingCommits), not from the message
+// list.
 func scanMessages(ctx context.Context, in netInput, base, tip string) ([]gitrepo.Finding, []string) {
+	shas, r := outgoingCommits(ctx, in, base, tip)
+	if r != nil {
+		return nil, r
+	}
 	argv := gitrepo.OutgoingMessagesArgv(in.repo, base, tip)
 	if argv == nil {
 		return nil, []string{whyBadRange}
@@ -179,31 +203,42 @@ func scanMessages(ctx context.Context, in netInput, base, tip string) ([]gitrepo
 		return nil, []string{refused + note}
 	}
 	out, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
-	if cut && base == "" {
-		return nil, []string{whyWideCut}
+	if cut {
+		return nil, []string{whyMessagesCut}
 	}
 	fs, err := bounded(ctx, in.limit, func(context.Context) ([]gitrepo.Finding, error) { return messageFindings(out), nil })
 	if err != nil {
 		return nil, scanRefusal(in, err)
 	}
-	if cut {
-		fs = append(fs, gitrepo.Finding{Path: messagesPath, Kind: gitrepo.KindNotScannedPatch})
-	}
-	nfs, r := nulCommits(ctx, in, messageSHAs(out))
+	nfs, r := nulCommits(ctx, in, shas)
 	if r != nil {
 		return nil, r
 	}
 	return append(fs, nfs...), nil
 }
 
-// messageSHAs is the commit ids of an OutgoingMessagesArgv output.
-func messageSHAs(out string) []string {
-	fields := strings.Split(out, "\x00")
-	var shas []string
-	for i := 0; i+1 < len(fields); i += 2 {
-		shas = append(shas, strings.TrimSpace(fields[i]))
+// outgoingCommits is every commit in the outgoing range
+// (gitrepo.OutgoingCommitsArgv), read whole: a list the runner cut, or
+// longer than maxCommits, refuses the push (whyTooManyCommits), as does a
+// line that is not an object id.
+func outgoingCommits(ctx context.Context, in netInput, base, tip string) ([]string, []string) {
+	argv := gitrepo.OutgoingCommitsArgv(in.repo, base, tip)
+	if argv == nil {
+		return nil, []string{whyBadRange}
 	}
-	return shas
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
+	if note := ui.ReadNote("git rev-list", res, err); note != "" {
+		return nil, []string{refused + note}
+	}
+	out, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	shas := strings.Fields(out)
+	if cut || len(shas) > maxCommits {
+		return nil, []string{whyTooManyCommits}
+	}
+	if slices.ContainsFunc(shas, func(s string) bool { return actions.ValidObjectID(s) != nil }) {
+		return nil, []string{whyBadCommitList}
+	}
+	return shas, nil
 }
 
 // nulCommits reads each outgoing commit object whole (CommitObjectArgv):
@@ -234,9 +269,6 @@ func nulCommits(ctx context.Context, in netInput, shas []string) ([]gitrepo.Find
 	}
 	return fs, nil
 }
-
-// messagesPath names the outgoing commit messages in a finding.
-const messagesPath = "outgoing commit messages"
 
 // messageFindings scans each "<sha> NUL <message> NUL" record of an
 // OutgoingMessagesArgv output, a message's lines numbered from 1 and

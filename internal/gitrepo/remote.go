@@ -152,6 +152,21 @@ func OutgoingMessagesArgv(r Repo, base, tip string) []string {
 	return []string{"-C", r.Top, "log", "--format=%H%x00%B%x00", rng, "--"}
 }
 
+// OutgoingCommitsArgv lists, one object id per line, every commit in
+// base..tip (or, base "", tip's whole history): the same commits as
+// OutgoingMessagesArgv, read on their own so the list stays complete
+// whatever the messages' size. Like every git read it runs with
+// GIT_NO_REPLACE_OBJECTS=1 (the git Program's environment), so it lists
+// the commits a push sends, not their replacements. base and tip are as
+// outgoingRange takes them.
+func OutgoingCommitsArgv(r Repo, base, tip string) []string {
+	rng, ok := outgoingRange(base, tip)
+	if !ok {
+		return nil
+	}
+	return []string{"-C", r.Top, "rev-list", rng, "--"}
+}
+
 // CommitObjectArgv prints the raw commit object sha, as a push sends it:
 // its headers and its whole message, a NUL byte included (git log's %B
 // stops at one).

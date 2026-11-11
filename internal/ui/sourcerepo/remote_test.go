@@ -1022,9 +1022,10 @@ func cutRead(f *fixture, marker string) {
 
 // A whole-history scan (push URL other than the fetch URL) that was cut
 // is refused outright: what it did not read may be anything the
-// destination lacks. A cut narrow scan stays a soft finding.
+// destination lacks. A cut narrow patch scan stays a soft finding (a cut
+// message log refuses either way, Ruling 53).
 func TestWideScanCutIsRefused(t *testing.T) {
-	for _, marker := range []string{"-p", "--format=%H%x00%B%x00"} {
+	for marker, want := range map[string]string{"-p": whyWideCut, "--format=%H%x00%B%x00": whyMessagesCut} {
 		home, _ := newTracked(t)
 		gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n" + strings.Repeat("line\n", 50)})
 		mirror := filepath.Join(t.TempDir(), "mirror.git")
@@ -1033,7 +1034,7 @@ func TestWideScanCutIsRefused(t *testing.T) {
 		f := open(t, home)
 		cutRead(f, marker)
 		wantNothing(t, press(f.s, "P"))
-		wantView(t, f.s, whyWideCut)
+		wantView(t, f.s, want)
 	}
 	home, _ := newTracked(t)
 	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n" + strings.Repeat("line\n", 50)})
@@ -1128,4 +1129,123 @@ func TestPushRefusedCommitObjectReadCut(t *testing.T) {
 	f := open(t, home)
 	wantNothing(t, press(f.s, "P"))
 	wantView(t, f.s, "is over 4 MiB", "push it outside the TUI")
+}
+
+// nulCommit writes, with hash-object --literally, a commit on top of
+// home's HEAD whose message hides ghpToken after a NUL byte, and moves
+// main to it.
+func nulCommit(t *testing.T, home string) string {
+	t.Helper()
+	tree := strings.TrimSpace(gittest.Git(t, home, "rev-parse", "HEAD^{tree}"))
+	obj := "tree " + tree + "\nparent " + head(t, home) + "\nauthor t <t@example.invalid> 1 +0000\n" +
+		"committer t <t@example.invalid> 1 +0000\n\nsubject\n\x00" + ghpToken + "\n"
+	p := filepath.Join(t.TempDir(), "commit")
+	if err := os.WriteFile(p, []byte(obj), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := strings.TrimSpace(gittest.Git(t, home, "hash-object", "--literally", "-t", "commit", "-w", p))
+	gittest.Git(t, home, "update-ref", "refs/heads/main", c)
+	return c
+}
+
+// emptyCommit commits nothing on home's main with message msg (from a
+// file: it may be megabytes long).
+func emptyCommit(t *testing.T, home, msg string) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "msg")
+	if err := os.WriteFile(p, []byte(msg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Git(t, home, "commit", "-q", "--allow-empty", "--cleanup=verbatim", "--file="+p)
+}
+
+// The review finding (Ruling 53): in a narrow scan, two later commits
+// with 2.2 MiB messages fill the 4 MiB message log before an older commit
+// holding a NUL appears in it, while each commit object stays under the
+// per-object cap. The older commit must still be checked, and the cut
+// message log must not pass as a soft finding: the push is refused.
+func TestPushRefusedNULCommitBehindBigMessages(t *testing.T) {
+	home, _ := newTracked(t)
+	nulCommit(t, home)
+	big := "big\n\n" + strings.Repeat(strings.Repeat("x", 79)+"\n", 29000)
+	emptyCommit(t, home, big)
+	emptyCommit(t, home, big)
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, whyMessagesCut)
+	if strings.Contains(view(f.s), ghpToken) {
+		t.Error("the token after the NUL is shown")
+	}
+}
+
+// The NUL check reads its commits from a complete rev-list, not from the
+// message log: a message log that left a commit out (here, the NUL
+// commit's record dropped) still has that commit checked.
+func TestNULCheckReadsEveryOutgoingCommit(t *testing.T) {
+	home, _ := newTracked(t)
+	nulCommit(t, home)
+	gittest.Commit(t, home, "later", map[string]string{skillA: "# a\n"})
+	tip := head(t, home)
+	f := open(t, home)
+	f.git.mu.Lock()
+	f.git.override = func(args []string) (runner.Result, bool) {
+		if !slices.Contains(args, "--format=%H%x00%B%x00") {
+			return runner.Result{}, false
+		}
+		return runner.Result{Stdout: tip + "\x00later\n\x00\n"}, true
+	}
+	f.git.mu.Unlock()
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "refused: 1 hard finding", gitrepo.KindNULInCommit)
+}
+
+// Ruling 53: a cut message log refuses the push in a narrow scan too
+// (the unread messages would go out unscanned), and so does a cut
+// commit list.
+func TestPushRefusedMessageLogOrCommitListCut(t *testing.T) {
+	for marker, want := range map[string]string{"--format=%H%x00%B%x00": whyMessagesCut, "rev-list": whyTooManyCommits} {
+		home, _ := newTracked(t)
+		gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+		f := open(t, home)
+		cutRead(f, marker)
+		wantNothing(t, press(f.s, "P"))
+		wantView(t, f.s, want)
+	}
+}
+
+// More outgoing commits than maxCommits (each one a commit-object read)
+// refuse the push; a normal push reads the list and is offered as before.
+func TestPushCommitCap(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "one", map[string]string{skillA: "# a\n"})
+	gittest.Commit(t, home, "two", map[string]string{skillA: "# a\nb\n"})
+	f := open(t, home)
+	d := onlyDo(t, press(f.s, "P"))
+	if d.Action.TypedConfirm {
+		t.Errorf("a normal push needs typing: %q", d.Action.Warning)
+	}
+	if !slices.ContainsFunc(f.git.all(), func(c []string) bool { return slices.Contains(c, "rev-list") }) {
+		t.Error("the outgoing commit list was not read")
+	}
+	old := maxCommits
+	maxCommits = 1
+	t.Cleanup(func() { maxCommits = old })
+	f = open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, whyTooManyCommits)
+}
+
+// A commit list holding a line that is not an object id refuses the push
+// rather than checking fewer commits than it sends.
+func TestPushRefusedBadCommitList(t *testing.T) {
+	home, _ := newTracked(t)
+	gittest.Commit(t, home, "local", map[string]string{skillA: "# a\n"})
+	f := open(t, home)
+	f.git.mu.Lock()
+	f.git.override = func(args []string) (runner.Result, bool) {
+		return runner.Result{Stdout: "--all\n"}, slices.Contains(args, "rev-list")
+	}
+	f.git.mu.Unlock()
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, whyBadCommitList)
 }
