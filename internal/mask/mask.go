@@ -32,6 +32,10 @@ const secretKeyPat = `(?:^|[^{]|[^$]\{)(?:token|secret|password|passwd|pwd|api[-
 // stops the scheme from being recognised.
 const headerSep = `["']?\s*[:=]\s*["'` + "`" + `\s]*`
 
+// authScheme is an optional scheme word and its blanks at the start of a
+// triple-quoted Authorization value.
+const authScheme = `(?:[a-z][a-z0-9._~+/\-]*[ \t]+)?`
+
 // wordKeyPat matches keys that are secrets only as whole words: "auth" and
 // "pat" (personal access token), so AUTH=, github_pat= and PAT: are masked
 // while oauth=, compat= and path= are not.
@@ -86,6 +90,13 @@ var (
 		// word itself, so no half of "<scheme> <secret>" stays visible.
 		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization` + headerSep + `[a-z][a-z0-9._~+/\-]*[ \t]+["'` + "`" + `]*)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization` + headerSep + `(?:(?:bearer|basic|token|digest)\s+["'` + "`" + `]*)?)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
+		// A TOML triple-quoted value runs to its closing quotes: one or
+		// two quotes inside it (which end the two rules above early) do
+		// not end it, so no suffix after an interior quote stays visible.
+		// A scheme word is kept, so a value that is only a reference stays
+		// as is.
+		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*"""` + authScheme + `)((?:\\.|"{1,2}(?:\\.|[^"\\\n])|[^"\\\n])+)`), kind: KindAuthHeader},
+		{re: regexp.MustCompile(`(?i)((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*'''` + authScheme + `)((?:'{1,2}[^'\n]|[^'\n])+)`), kind: KindAuthHeader},
 		{re: regexp.MustCompile(`(?i)((?:[a-z0-9]+-)*api-key` + headerSep + `)([^\s"'` + "`" + `]+)`), kind: KindAuthHeader},
 		// Cookie headers: the whole cookie string is the secret.
 		{re: regexp.MustCompile(`(?i)((?:set-)?cookie` + headerSep + `)([^\s"'` + "`" + `][^\n"'` + "`" + `]*)`), kind: KindAuthHeader},
