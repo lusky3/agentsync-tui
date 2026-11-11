@@ -173,27 +173,28 @@ func upstreamRefusal(top string, b gitrepo.Branch, r remoteInfo) []string {
 // noUpstream is the guidance for a branch without an upstream (D6): the
 // TUI never creates remotes or repositories.
 func noUpstream(top, branch string) []string {
-	t, b := shellQuote(top), "<branch>"
+	t, b := quotePath(top), "<branch>"
 	if branch != "" {
-		b = shellQuote(branch)
+		b = quotePath(branch)
 	}
-	return []string{
+	out := []string{
 		"No upstream. Create a PRIVATE repository, then run outside the TUI:",
 		"  " + gitC + t + " remote add origin <url>",
 		"  " + gitC + t + " push -u origin " + b,
 		"With the GitHub CLI: gh repo create <name> --private --source " + t + " --push",
 	}
+	return withPathNote(out, top, branch)
 }
 
 // belowRoot explains why pull and push are refused when the repository
 // holds more than the home (R7).
 func belowRoot(top string) []string {
-	t := shellQuote(top)
-	return []string{
+	t := quotePath(top)
+	return withPathNote([]string{
 		"the repository at " + t + " holds more than the agentsync home; pull and push it outside the TUI:",
 		"  " + gitC + t + " pull --ff-only",
 		"  " + gitC + t + " push",
-	}
+	}, top)
 }
 
 // fetch emits `git fetch <remote>` for the upstream read at the last
@@ -517,15 +518,15 @@ func pushHardRefusal(n int, top string, wide string) []string {
 	}
 	if wide != "" {
 		out[0] = refused + plural(n, "hard finding") + " (likely secrets) in the branch's history, listed below; a push would publish them in history"
-		out[2] = "  " + gitC + shellQuote(top) + " log -p HEAD"
+		out[2] = "  " + gitC + quotePath(top) + " log -p HEAD"
 		out = append(out, wide)
 	}
-	return out
+	return withPathNote(out, top)
 }
 
 // inspectCommand is the command that shows the outgoing commits' patches.
 func inspectCommand(top string) string {
-	return gitC + shellQuote(top) + " log -p " + outgoingRange
+	return gitC + quotePath(top) + " log -p " + outgoingRange
 }
 
 // onNotRun drops the pending action (network or commit) the shell will
@@ -586,18 +587,18 @@ func fetchOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
 
 // pullOutcome is the note after a pull (D5, R3).
 func pullOutcome(p *pendingNet, m ui.RunMsg, ok bool) string {
-	t := shellQuote(p.top)
+	t := quotePath(p.top)
 	switch {
 	case ok:
 		return pulledNote
 	case stopped(m):
 		return "the pull was stopped; the worktree may be partly updated. Nothing was rolled back (" + outcomeOf(m) +
-			"). To inspect" + runOutside + "\n  " + gitC + t + statusCmd
+			"). To inspect" + runOutside + "\n  " + gitC + t + statusCmd + maskedPathNote(p.top)
 	case strings.Contains(m.Result.Stderr, "would be overwritten"):
 		return "local changes block the pull; commit or stash them outside the TUI, then press r"
 	case strings.Contains(m.Result.Stderr, "Not possible to fast-forward") || strings.Contains(m.Result.Stderr, "diverging"):
 		return "local and remote have diverged; nothing was changed. Resolve outside the TUI:\n  " +
-			gitC + t + " pull --rebase\n  or " + gitC + t + " merge @{u}\nthen press r"
+			gitC + t + " pull --rebase\n  or " + gitC + t + " merge @{u}\nthen press r" + maskedPathNote(p.top)
 	}
 	return "pull failed (" + outcomeOf(m) + ")"
 }
