@@ -125,3 +125,36 @@ func TestPatchMaskerRemovedLinesFailClosed(t *testing.T) {
 		}
 	}
 }
+
+// Every line of a multi-line string opened by a secret-named, header or
+// env key is the secret's: shown in the diff pane it is masked whole,
+// whatever it looks like (a visible key's pair included), on the added
+// side from the post-image and on the removed side as the pre-image's
+// state is followed. A plain multi-line string stays readable.
+func TestPatchMaskerHidesSecretMultiLineBodies(t *testing.T) {
+	secret := "[s]\npassword = '''\nname = '" + hunter + "'\n" + hunter + "\n'''\nname = 'shown'\n"
+	got := maskAll(NewAddedMasker(scanMCP, secret), addedLines(secret))
+	if strings.Contains(got, hunter) || !strings.Contains(got, "+name = 'shown'") {
+		t.Errorf("added body:\n%s", got)
+	}
+	removed := "@@ -1,6 +1,2 @@\n [s]\n-password = '''\n-name = '" + hunter + "'\n-" + hunter + "\n-'''\n name = 'shown'"
+	got = maskAll(NewPatchMasker(scanMCP, "[s]\nname = 'shown'\n"), removed)
+	if strings.Contains(got, hunter) || !strings.Contains(got, " name = 'shown'") {
+		t.Errorf("removed body:\n%s", got)
+	}
+	// The body continues past a hunk boundary: its opener is in the gap.
+	gap := "@@ -4 +4 @@\n-name = '" + hunter + "'\n+name = '" + hunter + "x'"
+	post := "[s]\nAuthorization = \"\"\"\nBearer\nname = '" + hunter + "x'\n\"\"\"\n"
+	if got = maskAll(NewPatchMasker(scanMCP, post), gap); strings.Contains(got, hunter) {
+		t.Errorf("body across the gap:\n%s", got)
+	}
+	plain := "[s]\ndescription = '''\nname = 'visible'\n'''\n"
+	if got = maskAll(NewAddedMasker(scanMCP, plain), addedLines(plain)); !strings.Contains(got, "+name = 'visible'") {
+		t.Errorf("plain body masked:\n%s", got)
+	}
+}
+
+// addedLines shows content as an untracked file's added lines.
+func addedLines(content string) string {
+	return "+" + strings.ReplaceAll(strings.TrimSuffix(content, "\n"), "\n", "\n+")
+}
