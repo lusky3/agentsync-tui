@@ -80,6 +80,7 @@ type guardInput struct {
 	limit    time.Duration
 	selected []gitrepo.File // the records the user selected, as listed
 	msg      string
+	stored   map[string]bool // new files git stores other than as their bytes (storedAttrs)
 }
 
 // guardMsg carries one finished guard round.
@@ -234,6 +235,10 @@ func gitDirRefusal(gitDir string) string {
 
 // scanFiles scans what each selected file would add (R5).
 func scanFiles(ctx context.Context, in guardInput, unborn bool, files []gitrepo.File) ([]gitrepo.Finding, string) {
+	var why string
+	if in.stored, why = storedAttrs(ctx, in, files); why != "" {
+		return nil, why
+	}
 	var out []gitrepo.Finding
 	for _, f := range files {
 		fs, why := scanFile(ctx, in, unborn, f)
@@ -257,8 +262,44 @@ func scanFile(ctx context.Context, in guardInput, unborn bool, f gitrepo.File) (
 	return scanTracked(ctx, in, unborn, f)
 }
 
-// scanUntracked scans a new file whole (a symlink: its target).
+// storedAttrs reads which selected new files have a clean filter or a
+// working-tree encoding (gitrepo.StoredAttrs): git add stores what those
+// make of the file, which scanUntracked then reads (scanStored). The read
+// failing refuses the commit.
+func storedAttrs(ctx context.Context, in guardInput, files []gitrepo.File) (map[string]bool, string) {
+	var paths []string
+	for _, f := range files {
+		if f.Kind == gitrepo.Untracked {
+			paths = append(paths, f.Path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, ""
+	}
+	argv := gitrepo.CheckAttrArgv(in.repo, paths)
+	if argv == nil {
+		return nil, cannotScan + "git cannot be given a selected path"
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
+	if note := ui.ReadNote("git check-attr", res, err); note != "" {
+		return nil, refused + note
+	}
+	stored := map[string]bool{}
+	fields := strings.Split(res.Stdout, "\x00")
+	for i := 0; i+2 < len(fields); i += 3 {
+		if v := fields[i+2]; v != "unspecified" && v != "unset" {
+			stored[fields[i]] = true
+		}
+	}
+	return stored, ""
+}
+
+// scanUntracked scans a new file whole (a symlink: its target; a file with
+// a clean filter or a working-tree encoding: as git will store it).
 func scanUntracked(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrepo.Finding, string) {
+	if in.stored[f.Path] && !isSymlink(in.repo.Top, f.Path) {
+		return scanStored(ctx, in, f)
+	}
 	b, err := bounded(ctx, in.limit, func(ctx context.Context) (capped, error) { return readNew(ctx, in.repo.Top, f.Path) })
 	if err != nil {
 		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
@@ -266,11 +307,45 @@ func scanUntracked(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrep
 	return gitrepo.ScanNewFile(f.HomeRel, []byte(b.data)), ""
 }
 
+// scanStored scans a new file as git will store it (StoredDiffArgv: its
+// clean filter and working-tree encoding applied). A binary or cut patch
+// is soft, as for a tracked file; a read that fails refuses the commit.
+func scanStored(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrepo.Finding, string) {
+	argv := gitrepo.StoredDiffArgv(in.repo, f.Path)
+	if argv == nil {
+		return nil, cannotScan + gitrepo.DisplayName(f.Path)
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
+	if err != nil || res.ExitCode > 1 || res.ExitCode == 1 && res.Stdout == "" {
+		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": git diff --no-index failed (its filter may have failed)"
+	}
+	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	var out []gitrepo.Finding
+	if cut {
+		out = append(out, notScanned(f, gitrepo.KindNotScannedPatch))
+	}
+	if binaryRe.MatchString(patch) {
+		out = append(out, notScanned(f, gitrepo.KindNotScannedBinary))
+	}
+	lines := gitrepo.AddedLines(patch)
+	texts := make([]string, len(lines))
+	for i, l := range lines {
+		texts[i] = l.Text
+	}
+	return append(out, gitrepo.ScanAdded(f.HomeRel, lines, strings.Join(texts, "\n")+"\n")...), ""
+}
+
+// isSymlink reports whether rel under top is a symbolic link.
+func isSymlink(top, rel string) bool {
+	fi, err := os.Lstat(filepath.Join(top, filepath.FromSlash(rel)))
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
+}
+
 // readNew is what committing rel would record: a symlink's target, or the
 // regular file's first scanReadLimit bytes.
 func readNew(ctx context.Context, top, rel string) (capped, error) {
 	full := filepath.Join(top, filepath.FromSlash(rel))
-	if fi, err := os.Lstat(full); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+	if isSymlink(top, rel) {
 		target, err := os.Readlink(full)
 		return capped{data: target}, err
 	}
