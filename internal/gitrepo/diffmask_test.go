@@ -342,3 +342,36 @@ func TestMaskPatchLineEnvTableHidesVisibleKeys(t *testing.T) {
 		}
 	}
 }
+
+// A quoted key part is read as TOML decodes it: a basic string's escapes
+// ("e\u006ev" is env) name the same table as the literal key, for the
+// diff mask, the finding's severity and a [table] header alike.
+func TestEscapedEnvKeyIsEnv(t *testing.T) {
+	for _, l := range []string{
+		"+\"e\\u006ev\".command = '" + hunter + "'",
+		"+\"h\\U00000065aders\".url = '" + hunter + "'",
+		"+x = { \"\\u0065nv\" = { name = '" + hunter + "' } }",
+	} {
+		if got := MaskPatchLine(scanMCP, l); strings.Contains(got, hunter) {
+			t.Errorf("%q -> %q", l, got)
+		}
+	}
+	for _, content := range []string{
+		"[x]\n\"e\\u006ev\".command = '" + opaqueTok + "'\n",
+		"[x.\"e\\u006ev\"]\ncommand = '" + opaqueTok + "'\n",
+	} {
+		if fs := ScanNewFile(scanMCP, []byte(content)); len(fs) != 1 || !fs[0].Hard {
+			t.Errorf("%q: findings %+v, want one hard", content, fs)
+		}
+	}
+	m := NewAddedMasker(scanMCP, "[x.\"e\\u006ev\"]\nname = '"+hunter+"'\n")
+	if got := maskAll(m, "+[x.\"e\\u006ev\"]\n+name = '"+hunter+"'"); strings.Contains(got, hunter) {
+		t.Errorf("escaped env header:\n%s", got)
+	}
+	// Literal and unquoted keys are unchanged; a bad escape stays as written.
+	for k, want := range map[string]string{`env`: "env", `'e\u006ev'`: `e\u006ev`, `"env"`: "env", `"a\q"`: `a\q`} {
+		if got := unquoteKey(k); got != want {
+			t.Errorf("unquoteKey(%q) = %q, want %q", k, got, want)
+		}
+	}
+}
