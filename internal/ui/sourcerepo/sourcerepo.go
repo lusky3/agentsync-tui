@@ -276,9 +276,11 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // apply takes a finished load. A load of another repository (the home's
 // symlink moved) first drops the old one's files, selection and upstream,
-// so they never stand under the new heading when its own read failed.
+// so they never stand under the new heading when its own read failed, and
+// the work started on the old one (dropRepoWork).
 func (s *Screen) apply(m loadMsg) {
 	if s.loaded && !sameRepo(s.repo, m.repo) {
+		s.dropRepoWork()
 		s.applySnapshot(snapshot{})
 	}
 	s.loaded, s.repo, s.loadNote = true, m.repo, m.note
@@ -288,6 +290,25 @@ func (s *Screen) apply(m loadMsg) {
 	}
 	if m.note == "" {
 		s.applySnapshot(m.snap)
+	}
+}
+
+// dropRepoWork supersedes the diff, commit guard and pull or push guard
+// rounds started on the old repository and returns to the list: a guard
+// result read there must never emit a commit, pull or push here, where its
+// files were neither selected nor scanned (and a pull refused below the
+// root may not be refused). The commit message is kept. An action already
+// handed to the shell names its repository in its own argv.
+func (s *Screen) dropRepoWork() {
+	s.diffs.Supersede()
+	s.guards.Supersede()
+	s.cancelNet()
+	s.commit.busy, s.commit.refusal, s.commit.findings, s.pushFindings = false, nil, nil, nil
+	if s.mode == modeCommit {
+		s.note = "the repository changed: select the files and commit again"
+	}
+	if s.mode == modeDiff || s.mode == modeCommit {
+		s.mode, s.diff = modeList, diffPane{}
 	}
 }
 
