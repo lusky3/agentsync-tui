@@ -155,9 +155,21 @@ func (p kv) lastKey() string {
 	return unquoteKey(parts[len(parts)-1])
 }
 
-// unquoteKey drops the quotes around a quoted key part.
+// unquoteKey is a key part as TOML (or JSON) reads it: a literal string's
+// quotes dropped, a basic string's escapes decoded too ("e\u006ev" is
+// env), so an escaped spelling names the same table as the plain one. A
+// basic string with an escape strconv does not take keeps its text.
 func unquoteKey(k string) string {
-	if len(k) >= 2 && (k[0] == '"' || k[0] == '\'') {
+	if len(k) < 2 {
+		return k
+	}
+	switch k[0] {
+	case '\'':
+		return k[1 : len(k)-1]
+	case '"':
+		if u, err := strconv.Unquote(k); err == nil {
+			return u
+		}
 		return k[1 : len(k)-1]
 	}
 	return k
