@@ -542,6 +542,10 @@ func TestTextMasksWholeSecretValue(t *testing.T) {
 		`Authorization: ApiKey hunter2abc`:          "hunter2abc",
 		`"Authorization": "SSWS hunter2abc"`:        "hunter2abc",
 		`Proxy-Authorization = "Negotiate hunter2"`: "hunter2",
+		`Authorization = """abc"def-hunter2"""`:     "hunter2",
+		`Authorization = '''abc'def-hunter2'''`:     "hunter2",
+		`Authorization = """Bearer abc"hunter2"""`:  "hunter2",
+		`authorization = """ApiKey a""hunter2`:      "hunter2",
 	} {
 		if got := Text(in); strings.Contains(got, secret) {
 			t.Errorf("Text(%q) = %q shows %q", in, got, secret)
@@ -551,9 +555,11 @@ func TestTextMasksWholeSecretValue(t *testing.T) {
 		}
 	}
 	for in, want := range map[string]string{
-		`Authorization: Bearer $GH_TOKEN`:    `Authorization: Bearer $GH_TOKEN`,
-		`password = """${secret:PW}"""`:      `password = """${secret:PW}"""`,
-		`Authorization = "Basic ${env:B64}"`: `Authorization = "Basic ${env:B64}"`,
+		`Authorization: Bearer $GH_TOKEN`:        `Authorization: Bearer $GH_TOKEN`,
+		`password = """${secret:PW}"""`:          `password = """${secret:PW}"""`,
+		`Authorization = "Basic ${env:B64}"`:     `Authorization = "Basic ${env:B64}"`,
+		`Authorization = """Bearer ${env:T}"""`:  `Authorization = """Bearer ${env:T}"""`,
+		`Authorization = '''Bearer $GH_TOKEN'''`: `Authorization = '''Bearer $GH_TOKEN'''`,
 	} {
 		if got := Text(in); got != want {
 			t.Errorf("Text(%q) = %q, want %q", in, got, want)
