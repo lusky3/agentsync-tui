@@ -34,7 +34,7 @@ type PatchMasker struct {
 	homeRel   string
 	env       map[int]bool
 	bodies    map[int]mlOpener // post-image lines in a secret multi-line body
-	post      []string // the post-image's lines; nil when unknown
+	post      []string         // the post-image's lines; nil when unknown
 	havePost  bool
 	next      int // post-image line number of the next added or context line
 	oldLeft   int // removed or context lines left in the hunk
