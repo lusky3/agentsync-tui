@@ -8,6 +8,9 @@ import "github.com/lusky3/agentsync-tui/internal/actions"
 // guard's one network read). A function returns nil when an
 // argument fails its check, so a caller can never run a half-built argv.
 
+// headsPrefix is the namespace of local branch refs.
+const headsPrefix = "refs/heads/"
+
 // UpstreamArgv reads the upstream of branch head: one line per matching
 // ref, "<refname> NUL <remote name> NUL <remote ref>". The pattern may
 // match more than the branch (a glob character in its name); callers keep
@@ -17,7 +20,7 @@ func UpstreamArgv(r Repo, head string) []string {
 		return nil
 	}
 	return []string{"-C", r.Top, "for-each-ref",
-		"--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/" + head}
+		"--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)", headsPrefix + head}
 }
 
 // MirrorArgv reads remote.<remote>.mirror as a boolean (exit 1 when unset).
@@ -56,7 +59,7 @@ func RemoteBranchArgv(r Repo, remote, branch string) []string {
 	if actions.ValidRemoteName(remote) != nil || actions.ValidBranchName(branch) != nil {
 		return nil
 	}
-	return []string{"-C", r.Top, "ls-remote", "--refs", remote, "refs/heads/" + branch}
+	return []string{"-C", r.Top, "ls-remote", "--refs", remote, headsPrefix + branch}
 }
 
 // BranchCommitArgv prints the object id of the commit branch points at,
@@ -66,7 +69,7 @@ func BranchCommitArgv(r Repo, branch string) []string {
 	if actions.ValidBranchName(branch) != nil {
 		return nil
 	}
-	return []string{"-C", r.Top, "rev-parse", "--verify", "refs/heads/" + branch + "^{commit}"}
+	return []string{"-C", r.Top, "rev-parse", "--verify", headsPrefix + branch + "^{commit}"}
 }
 
 // BranchUpstreamCommitArgv prints the object id of the commit branch's
@@ -85,7 +88,7 @@ func CommitsAfterArgv(r Repo, sha, branch string) []string {
 	if actions.ValidObjectID(sha) != nil || actions.ValidBranchName(branch) != nil {
 		return nil
 	}
-	return []string{"-C", r.Top, "rev-list", "--count", sha + "..refs/heads/" + branch, "--"}
+	return []string{"-C", r.Top, "rev-list", "--count", sha + ".." + headsPrefix + branch, "--"}
 }
 
 // outgoingRange is the revision range of the Outgoing*Argv reads:
