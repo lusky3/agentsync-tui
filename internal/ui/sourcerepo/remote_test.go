@@ -1109,3 +1109,23 @@ func TestPushRefusedNULInCommitMessage(t *testing.T) {
 		t.Error("the token after the NUL is shown")
 	}
 }
+
+// A commit object over the runner's 4 MiB cut (a huge extra header made
+// with hash-object --literally) hides a NUL past the cut from the
+// cat-file read, while git log shows a harmless subject: the push is
+// refused rather than passed unchecked. A normal commit is unaffected.
+func TestPushRefusedCommitObjectReadCut(t *testing.T) {
+	home, _ := newTracked(t)
+	tree := strings.TrimSpace(gittest.Git(t, home, "rev-parse", "HEAD^{tree}"))
+	obj := "tree " + tree + "\nparent " + head(t, home) + "\nauthor t <t@example.invalid> 1 +0000\n" +
+		"committer t <t@example.invalid> 1 +0000\nx-pad " + strings.Repeat("a", 5<<20) + "\n\nsubject\n\x00" + ghpToken + "\n"
+	p := filepath.Join(t.TempDir(), "commit")
+	if err := os.WriteFile(p, []byte(obj), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := strings.TrimSpace(gittest.Git(t, home, "hash-object", "--literally", "-t", "commit", "-w", p))
+	gittest.Git(t, home, "update-ref", "refs/heads/main", c)
+	f := open(t, home)
+	wantNothing(t, press(f.s, "P"))
+	wantView(t, f.s, "is over 4 MiB", "push it outside the TUI")
+}
