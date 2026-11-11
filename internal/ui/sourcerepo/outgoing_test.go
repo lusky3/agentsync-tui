@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +17,7 @@ import (
 )
 
 // outgoingFixture is a tracked home with commits outgoing files each, and
-// a netInput whose cat-file reads go to catFile.
+// a netInput whose post-image reads (cat-file blob) go to catFile.
 func outgoingFixture(t *testing.T, commits, files int, catFile func() runner.Result) (netInput, string, string) {
 	t.Helper()
 	home, _ := newTracked(t)
@@ -29,7 +31,7 @@ func outgoingFixture(t *testing.T, commits, files int, catFile func() runner.Res
 	}
 	f := open(t, home)
 	g := &recGit{inner: gittest.NewGit(t), override: func(args []string) (runner.Result, bool) {
-		if gitCmd(args) == "cat-file" {
+		if gitCmd(args) == "cat-file" && slices.Contains(args, "blob") {
 			return catFile(), true
 		}
 		return runner.Result{}, false
@@ -90,11 +92,19 @@ func TestOutgoingScanOverallBound(t *testing.T) {
 }
 
 // 2000 is a cap on distinct paths, not on file×commit changes: 100 files
-// changed in each of 25 commits (2500 changes) are scanned.
+// changed in each of 25 commits (2500 changes) are scanned, every one of
+// them read for its context.
 func TestOutgoingManyChangesFewPaths(t *testing.T) {
-	in, base, tip := outgoingFixture(t, 25, 100, func() runner.Result { return runner.Result{Stdout: "x\n"} })
+	var reads atomic.Int64
+	in, base, tip := outgoingFixture(t, 25, 100, func() runner.Result {
+		reads.Add(1)
+		return runner.Result{Stdout: "x\n"}
+	})
 	if _, refusal := scanOutgoing(context.Background(), in, base, tip); refusal != nil {
 		t.Fatalf("refused: %q", refusal)
+	}
+	if n := reads.Load(); n != 2500 {
+		t.Errorf("post-image reads: %d, want 2500", n)
 	}
 }
 
