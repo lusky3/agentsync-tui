@@ -119,11 +119,11 @@ func (p *Program) env(ctx context.Context) []string {
 	return append(out, set...)
 }
 
-// wantsBatchSSH reports whether args run fetch, pull or push and env names
+// wantsBatchSSH reports whether args run fetch, pull, push or ls-remote and env names
 // no ssh command of the user's (GIT_SSH_COMMAND or GIT_SSH).
 func wantsBatchSSH(args, env []string) bool {
 	switch gitSubcommand(args) {
-	case "fetch", "pull", "push":
+	case "fetch", "pull", "push", "ls-remote":
 	default:
 		return false
 	}

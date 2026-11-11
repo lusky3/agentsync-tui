@@ -6,8 +6,9 @@
 //
 // Every git call here is a local read run in a background round bounded by
 // Timeouts.Local (status, upstream, diff, the pre-commit and pre-push scans),
-// or an Action handed to the shell (add, then commit; fetch, pull, push;
-// agentsync init). Only the keys f, p, P and the bootstrap's enter emit an
+// the push guard's one network read (ls-remote of the branch, bounded as a
+// network action), or an Action handed to the shell (add, then commit;
+// fetch, pull, push; agentsync init). Only the keys f, p, P and the bootstrap's enter emit an
 // action that touches the network; nothing does on refresh or focus. Diff and file bytes reach only this screen's own diff message,
 // already masked; they never reach a note, the status line or the log.
 package sourcerepo
@@ -51,13 +52,14 @@ const (
 
 // Screen is the Source repo tab.
 type Screen struct {
-	base  context.Context
-	limit time.Duration // ui.Deps.Limits().Local(): every read here
-	run   runner.Runner // agentsync, for the pre-commit check
-	git   runner.Runner
-	cz    runner.Runner
-	scope runner.Scope
-	home  string
+	base     context.Context
+	limit    time.Duration // ui.Deps.Limits().Local(): every local read here
+	netLimit time.Duration // the network bound: the push guard's ls-remote
+	run      runner.Runner // agentsync, for the pre-commit check
+	git      runner.Runner
+	cz       runner.Runner
+	scope    runner.Scope
+	home     string
 
 	reads, diffs, guards, nets ui.Rounds
 
@@ -99,10 +101,20 @@ type snapshot struct {
 // New returns the Source repo screen.
 func New(d ui.Deps) *Screen {
 	return &Screen{
-		base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, git: d.Git, cz: d.Chezmoi,
+		base: ui.BaseCtx(d), limit: d.Limits().Local(), netLimit: networkBound(d.Limits()), run: d.Runner, git: d.Git, cz: d.Chezmoi,
 		scope: d.Scope, home: ui.HomeFor(d, d.Scope), sel: map[string]bool{}, commit: newCommitState(),
 		netState: newNetState(), width: 80, height: 24,
 	}
+}
+
+// networkBound is the bound on a network read, as on the network actions:
+// Timeouts.Read, or ui.DefaultReadTimeout when that bound is lifted (R3:
+// git is always bounded).
+func networkBound(t ui.Timeouts) time.Duration {
+	if t.Read > 0 {
+		return t.Read
+	}
+	return ui.DefaultReadTimeout
 }
 
 // Title implements ui.Screen.

@@ -169,6 +169,7 @@ func TestBatchModeAddedOnlyWhenNoUserSSH(t *testing.T) {
 		{"none set", nil, []string{"-C", "/r", "fetch", "origin"}, batch},
 		{"pull", nil, []string{"-C", "/r", "pull", "--ff-only"}, batch},
 		{"push after -c", nil, []string{"-C", "/r", "-c", "push.default=simple", "push"}, batch},
+		{"ls-remote", nil, []string{"-C", "/r", "ls-remote", "--refs", "origin", "refs/heads/main"}, batch},
 		{"GIT_SSH_COMMAND set", []string{"GIT_SSH_COMMAND=ssh -i /k"}, []string{"-C", "/r", "fetch"}, "ssh -i /k"},
 		{"GIT_SSH set", []string{"GIT_SSH=/usr/bin/myssh"}, []string{"-C", "/r", "push"}, ""},
 		{"probe unreadable", []string{"FAKE_CONFIG_EXIT=128"}, []string{"-C", "/r", "fetch"}, ""},
