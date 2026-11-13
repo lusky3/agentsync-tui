@@ -595,3 +595,43 @@ func TestModalTakesKeysBeforeCapturingScreen(t *testing.T) {
 		t.Errorf("screen got keys %q while the dialog was open", a.keys)
 	}
 }
+
+// A LazyCache creates nothing until Open, then opens the directory once and
+// hands every caller the same cache; a nil one means no cache.
+func TestDiscoverLazyCacheOpensOnFirstUse(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agentsync-tui")
+	l := NewLazyCache(dir)
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("NewLazyCache created %s (err %v)", dir, err)
+	}
+	c1, err := l.Open()
+	if err != nil || c1 == nil {
+		t.Fatalf("Open() = %v, %v", c1, err)
+	}
+	c2, err := l.Open()
+	if err != nil || c2 != c1 {
+		t.Errorf("second Open() = %p, %v, want the same cache %p", c2, err, c1)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("cache dir after Open: %v, %v", fi, err)
+	}
+	if c, err := (*LazyCache)(nil).Open(); c != nil || err != nil {
+		t.Errorf("nil LazyCache Open() = %v, %v, want nil, nil", c, err)
+	}
+}
+
+// A cache directory that cannot be opened reports the same error each time
+// (discovery then runs uncached).
+func TestDiscoverLazyCacheKeepsOpenError(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "link")
+	if err := os.Symlink(base, dir); err != nil {
+		t.Skip(err)
+	}
+	l := NewLazyCache(dir)
+	for range 2 {
+		if c, err := l.Open(); c != nil || err == nil {
+			t.Fatalf("Open() of a symlinked dir = %v, %v, want an error", c, err)
+		}
+	}
+}

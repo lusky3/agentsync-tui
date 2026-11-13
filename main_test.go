@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/lusky3/agentsync-tui/internal/discover/cache"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
@@ -38,7 +40,7 @@ func TestRunHelpExitsZero(t *testing.T) {
 			t.Fatalf("%s: usage not printed: %q", a, errb.String())
 		}
 		for _, want := range []string{"-read-timeout", "(default 2m0s)", "-write-timeout", "0 = none", "-debug-log",
-			"except network git (fetch, pull, push), which keeps the 2m default", "except git add and commit, which keep a 2m bound"} {
+			"except network git (fetch, pull, push) and discovery requests, which keep the 2m default", "except git add and commit, which keep a 2m bound"} {
 			if !strings.Contains(errb.String(), want) {
 				t.Errorf("%s: usage lacks %q: %q", a, want, errb.String())
 			}
@@ -149,6 +151,7 @@ func hermetic(t *testing.T) {
 	t.Setenv("AGENTSYNC_HOME", filepath.Join(root, ".agentsync"))
 	t.Setenv("AGENTSYNC_TARGET_ROOT", "")
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
 }
 
 // Every exit of the program, clean or with an error (a recovered panic
@@ -348,6 +351,99 @@ func TestMainWiresGitAndOptionalChezmoi(t *testing.T) {
 				t.Errorf("Deps.Chezmoi = %#v without chezmoi on PATH, want nil", d.Chezmoi)
 			}
 		})
+	}
+}
+
+// cacheDirUnder is where cache.DefaultDir points once hermetic has set
+// XDG_CACHE_HOME (on darwin os.UserCacheDir uses $HOME/Library/Caches,
+// also under the test's root).
+func cacheDirUnder(t *testing.T) string {
+	t.Helper()
+	dir, err := cache.DefaultDir()
+	if err != nil {
+		t.Fatalf("cache.DefaultDir: %v", err)
+	}
+	if !strings.HasPrefix(dir, os.Getenv("HOME")) && !strings.HasPrefix(dir, os.Getenv("XDG_CACHE_HOME")) {
+		t.Fatalf("cache dir %q escapes the hermetic root", dir)
+	}
+	return dir
+}
+
+// wantNoDir fails when dir exists: building Deps must create nothing.
+func wantNoDir(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s exists after buildDeps (err %v), want nothing created before first use", dir, err)
+	}
+}
+
+func TestBuildDepsOfflineLeavesHTTPNil(t *testing.T) {
+	hermetic(t)
+	dir := cacheDirUnder(t)
+	d := buildDeps(context.Background(), func() {}, options{offline: true}, runner.ScopeUser, "")
+	if !d.Discover.Offline || d.Discover.HTTP != nil || d.Discover.Cache != nil || d.Discover.Stage != "" {
+		t.Errorf("Discover = %+v, want Offline with no HTTP, cache or staging dir", d.Discover)
+	}
+	wantNoDir(t, dir)
+}
+
+func TestBuildDepsDiscoverDefaultsOnline(t *testing.T) {
+	hermetic(t)
+	dir := cacheDirUnder(t)
+	d := buildDeps(context.Background(), func() {}, options{}, runner.ScopeUser, "")
+	if d.Discover.Offline || d.Discover.HTTP == nil || d.Discover.Cache == nil {
+		t.Fatalf("Discover = %+v, want online with an HTTP client and a cache", d.Discover)
+	}
+	if want := filepath.Join(dir, "stage"); d.Discover.Stage != want {
+		t.Errorf("Stage = %q, want %q", d.Discover.Stage, want)
+	}
+	wantNoDir(t, dir)
+	c, err := d.Discover.Cache.Open()
+	if err != nil || c == nil {
+		t.Fatalf("Cache.Open() = %v, %v", c, err)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Errorf("cache dir %s not created on first use: %v", dir, err)
+	}
+	wantNoDir(t, d.Discover.Stage)
+}
+
+func TestDiscoverNetxOptions(t *testing.T) {
+	hosts := []string{"registry.modelcontextprotocol.io", "desktop.docker.com", "skills.sh", "codeload.github.com"}
+	for _, tc := range []struct{ read, want time.Duration }{
+		{0, ui.DefaultReadTimeout},
+		{90 * time.Second, 90 * time.Second},
+	} {
+		got := discoverNetx(options{readTimeout: tc.read})
+		if got.Timeout != tc.want {
+			t.Errorf("--read-timeout %v: netx Timeout = %v, want %v", tc.read, got.Timeout, tc.want)
+		}
+		if !slices.Equal(got.AllowedHosts, hosts) {
+			t.Errorf("AllowedHosts = %q, want %q", got.AllowedHosts, hosts)
+		}
+		if got.Transport != nil || !strings.HasPrefix(got.UserAgent, progName+"/") {
+			t.Errorf("netx options = %+v, want the network transport and an honest User-Agent", got)
+		}
+	}
+}
+
+func TestHelpMentionsOffline(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"-h"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d, want 0", code)
+	}
+	for _, want := range []string{"-offline", "skills.sh", "discovery"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("usage lacks %q: %q", want, errb.String())
+		}
+	}
+}
+
+func TestOfflineFlagParses(t *testing.T) {
+	var errb bytes.Buffer
+	o, _, ok := parseOptions([]string{"--offline"}, &errb)
+	if !ok || !o.offline {
+		t.Fatalf("parseOptions(--offline) = %+v, ok %v (%s)", o, ok, errb.String())
 	}
 }
 
