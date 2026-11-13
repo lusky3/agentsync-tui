@@ -19,6 +19,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/app"
+	"github.com/lusky3/agentsync-tui/internal/discover/cache"
+	"github.com/lusky3/agentsync-tui/internal/netx"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
@@ -131,14 +133,47 @@ func buildDeps(ctx context.Context, cancel context.CancelFunc, o options, scope 
 	if path, err := exec.LookPath("chezmoi"); err == nil {
 		deps.Chezmoi = runner.NewChezmoi(path)
 	}
+	deps.Discover = buildDiscover(o)
 	// The initial runner is the same pair a scope switch would build.
 	deps.Runner, deps.Interactive = withScope(scope)
 	return deps
 }
 
+// buildDiscover wires discovery without touching the network or the disk:
+// the client only dials on an explicit search or install, and the cache
+// and staging directories are created on first use. --offline leaves it
+// with no client, cache or staging directory. When the user cache
+// directory is unknown, discovery runs uncached and cannot stage installs.
+func buildDiscover(o options) ui.Discover {
+	if o.offline {
+		return ui.Discover{Offline: true}
+	}
+	d := ui.Discover{HTTP: netx.New(discoverNetx(o))}
+	if dir, err := cache.DefaultDir(); err == nil {
+		d.Cache = ui.NewLazyCache(dir)
+		d.Stage = filepath.Join(dir, "stage")
+	}
+	return d
+}
+
+// discoverNetx are the discovery client's options: the four allowed hosts,
+// an honest User-Agent, and --read-timeout, which keeps the 2m default at 0
+// (a discovery request is always bounded, like network git).
+func discoverNetx(o options) netx.Options {
+	timeout := o.readTimeout
+	if timeout <= 0 {
+		timeout = ui.DefaultReadTimeout
+	}
+	return netx.Options{
+		AllowedHosts: ui.DiscoverHosts(),
+		UserAgent:    netx.DefaultUserAgent(resolveVersion(version, debug.ReadBuildInfo)),
+		Timeout:      timeout,
+	}
+}
+
 // options are the command-line settings runWith acts on.
 type options struct {
-	showVersion               bool
+	showVersion, offline      bool
 	scope, project            string
 	readTimeout, writeTimeout time.Duration
 }
@@ -153,7 +188,9 @@ func parseOptions(args []string, stderr io.Writer) (o options, exit int, ok bool
 	fs.StringVar(&o.scope, "scope", "", "agentsync scope: user or project (default user; --project implies project)")
 	fs.StringVar(&o.project, "project", "", "project directory (implies --scope project)")
 	fs.DurationVar(&o.readTimeout, "read-timeout", ui.DefaultReadTimeout,
-		"bound on network reads (import previews, plugin outdated, git fetch/pull/push); 0 = none, except network git (fetch, pull, push), which keeps the 2m default. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
+		"bound on network reads (import previews, plugin outdated, git fetch/pull/push, discovery requests); 0 = none, except network git (fetch, pull, push) and discovery requests, which keep the 2m default. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
+	fs.BoolVar(&o.offline, "offline", false,
+		"disable discovery: no requests to the MCP Registry, the Docker MCP Catalog, skills.sh or GitHub archives")
 	debugLog := fs.String("debug-log", "",
 		"append a masked sample (4 KiB per stream, parse error, exit code) of every read whose output could not be parsed to this file, for bug reports; off by default")
 	fs.DurationVar(&o.writeTimeout, "write-timeout", 0,
@@ -233,6 +270,7 @@ func runProgram(a *ui.App, h hooks) error {
 	}
 	a.RecordShutdown(endChildren(exit.get(), sigs, h))
 	h.stop(sigs)
+	_ = a.Close() // nothing to report: the cache only holds a directory handle
 	return err
 }
 

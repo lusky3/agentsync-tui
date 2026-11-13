@@ -6,7 +6,8 @@ hooks and more. Every change the TUI makes itself is a real `agentsync`
 command that you see and confirm. There are two exceptions: edit (`E`), which
 opens the file in your editor, and the Source repo tab, which runs `git` on
 the repository that holds your agentsync home, again shown and confirmed (see
-the safety model).
+the safety model). Discovery requests are the only network access the TUI
+makes itself (see Discovery and network access); `--offline` turns them off.
 
 ## Install
 
@@ -39,12 +40,14 @@ agentsync-tui                    # user scope
 agentsync-tui --project ./repo   # project scope
 agentsync-tui --version
 agentsync-tui --write-timeout 10m     # bound writes too (default: no bound)
-agentsync-tui --read-timeout 0       # no bound on network reads (default 2m)
+agentsync-tui --read-timeout 0       # no bound on agentsync network reads (default 2m)
+agentsync-tui --offline              # no discovery requests at all
 agentsync-tui --debug-log ./tui-debug.log   # keep masked samples of unparseable output
 ```
 
 `--read-timeout` bounds the network reads: import previews of plugins or a
-whole agent, and the plugins screen's `plugin outdated`. Local reads (the
+whole agent, the plugins screen's `plugin outdated`, and discovery requests,
+which keep the 2m default when it is `0`, like network git below. Local reads (the
 lists, status, diff, explain, doctor and check a screen or the header chip
 runs, and the dry-run previews) are bounded at `min(30s, --read-timeout)`: the flag can lower that
 bound but not lift it. `--write-timeout` bounds every write (apply, revert,
@@ -160,6 +163,39 @@ actions ask you to type a word instead (see the safety model).
 
 Long views (command output, diffs, the plugin detail) scroll with the same keys as the lists.
 
+## Discovery and network access
+
+The discovery screens are not in this build yet; they come in a later
+release (there are no release tags so far). Until then the TUI makes no
+discovery request, and what follows describes how those requests will
+behave.
+
+Apart from the commands it runs, the only network access the TUI makes
+itself is discovery requests: read-only HTTPS GETs, on port 443 only, to
+these four hosts and no others:
+
+- `registry.modelcontextprotocol.io`: the official MCP Registry.
+- `desktop.docker.com`: the Docker MCP Catalog,
+  `https://desktop.docker.com/mcp/catalog/v3/catalog.yaml`, built from the
+  MIT-licensed [docker/mcp-registry](https://github.com/docker/mcp-registry).
+- `skills.sh`: skill search.
+- `codeload.github.com`: GitHub repository archives.
+
+Plain `http`, other ports and redirects to a host outside this list are
+refused, and no cookies are kept. `HTTPS_PROXY` is honoured; the host list
+applies to the destination. Requests, and the CONNECT to a proxy, carry an
+honest User-Agent
+(`agentsync-tui/<version> (+https://github.com/lusky3/agentsync-tui)`) and
+are bounded by `--read-timeout`, which keeps the 2m default when it is `0`.
+
+Discovery responses are cached in `agentsync-tui` under Go's
+`os.UserCacheDir` (`$XDG_CACHE_HOME`, default `~/.cache`, on Linux;
+`~/Library/Caches` on macOS; `%LocalAppData%` on Windows), mode 0700 where
+the OS has Unix modes. The directory is created on first use, not at
+startup; delete it at any time to clear it.
+
+`--offline` turns discovery off: no request is made and nothing is cached.
+
 ## Safety model
 
 - Every change the TUI itself makes goes through an `agentsync` command. The
@@ -175,7 +211,7 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   files of the home in its repository's history (and `git add` stages them
   in its index), and a confirmed `git pull` changes files and history inside
   the home.
-- The one exception is `E` (edit) on MCP servers and on Skills, Subagents,
+- The first exception is `E` (edit) on MCP servers and on Skills, Subagents,
   Commands, Hooks, LSP and Memory: it opens the canonical file in `$VISUAL`,
   then `$EDITOR`, falling back to `vi`, immediately and with no confirm dialog.
   Your editor writes the file, not the TUI. If the editor exits successfully,
