@@ -242,13 +242,13 @@ func gzipOverCap(t *testing.T) {
 }
 
 func slowBody(release <-chan struct{}) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "partial")
 		w.(http.Flusher).Flush()
-		select {
-		case <-r.Context().Done():
-		case <-release:
-		}
+		// Block only on release: if the handler also returned on the request
+		// context, the server could end the body cleanly before the client's
+		// timeout fires, and the read would see EOF instead of the error.
+		<-release
 	}
 }
 
@@ -258,8 +258,8 @@ func TestSlowBodyHitsTimeout(t *testing.T) {
 	f := newFixture(t, 200*time.Millisecond, slowBody(release))
 	start := time.Now()
 	_, err := f.c.Get(context.Background(), urlA, capKB)
-	if err == nil {
-		t.Fatal("slow body: want timeout error")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("slow body: err = %v, want a timeout (context.DeadlineExceeded)", err)
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("Get took %v, want ~200ms", d)
@@ -271,8 +271,8 @@ func TestSlowBodyHitsTimeout(t *testing.T) {
 	}
 	defer func() { _ = rc.Close() }()
 	start = time.Now()
-	if _, err := io.ReadAll(rc); err == nil {
-		t.Error("slow stream: want timeout error")
+	if _, err := io.ReadAll(rc); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("slow stream: err = %v, want a timeout (context.DeadlineExceeded)", err)
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("stream read took %v, want ~200ms", d)
