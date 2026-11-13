@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ func openTemp(t *testing.T) (*Cache, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = c.Close() })
 	return c, dir
 }
 
@@ -193,4 +195,118 @@ func TestDefaultDir(t *testing.T) {
 	if filepath.Base(d) != "agentsync-tui" {
 		t.Fatal(d)
 	}
+}
+
+func TestFutureStampIsMiss(t *testing.T) {
+	c, _ := openTemp(t)
+	now := time.Now()
+	c.now = func() time.Time { return now.Add(100 * 365 * 24 * time.Hour) }
+	if err := c.Put("k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	c.now = func() time.Time { return now }
+	if _, ok := c.Get("k", time.Hour); ok {
+		t.Fatal("future-stamped entry hit")
+	}
+	// Small skew is tolerated.
+	c.now = func() time.Time { return now.Add(30 * time.Second) }
+	if err := c.Put("s", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	c.now = func() time.Time { return now }
+	if _, ok := c.Get("s", time.Hour); !ok {
+		t.Fatal("slightly-future entry missed")
+	}
+}
+
+func TestLooseDirIsTightened(t *testing.T) {
+	skipUnlessUnixUser(t)
+	dir := filepath.Join(t.TempDir(), "c")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+}
+
+func TestDirOwnedByOtherUserRefused(t *testing.T) {
+	skipUnlessUnixUser(t)
+	// /tmp is root-owned on a normal system; use it as a foreign-owned dir.
+	fi, err := os.Stat("/tmp")
+	if err != nil || ownedByUs(fi) {
+		t.Skip("no foreign-owned directory available")
+	}
+	if c, err := Open("/tmp"); err == nil {
+		_ = c.Close()
+		t.Fatal("foreign-owned dir accepted")
+	}
+}
+
+func TestStaleTempFilesRemoved(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "c")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old, fresh, keep := filepath.Join(dir, ".tmp-old"), filepath.Join(dir, ".tmp-new"), filepath.Join(dir, "entry")
+	for _, p := range []string{old, fresh, keep} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	for _, p := range []string{old, keep} {
+		if err := os.Chtimes(p, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	if _, err := os.Lstat(old); err == nil {
+		t.Fatal("stale temp kept")
+	}
+	for _, p := range []string{fresh, keep} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Fatalf("%s removed", p)
+		}
+	}
+}
+
+func putLoop(t *testing.T, c *Cache, fill byte) {
+	t.Helper()
+	for range 20 {
+		if err := c.Put("k", bytes.Repeat([]byte{fill}, 1000)); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+func getLoop(t *testing.T, c *Cache) {
+	t.Helper()
+	for range 20 {
+		if d, ok := c.Get("k", time.Hour); ok && len(d) != 1000 {
+			t.Errorf("torn read: %d bytes", len(d))
+		}
+	}
+}
+
+func TestConcurrentPutGet(t *testing.T) {
+	c, _ := openTemp(t)
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() { putLoop(t, c, byte(i)) })
+		wg.Go(func() { getLoop(t, c) })
+	}
+	wg.Wait()
 }
