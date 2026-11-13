@@ -513,3 +513,36 @@ func TestOnlyFullContentStatusesAccepted(t *testing.T) {
 		}
 	}
 }
+
+// TestRedirectErrorMasksServerText: net/http quotes a Location header it
+// cannot parse in its error, before CheckRedirect ever sees the target, so
+// the server's text must be masked like the request URL is.
+func TestRedirectErrorMasksServerText(t *testing.T) {
+	const secret = "SECRET"
+	cases := map[string]string{
+		// The query is not validated, so the bad escape must be in the path.
+		"malformed location": "/next%zz?token=" + secret,
+		"bad query escape":   "/next?token=" + secret + "&bad=%zz",
+		"disallowed host":    httpsScheme + hostC + "/x?token=" + secret,
+	}
+	for name, loc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, time.Second, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", loc)
+				w.WriteHeader(http.StatusFound)
+			})
+			_, err := f.c.Get(context.Background(), urlA, capKB)
+			if err == nil {
+				t.Fatal("want error")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("error leaks server-supplied secret: %v", err)
+			}
+		})
+	}
+	// The masking wrapper keeps the sentinels reachable.
+	f := newFixture(t, time.Second, redirectTo(cases["disallowed host"]))
+	if _, err := f.c.Get(context.Background(), urlA, capKB); !errors.Is(err, ErrRedirect) || !errors.Is(err, ErrHost) {
+		t.Errorf("err = %v, want ErrRedirect and ErrHost", err)
+	}
+}

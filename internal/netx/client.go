@@ -6,7 +6,8 @@
 // cookie jar and an honest User-Agent. Redirects are followed only between
 // allowed hosts, at most three. Every request is bounded twice: by an
 // overall timeout (never unbounded) and by a cap on the decompressed body.
-// Errors name the masked URL and the HTTP status but never carry the
+// Errors name the masked URL and the HTTP status, mask any server text
+// net/http quotes (a malformed Location header), and never carry the
 // response body.
 package netx
 
@@ -153,7 +154,7 @@ func (c *Client) Stream(ctx context.Context, rawURL string, maxBytes int64) (io.
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
-		return nil, fail(shown, unwrapURLError(err))
+		return nil, fail(shown, masked(unwrapURLError(err)))
 	}
 	limit := capOf(maxBytes)
 	if err := refuse(resp, limit); err != nil {
@@ -242,7 +243,7 @@ func (r *capped) Read(p []byte) (int, error) {
 	}
 	r.left -= int64(n)
 	if err != nil && !errors.Is(err, io.EOF) {
-		r.err = fail(r.shown, fmt.Errorf("reading body: %w", err))
+		r.err = fail(r.shown, fmt.Errorf("reading body: %w", masked(err)))
 		return n, r.err
 	}
 	return n, err
@@ -266,6 +267,24 @@ func tooLarge(limit int64) error {
 // fail prefixes err with the request it belongs to.
 func fail(shown string, err error) error {
 	return fmt.Errorf("GET %s: %w", shown, err)
+}
+
+// maskedError is an error from below this package (net/http, the
+// transport, a body read) whose text may quote what a server sent, such as
+// a Location header net/http could not parse. Its message is masked; Unwrap
+// keeps errors.Is and errors.As working on the original.
+type maskedError struct{ inner error }
+
+func (e *maskedError) Error() string { return mask.Text(e.inner.Error()) }
+
+func (e *maskedError) Unwrap() error { return e.inner }
+
+// masked wraps err so its message is masked; nil stays nil.
+func masked(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &maskedError{inner: err}
 }
 
 // display is a URL as an error may show it: credentials masked.

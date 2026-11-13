@@ -152,6 +152,7 @@ func hermetic(t *testing.T) {
 	t.Setenv("AGENTSYNC_TARGET_ROOT", "")
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("LocalAppData", root) // os.UserCacheDir on Windows
 }
 
 // Every exit of the program, clean or with an error (a recovered panic
