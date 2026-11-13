@@ -13,14 +13,18 @@ func ownedByUs(fi os.FileInfo) bool {
 	return ok && int(st.Uid) == os.Geteuid()
 }
 
-// enforceDirPerm tightens a loose dir we own to 0700 and refuses one owned
-// by another uid, which could hold entries planted by that user.
-func enforceDirPerm(dir string, fi os.FileInfo) error {
+// enforceDirPerm refuses a dir owned by another uid, which could hold
+// entries planted by that user, and tightens a loose dir we own to 0700
+// through root. It reports whether the dir had a group or world write bit.
+func enforceDirPerm(root *os.Root, dir string, fi os.FileInfo) (bool, error) {
 	if !ownedByUs(fi) {
-		return errForeignDir(dir)
+		return false, errForeignDir(dir)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return os.Chmod(dir, dirMode)
+	perm := fi.Mode().Perm()
+	if perm&0o077 != 0 {
+		if err := root.Chmod(".", dirMode); err != nil {
+			return false, err
+		}
 	}
-	return nil
+	return perm&0o022 != 0, nil
 }

@@ -449,6 +449,7 @@ func TestBuildDepsDiscoverDefaultsOnline(t *testing.T) {
 	if err != nil || c == nil {
 		t.Fatalf("Cache.Open() = %v, %v", c, err)
 	}
+	t.Cleanup(func() { _ = d.Discover.Cache.Close() })
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		t.Errorf("cache dir %s not created on first use: %v", dir, err)
 	}

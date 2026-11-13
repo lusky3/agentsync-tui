@@ -2,6 +2,7 @@ package cache
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -88,12 +89,12 @@ func TestFilesAre0600DirIs0700(t *testing.T) {
 func TestSymlinkedCacheDirRefused(t *testing.T) {
 	skipUnlessUnixUser(t)
 	base := t.TempDir()
-	real := filepath.Join(base, "real")
-	if err := os.Mkdir(real, 0o700); err != nil {
+	target := filepath.Join(base, "real")
+	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(base, "link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(link); err == nil {
@@ -245,9 +246,99 @@ func TestDirOwnedByOtherUserRefused(t *testing.T) {
 	if err != nil || ownedByUs(fi) {
 		t.Skip("no foreign-owned directory available")
 	}
-	if c, err := Open("/tmp"); err == nil {
+	c, err := Open("/tmp")
+	if err == nil {
 		_ = c.Close()
 		t.Fatal("foreign-owned dir accepted")
+	}
+	if !errors.Is(err, ErrForeignOwner) {
+		t.Fatalf("Open(/tmp) = %v, want ErrForeignOwner", err)
+	}
+}
+
+// A nil *Cache is a working no-op: Get misses, Put and Close succeed.
+func TestNilCacheIsNoOp(t *testing.T) {
+	var c *Cache
+	if d, ok := c.Get("k", time.Hour); ok || d != nil {
+		t.Errorf("nil Get = %q, %v, want a miss", d, ok)
+	}
+	if err := c.Put("k", []byte("v")); err != nil {
+		t.Errorf("nil Put = %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Errorf("nil Close = %v", err)
+	}
+}
+
+// reopenWithMode stores key k, closes the cache, plants a stray file and a
+// temp, sets the dir's mode and reopens it.
+func reopenWithMode(t *testing.T, mode os.FileMode) (*Cache, string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "c")
+	c, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Put("k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	for _, name := range []string{"stray", tmpPrefix + "fresh"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(dir, mode); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != dirMode {
+		t.Fatalf("mode %v, want tightened to 0700", fi.Mode())
+	}
+	return c, dir
+}
+
+// A dir that was group- or world-writable may hold planted entries, so
+// they are purged (temps too); other names are left alone.
+func TestWritableDirIsPurged(t *testing.T) {
+	skipUnlessUnixUser(t)
+	for _, mode := range []os.FileMode{0o720, 0o702, 0o777} {
+		c, dir := reopenWithMode(t, mode)
+		if _, ok := c.Get("k", time.Hour); ok {
+			t.Errorf("mode %v: entry survived", mode)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, tmpPrefix+"fresh")); err == nil {
+			t.Errorf("mode %v: temp survived", mode)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "stray")); err != nil {
+			t.Errorf("mode %v: non-entry name removed: %v", mode, err)
+		}
+	}
+}
+
+// A dir that was only readable by others is tightened but keeps its
+// entries: nobody else could have written them.
+func TestReadableDirKeepsEntries(t *testing.T) {
+	skipUnlessUnixUser(t)
+	c, _ := reopenWithMode(t, 0o755)
+	if got, ok := c.Get("k", time.Hour); !ok || string(got) != "v" {
+		t.Fatalf("entry lost: %q %v", got, ok)
+	}
+}
+
+// Open refuses a path that is a regular file.
+func TestNonDirRefused(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := Open(p); err == nil {
+		_ = c.Close()
+		t.Fatal("regular file accepted as a cache dir")
 	}
 }
 

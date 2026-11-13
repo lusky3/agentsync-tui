@@ -601,6 +601,7 @@ func TestModalTakesKeysBeforeCapturingScreen(t *testing.T) {
 func TestDiscoverLazyCacheOpensOnFirstUse(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agentsync-tui")
 	l := NewLazyCache(dir)
+	t.Cleanup(func() { _ = l.Close() })
 	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("NewLazyCache created %s (err %v)", dir, err)
 	}
@@ -643,6 +644,7 @@ func TestDiscoverLazyCacheRetriesFailedOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := NewLazyCache(filepath.Join(parent, "agentsync-tui"))
+	t.Cleanup(func() { _ = l.Close() })
 	if c, err := l.Open(); c != nil || err == nil {
 		t.Fatalf("Open() under a regular file = %v, %v, want an error", c, err)
 	}

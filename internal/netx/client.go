@@ -107,7 +107,7 @@ func New(opts Options) *Client {
 	}
 	tr := opts.Transport
 	if tr == nil {
-		tr = defaultTransport()
+		tr = defaultTransport(c.ua)
 	}
 	c.hc = &http.Client{
 		Transport:     tr,
@@ -281,8 +281,12 @@ func unwrapURLError(err error) error {
 	return err
 }
 
-func defaultTransport() http.RoundTripper {
+// defaultTransport is http.DefaultTransport (HTTPS_PROXY and friends
+// honoured) with TLS 1.2 or later and ua sent on a proxy CONNECT too, in
+// place of Go's default User-Agent.
+func defaultTransport(ua string) *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ProxyConnectHeader = http.Header{"User-Agent": []string{ua}}
 	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	tr.DisableCompression = false // decompressed bytes are what the cap counts
 	return tr

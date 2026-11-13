@@ -165,6 +165,11 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
 
 ## Discovery and network access
 
+The discovery screens are not in this build yet; they come in a later
+release (there are no release tags so far). Until then the TUI makes no
+discovery request, and what follows describes how those requests will
+behave.
+
 Apart from the commands it runs, the only network access the TUI makes
 itself is discovery requests: read-only HTTPS GETs, on port 443 only, to
 these four hosts and no others:
@@ -178,14 +183,16 @@ these four hosts and no others:
 
 Plain `http`, other ports and redirects to a host outside this list are
 refused, and no cookies are kept. `HTTPS_PROXY` is honoured; the host list
-applies to the destination. Requests carry an honest User-Agent
+applies to the destination. Requests, and the CONNECT to a proxy, carry an
+honest User-Agent
 (`agentsync-tui/<version> (+https://github.com/lusky3/agentsync-tui)`) and
 are bounded by `--read-timeout`, which keeps the 2m default when it is `0`.
 
-Discovery responses are cached under the user cache directory
-(`$XDG_CACHE_HOME/agentsync-tui`, default `~/.cache/agentsync-tui`;
-`~/Library/Caches/agentsync-tui` on macOS), mode 0700. The directory is
-created on first use, not at startup; delete it at any time to clear it.
+Discovery responses are cached in `agentsync-tui` under Go's
+`os.UserCacheDir` (`$XDG_CACHE_HOME`, default `~/.cache`, on Linux;
+`~/Library/Caches` on macOS; `%LocalAppData%` on Windows), mode 0700 where
+the OS has Unix modes. The directory is created on first use, not at
+startup; delete it at any time to clear it.
 
 `--offline` turns discovery off: no request is made and nothing is cached.
 
