@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -48,7 +49,7 @@ var (
 	ErrStatus   = errors.New("netx: unexpected HTTP status")
 )
 
-// StatusError is a non-2xx response. It matches ErrStatus, and its message
+// StatusError is a response whose status is not 200, 203 or 204. It matches ErrStatus, and its message
 // holds only the status, never the response body.
 type StatusError struct{ Code int }
 
@@ -160,13 +161,22 @@ func (c *Client) Stream(ctx context.Context, rawURL string, maxBytes int64) (io.
 		_ = resp.Body.Close()
 		return nil, fail(shown, err)
 	}
-	return &capped{rc: resp.Body, left: limit, shown: shown}, nil
+	return &capped{rc: resp.Body, limit: limit, left: limit, shown: shown}, nil
 }
 
-// refuse reports why a response is not read: a non-2xx status, or a
-// declared length already over the cap.
+// fullContent are the statuses whose body is the whole resource. Others
+// in 2xx are refused too: 206 is a fragment (no Range is ever sent), and
+// 201/202/205 are not answers to a read.
+var fullContent = map[int]bool{
+	http.StatusOK:                   true,
+	http.StatusNonAuthoritativeInfo: true,
+	http.StatusNoContent:            true,
+}
+
+// refuse reports why a response is not read: a status other than
+// fullContent, or a declared length already over the cap.
 func refuse(resp *http.Response, limit int64) error {
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	if !fullContent[resp.StatusCode] {
 		return &StatusError{Code: resp.StatusCode}
 	}
 	if resp.ContentLength > limit {
@@ -208,9 +218,11 @@ func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// capped is a response body that fails once more than left bytes arrive.
+// capped is a response body that fails once more than limit bytes arrive;
+// left is what may still be read.
 type capped struct {
 	rc    io.ReadCloser
+	limit int64
 	left  int64
 	shown string
 	err   error
@@ -225,7 +237,7 @@ func (r *capped) Read(p []byte) (int, error) {
 	}
 	n, err := r.rc.Read(p)
 	if int64(n) > r.left {
-		r.err = fail(r.shown, tooLarge(r.left))
+		r.err = fail(r.shown, tooLarge(r.limit))
 		return int(r.left), r.err
 	}
 	r.left -= int64(n)
@@ -238,12 +250,13 @@ func (r *capped) Read(p []byte) (int, error) {
 
 func (r *capped) Close() error { return r.rc.Close() }
 
-// capOf is the byte cap for a caller's maxBytes: never unbounded.
+// capOf is the byte cap for a caller's maxBytes: never unbounded, and at
+// most math.MaxInt64-1 so the one-byte overshoot read cannot overflow.
 func capOf(maxBytes int64) int64 {
 	if maxBytes <= 0 {
 		return DefaultMaxBytes
 	}
-	return maxBytes
+	return min(maxBytes, math.MaxInt64-1)
 }
 
 func tooLarge(limit int64) error {

@@ -8,14 +8,16 @@ import (
 	"testing"
 )
 
+const registryHost = "registry.test"
+
 func TestTransportMapsNamedHostsToServer(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "host="+r.Host)
 	}))
 	t.Cleanup(srv.Close)
-	hc := &http.Client{Transport: Transport(srv, "registry.test", "skills.sh")}
+	hc := &http.Client{Transport: Transport(srv, registryHost, "skills.sh")}
 
-	for _, host := range []string{"registry.test", "skills.sh"} {
+	for _, host := range []string{registryHost, "skills.sh"} {
 		resp, err := hc.Get("https://" + host + "/x")
 		if err != nil {
 			t.Fatalf("%s: %v", host, err)
@@ -33,7 +35,7 @@ func TestTransportRefusesUnmappedHost(t *testing.T) {
 		t.Error("unmapped host reached the server")
 	}))
 	t.Cleanup(srv.Close)
-	hc := &http.Client{Transport: Transport(srv, "registry.test")}
+	hc := &http.Client{Transport: Transport(srv, registryHost)}
 
 	resp, err := hc.Get("https://other.test/x")
 	if err == nil {

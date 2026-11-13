@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -23,6 +24,9 @@ const (
 	hostB = "b.example"
 	hostC = "evil.example"
 	capKB = 1 << 10
+
+	httpsScheme = "https://"
+	urlA        = httpsScheme + hostA + "/"
 )
 
 // fixture is a TLS test server reachable as hostA, hostB and hostC, with
@@ -81,10 +85,10 @@ func TestRefusesHTTP(t *testing.T) {
 func TestRefusesHostOutsideAllowlist(t *testing.T) {
 	f := newFixture(t, time.Second, ok("x"))
 	for _, u := range []string{
-		"https://" + hostC + "/",
-		"https://" + hostA + ":8443/",
+		httpsScheme + hostC + "/",
+		httpsScheme + hostA + ":8443/",
 		"https://user:hunter2@" + hostA + "/",
-		"https://" + hostA + ".evil.example/",
+		httpsScheme + hostA + ".evil.example/",
 	} {
 		_, err := f.c.Get(context.Background(), u, capKB)
 		if !errors.Is(err, ErrHost) {
@@ -114,8 +118,8 @@ func redirectTo(target string) http.HandlerFunc {
 }
 
 func TestRedirectToOtherAllowedHostFollowed(t *testing.T) {
-	f := newFixture(t, time.Second, redirectTo("https://"+hostB+"/next"))
-	b, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB)
+	f := newFixture(t, time.Second, redirectTo(httpsScheme+hostB+"/next"))
+	b, err := f.c.Get(context.Background(), urlA, capKB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,14 +130,14 @@ func TestRedirectToOtherAllowedHostFollowed(t *testing.T) {
 
 func TestRedirectToDisallowedHostRefused(t *testing.T) {
 	cases := map[string]string{
-		"other host":     "https://" + hostC + "/steal",
+		"other host":     httpsScheme + hostC + "/steal",
 		"https to http":  "http://" + hostB + "/plain",
-		"secret in path": "https://" + hostC + "/x?token=ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		"secret in path": httpsScheme + hostC + "/x?token=ghp_abcdefghijklmnopqrstuvwxyz0123456789",
 	}
 	for name, target := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, time.Second, redirectTo(target))
-			_, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB)
+			_, err := f.c.Get(context.Background(), urlA, capKB)
 			if !errors.Is(err, ErrRedirect) {
 				t.Fatalf("err = %v, want ErrRedirect", err)
 			}
@@ -160,11 +164,11 @@ func TestMoreThanThreeRedirectsRefused(t *testing.T) {
 		}
 	}
 	f := newFixture(t, time.Second, hops(3))
-	if b, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB); err != nil || string(b) != "done" {
+	if b, err := f.c.Get(context.Background(), urlA, capKB); err != nil || string(b) != "done" {
 		t.Fatalf("3 redirects = %q, %v; want done", b, err)
 	}
 	f = newFixture(t, time.Second, hops(4))
-	_, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB)
+	_, err := f.c.Get(context.Background(), urlA, capKB)
 	if !errors.Is(err, ErrRedirect) {
 		t.Fatalf("4 redirects: err = %v, want ErrRedirect", err)
 	}
@@ -193,13 +197,13 @@ func TestBodyOverCapIsErrTooLarge(t *testing.T) {
 		w.(http.Flusher).Flush()
 		_, _ = io.WriteString(w, strings.Repeat("p", capKB/2+1))
 	})
-	if _, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB); !errors.Is(err, ErrTooLarge) {
+	if _, err := f.c.Get(context.Background(), urlA, capKB); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("plain over cap: err = %v, want ErrTooLarge", err)
 	}
-	if b, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB+1); err != nil || len(b) != capKB+1 {
+	if b, err := f.c.Get(context.Background(), urlA, capKB+1); err != nil || len(b) != capKB+1 {
 		t.Errorf("plain at cap: len %d, err %v", len(b), err)
 	}
-	rc, err := f.c.Stream(context.Background(), "https://"+hostA+"/", capKB)
+	rc, err := f.c.Stream(context.Background(), urlA, capKB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +214,7 @@ func TestBodyOverCapIsErrTooLarge(t *testing.T) {
 	}
 	t.Run("declared length", func(t *testing.T) {
 		f := newFixture(t, time.Second, ok(strings.Repeat("d", capKB+1)))
-		if _, err := f.c.Stream(context.Background(), "https://"+hostA+"/", capKB); !errors.Is(err, ErrTooLarge) {
+		if _, err := f.c.Stream(context.Background(), urlA, capKB); !errors.Is(err, ErrTooLarge) {
 			t.Errorf("Content-Length over cap: err = %v, want ErrTooLarge before reading", err)
 		}
 	})
@@ -228,10 +232,10 @@ func gzipOverCap(t *testing.T) {
 		w.Header().Set("Content-Encoding", "gzip")
 		_, _ = w.Write(gz)
 	})
-	if _, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB); !errors.Is(err, ErrTooLarge) {
+	if _, err := f.c.Get(context.Background(), urlA, capKB); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("gzip bomb: err = %v, want ErrTooLarge", err)
 	}
-	b, err := f.c.Get(context.Background(), "https://"+hostA+"/", 64*capKB)
+	b, err := f.c.Get(context.Background(), urlA, 64*capKB)
 	if err != nil || len(b) != 64*capKB {
 		t.Errorf("gzip at cap: len %d, err %v (want decompressed bytes)", len(b), err)
 	}
@@ -253,7 +257,7 @@ func TestSlowBodyHitsTimeout(t *testing.T) {
 	defer close(release)
 	f := newFixture(t, 200*time.Millisecond, slowBody(release))
 	start := time.Now()
-	_, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB)
+	_, err := f.c.Get(context.Background(), urlA, capKB)
 	if err == nil {
 		t.Fatal("slow body: want timeout error")
 	}
@@ -261,7 +265,7 @@ func TestSlowBodyHitsTimeout(t *testing.T) {
 		t.Errorf("Get took %v, want ~200ms", d)
 	}
 
-	rc, err := f.c.Stream(context.Background(), "https://"+hostA+"/", capKB)
+	rc, err := f.c.Stream(context.Background(), urlA, capKB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +285,7 @@ func TestCallerContextCancels(t *testing.T) {
 	f := newFixture(t, time.Minute, slowBody(release))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := f.c.Get(ctx, "https://"+hostA+"/", capKB); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := f.c.Get(ctx, urlA, capKB); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want context.DeadlineExceeded", err)
 	}
 }
@@ -302,7 +306,7 @@ func TestZeroTimeoutStillBounded(t *testing.T) {
 	}
 	// A non-positive byte cap is bounded too.
 	f := newFixture(t, time.Second, ok(strings.Repeat("z", 10)))
-	if b, err := f.c.Get(context.Background(), "https://"+hostA+"/", 0); err != nil || len(b) != 10 {
+	if b, err := f.c.Get(context.Background(), urlA, 0); err != nil || len(b) != 10 {
 		t.Errorf("maxBytes 0: %q, %v", b, err)
 	}
 	if n := capOf(0); n != DefaultMaxBytes || capOf(-1) != DefaultMaxBytes || capOf(7) != 7 {
@@ -318,11 +322,11 @@ func TestNon2xxIsStatusErrorWithoutBody(t *testing.T) {
 	})
 	for name, call := range map[string]func() error{
 		"Get": func() error {
-			_, err := f.c.Get(context.Background(), "https://"+hostA+"/?q=x", capKB)
+			_, err := f.c.Get(context.Background(), httpsScheme+hostA+"/?q=x", capKB)
 			return err
 		},
 		"Stream": func() error {
-			rc, err := f.c.Stream(context.Background(), "https://"+hostA+"/?q=x", capKB)
+			rc, err := f.c.Stream(context.Background(), httpsScheme+hostA+"/?q=x", capKB)
 			if err == nil {
 				_ = rc.Close()
 			}
@@ -356,7 +360,7 @@ func TestSetsUserAgentAndNoCookies(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	})
 	for range 2 {
-		if _, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB); err != nil {
+		if _, err := f.c.Get(context.Background(), urlA, capKB); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -387,7 +391,7 @@ func TestDefaultUserAgentIsHonest(t *testing.T) {
 	}
 	f := newFixture(t, time.Second, ok("x"))
 	c := New(Options{AllowedHosts: []string{hostA}, Transport: netxtest.Transport(f.srv, hostA)})
-	if _, err := c.Get(context.Background(), "https://"+hostA+"/", capKB); err != nil {
+	if _, err := c.Get(context.Background(), urlA, capKB); err != nil {
 		t.Fatal(err)
 	}
 	reqs := f.requests()
@@ -405,10 +409,10 @@ func TestOnlyGET(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, "ok")
 	})
-	if _, err := f.c.Get(context.Background(), "https://"+hostA+"/", capKB); err != nil {
+	if _, err := f.c.Get(context.Background(), urlA, capKB); err != nil {
 		t.Fatal(err)
 	}
-	rc, err := f.c.Stream(context.Background(), "https://"+hostA+"/", capKB)
+	rc, err := f.c.Stream(context.Background(), urlA, capKB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +441,7 @@ func TestOnlyGET(t *testing.T) {
 func TestTransportErrorMasksURLSecrets(t *testing.T) {
 	f := newFixture(t, time.Second, ok("x"))
 	f.srv.Close() // connection refused from here on
-	_, err := f.c.Get(context.Background(), "https://"+hostA+"/x?token=ghp_abcdefghijklmnopqrstuvwxyz0123456789", capKB)
+	_, err := f.c.Get(context.Background(), httpsScheme+hostA+"/x?token=ghp_abcdefghijklmnopqrstuvwxyz0123456789", capKB)
 	if err == nil {
 		t.Fatal("want error from closed server")
 	}
@@ -446,5 +450,66 @@ func TestTransportErrorMasksURLSecrets(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), hostA) {
 		t.Errorf("error %q does not name the host", err)
+	}
+}
+
+func TestMaximumCapDoesNotOverflow(t *testing.T) {
+	if n := capOf(math.MaxInt64); n != math.MaxInt64-1 {
+		t.Errorf("capOf(MaxInt64) = %d", n)
+	}
+	f := newFixture(t, time.Second, ok("all of it"))
+	b, err := f.c.Get(context.Background(), urlA, math.MaxInt64)
+	if err != nil || string(b) != "all of it" {
+		t.Fatalf("maxBytes MaxInt64 = %q, %v", b, err)
+	}
+	rc, err := f.c.Stream(context.Background(), urlA, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rc.Close() }()
+	if b, err := io.ReadAll(rc); err != nil || string(b) != "all of it" {
+		t.Errorf("stream MaxInt64 = %q, %v", b, err)
+	}
+}
+
+func TestTooLargeErrorNamesTheCap(t *testing.T) {
+	f := newFixture(t, time.Second, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", 100))
+		w.(http.Flusher).Flush()
+		_, _ = io.WriteString(w, strings.Repeat("x", 100))
+	})
+	_, err := f.c.Get(context.Background(), urlA, 150)
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), "over 150 bytes") {
+		t.Errorf("error %q does not name the 150-byte cap", err)
+	}
+}
+
+func TestOnlyFullContentStatusesAccepted(t *testing.T) {
+	for code, want := range map[int]bool{
+		http.StatusOK:                   true,
+		http.StatusNonAuthoritativeInfo: true,
+		http.StatusNoContent:            true,
+		http.StatusCreated:              false,
+		http.StatusAccepted:             false,
+		http.StatusResetContent:         false,
+		http.StatusPartialContent:       false,
+	} {
+		f := newFixture(t, time.Second, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(code)
+			if code != http.StatusNoContent && code != http.StatusResetContent {
+				_, _ = io.WriteString(w, `{"truncated":`)
+			}
+		})
+		_, err := f.c.Get(context.Background(), urlA, capKB)
+		var se *StatusError
+		switch {
+		case want && err != nil:
+			t.Errorf("%d: err = %v, want accepted", code, err)
+		case !want && (!errors.As(err, &se) || se.Code != code):
+			t.Errorf("%d: err = %v, want *StatusError %d", code, err, code)
+		}
 	}
 }
