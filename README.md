@@ -198,7 +198,8 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   upstream's remote. A push is never forced and never sends another branch,
   a tag or a submodule, whatever the repository's push configuration says.
   Everything else it runs is read-only: `status`, `diff`, `rev-parse`,
-  `log`, `for-each-ref`, `config --get`, `remote get-url` and `rev-list`. It
+  `log`, `cat-file`, `for-each-ref`, `config --get`, `remote get-url`, `rev-list` and,
+  for a push only, `ls-remote` of the branch (its one network read). It
   never runs `--force`, `reset`, `clean`, `checkout`, `restore`, `stash`,
   `rebase`, `--no-verify`, `remote add`/`set-url` or a `config` write, and it
   never creates a remote or a hosted repository. A commit is refused when
@@ -208,14 +209,21 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
   finds a likely secret, HEAD is detached, a merge, rebase, cherry-pick,
   revert or bisect is in progress, or `index.lock` is present (the TUI never
   deletes it). A push is scanned the same way first, the messages of the
-  outgoing commits included. When the remote pushes to a URL other than the
+  outgoing commits included (a commit holding a NUL byte, which hides the
+  rest of its message from `git log`, is refused). When the remote pushes to a URL other than the
   one it fetches from (a `pushurl`, a `pushInsteadOf`, a second `url`), the
   fetched upstream does not tell what that URL lacks, so the branch's whole
-  history is scanned instead. That scan is bounded: a history with more than
-  2000 paths or 20000 file changes, or one whose log is too large to read in
-  full, or whose scan takes longer than two minutes (whatever
-  `--read-timeout` says), is refused, and you push
-  it outside the TUI. Your hooks and signing
+  history is scanned instead. Otherwise the guard first asks the remote
+  where its branch is: at the fetched upstream, only the outgoing commits
+  are scanned; absent (a new, empty repository behind an old
+  remote-tracking ref after `remote set-url`), the whole history is; anywhere
+  else, the push is refused until you fetch. That scan is bounded: a history with more than
+  2000 paths, 20000 file changes or 10000 commits, one whose commit
+  messages are too large to read in full (narrow or whole-history scan), a
+  whole-history scan whose patches are, or a scan that takes longer than
+  two minutes (whatever `--read-timeout` says), is refused, and you push
+  it outside the TUI. (Outgoing patches cut short in a narrow scan are
+  listed as not scanned and need a typed `push`.) Your hooks and signing
   run as configured, with no terminal (see above). Git commands are always
   bounded (see Usage). agentsync's own destination-backup repositories are
   recognised (by commit author and the `agentsync.managed` marker) and
@@ -287,11 +295,13 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
 - Source repo: the secret scan is heuristic. It reads only the lines a
   commit or push would add. A hard finding (a known token shape, a literal
   credential in an Authorization/Bearer header, URL userinfo, a private
-  key, a literal value under a secret-named key in a config file, a
+  key, and in a config file (`agentsync.toml`, `mcp/`, `hooks/*.toml`,
+  `lsp/*.toml`) a literal value under a secret-named key or a
   token-shaped value anywhere under an `env` or `headers` table, read from
   the whole file, so a table header outside the change counts) refuses
-  the commit or push; a soft finding (a token-shaped word in prose, a file
-  too large or binary to scan) asks you to type `commit` first. An all-caps
+  the commit or push; a soft finding (a token-shaped word in prose, an
+  `env` table's included, a file too large or binary to scan) asks you to
+  type `commit` (or `push`) first. An all-caps
   `$NAME` is treated as a reference to a variable, so a literal that looks
   like one (`$PASSWORD123`) is not flagged. A hard refusal can be bypassed
   only by committing outside the TUI; the refusal shows the commands.

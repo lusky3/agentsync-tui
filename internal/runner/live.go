@@ -52,6 +52,11 @@ var live struct {
 	// closed is set once Shutdown or KillAll has begun and stays set for
 	// the rest of the process: runCore then starts no new child.
 	closed atomic.Bool
+	// killedAll is set by KillAll before its snapshot and stays set. A
+	// child tracked after that snapshot (it was between Start and track,
+	// which KillAll never waits for) is killed as it is tracked: either
+	// the snapshot holds it or its tracking sees the flag (startTracked).
+	killedAll atomic.Bool
 }
 
 // escalated is set by KillAll during a Shutdown, which then kills at once;
@@ -88,14 +93,17 @@ func killedAt(c *child) (time.Time, bool) {
 // track records cmd, an agentsync child, as live.
 func track(cmd *exec.Cmd, args []string, write bool) { trackAs(cmd, args, write, "") }
 
-// trackAs records cmd as live under program ("" for agentsync).
-func trackAs(cmd *exec.Cmd, args []string, write bool, program string) {
+// trackAs records cmd as live under program ("" for agentsync) and
+// returns its record.
+func trackAs(cmd *exec.Cmd, args []string, write bool, program string) *child {
 	live.mu.Lock()
 	defer live.mu.Unlock()
 	if live.cmds == nil {
 		live.cmds = map[*exec.Cmd]*child{}
 	}
-	live.cmds[cmd] = &child{cmd: cmd, args: args, write: write, program: program, started: time.Now()}
+	c := &child{cmd: cmd, args: args, write: write, program: program, started: time.Now()}
+	live.cmds[cmd] = c
+	return c
 }
 
 // untrack removes cmd from the live registry once it has ended.
@@ -302,10 +310,13 @@ func (r *ending) record(c *child, outcome string, now time.Time) {
 // KillAll sends SIGKILL to every live child's process group at once and
 // makes a Shutdown in progress stop waiting: the second ctrl+c or SIGTERM
 // while the TUI is already going away. Nothing new starts after it. It is
-// best effort and never waits for a start in progress, which may hang.
+// best effort and never waits for a start in progress, which may hang; a
+// child whose start was in progress is killed when it is tracked
+// (killedAll).
 func KillAll() {
 	escalated.Store(true)
 	live.closed.Store(true)
+	live.killedAll.Store(true)
 	for _, c := range snapshot() {
 		killGroup(c)
 	}

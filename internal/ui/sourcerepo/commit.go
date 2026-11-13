@@ -80,11 +80,13 @@ type guardInput struct {
 	limit    time.Duration
 	selected []gitrepo.File // the records the user selected, as listed
 	msg      string
+	stored   map[string]bool // new files git stores other than as their bytes (storedAttrs)
 }
 
 // guardMsg carries one finished guard round.
 type guardMsg struct {
 	gen      int
+	top      string // the repository the round read
 	msg      string
 	refusal  string // display-safe; "" when every guard passed
 	changed  bool   // a selected file is no longer listed; status is fresh
@@ -157,7 +159,7 @@ func (s *Screen) submit() tea.Cmd {
 // status re-read, agentsync check, the git dir state, a detached HEAD, the
 // repository's refusal, then the scan of every selected file.
 func runGuards(ctx context.Context, gen int, in guardInput) guardMsg {
-	m := guardMsg{gen: gen, msg: in.msg}
+	m := guardMsg{gen: gen, top: in.repo.Top, msg: in.msg}
 	st, note := readStatus(ctx, in.git, in.repo, in.limit)
 	if note != "" {
 		m.refusal = refused + note
@@ -234,6 +236,10 @@ func gitDirRefusal(gitDir string) string {
 
 // scanFiles scans what each selected file would add (R5).
 func scanFiles(ctx context.Context, in guardInput, unborn bool, files []gitrepo.File) ([]gitrepo.Finding, string) {
+	var why string
+	if in.stored, why = storedAttrs(ctx, in, files); why != "" {
+		return nil, why
+	}
 	var out []gitrepo.Finding
 	for _, f := range files {
 		fs, why := scanFile(ctx, in, unborn, f)
@@ -257,8 +263,44 @@ func scanFile(ctx context.Context, in guardInput, unborn bool, f gitrepo.File) (
 	return scanTracked(ctx, in, unborn, f)
 }
 
-// scanUntracked scans a new file whole (a symlink: its target).
+// storedAttrs reads which selected new files have a clean filter or a
+// working-tree encoding (gitrepo.StoredAttrs): git add stores what those
+// make of the file, which scanUntracked then reads (scanStored). The read
+// failing refuses the commit.
+func storedAttrs(ctx context.Context, in guardInput, files []gitrepo.File) (map[string]bool, string) {
+	var paths []string
+	for _, f := range files {
+		if f.Kind == gitrepo.Untracked {
+			paths = append(paths, f.Path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, ""
+	}
+	argv := gitrepo.CheckAttrArgv(in.repo, paths)
+	if argv == nil {
+		return nil, cannotScan + "git cannot be given a selected path"
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
+	if note := ui.ReadNote("git check-attr", res, err); note != "" {
+		return nil, refused + note
+	}
+	stored := map[string]bool{}
+	fields := strings.Split(res.Stdout, "\x00")
+	for i := 0; i+2 < len(fields); i += 3 {
+		if v := fields[i+2]; v != "unspecified" && v != "unset" {
+			stored[fields[i]] = true
+		}
+	}
+	return stored, ""
+}
+
+// scanUntracked scans a new file whole (a symlink: its target; a file with
+// a clean filter or a working-tree encoding: as git will store it).
 func scanUntracked(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrepo.Finding, string) {
+	if in.stored[f.Path] && !isSymlink(in.repo.Top, f.Path) {
+		return scanStored(ctx, in, f)
+	}
 	b, err := bounded(ctx, in.limit, func(ctx context.Context) (capped, error) { return readNew(ctx, in.repo.Top, f.Path) })
 	if err != nil {
 		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": " + errNote(err)
@@ -266,11 +308,45 @@ func scanUntracked(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrep
 	return gitrepo.ScanNewFile(f.HomeRel, []byte(b.data)), ""
 }
 
+// scanStored scans a new file as git will store it (StoredDiffArgv: its
+// clean filter and working-tree encoding applied). A binary or cut patch
+// is soft, as for a tracked file; a read that fails refuses the commit.
+func scanStored(ctx context.Context, in guardInput, f gitrepo.File) ([]gitrepo.Finding, string) {
+	argv := gitrepo.StoredDiffArgv(in.repo, f.Path)
+	if argv == nil {
+		return nil, cannotScan + gitrepo.DisplayName(f.Path)
+	}
+	res, err := ui.Read(ctx, in.git, in.limit, argv...)
+	if err != nil || res.ExitCode > 1 || res.ExitCode == 1 && res.Stdout == "" {
+		return nil, cannotScan + gitrepo.DisplayName(f.Path) + ": git diff --no-index failed (its filter may have failed)"
+	}
+	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
+	var out []gitrepo.Finding
+	if cut {
+		out = append(out, notScanned(f, gitrepo.KindNotScannedPatch))
+	}
+	if binaryRe.MatchString(patch) {
+		out = append(out, notScanned(f, gitrepo.KindNotScannedBinary))
+	}
+	lines := gitrepo.AddedLines(patch)
+	texts := make([]string, len(lines))
+	for i, l := range lines {
+		texts[i] = l.Text
+	}
+	return append(out, gitrepo.ScanAdded(f.HomeRel, lines, strings.Join(texts, "\n")+"\n")...), ""
+}
+
+// isSymlink reports whether rel under top is a symbolic link.
+func isSymlink(top, rel string) bool {
+	fi, err := os.Lstat(filepath.Join(top, filepath.FromSlash(rel)))
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
+}
+
 // readNew is what committing rel would record: a symlink's target, or the
 // regular file's first scanReadLimit bytes.
 func readNew(ctx context.Context, top, rel string) (capped, error) {
 	full := filepath.Join(top, filepath.FromSlash(rel))
-	if fi, err := os.Lstat(full); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+	if isSymlink(top, rel) {
 		target, err := os.Readlink(full)
 		return capped{data: target}, err
 	}
@@ -377,6 +453,10 @@ func inHome(pathspec, p string) bool {
 // list is refreshed, and a clean or soft round emits the chain.
 func (s *Screen) onGuard(m guardMsg) tea.Cmd {
 	s.commit.busy = false
+	if m.top != s.repo.Top {
+		s.mode = modeList
+		return s.repoChanged()
+	}
 	switch {
 	case m.changed:
 		s.kept = m.kept
@@ -534,12 +614,12 @@ func commitOutcome(p *pendingCommit, m ui.RunMsg, ok bool) string {
 	case ok:
 		return "committed: " + p.subject
 	case m.Err != nil && !errors.As(m.Err, new(*runner.MissingError)):
-		t := shellQuote(p.top)
+		t := quotePath(p.top)
 		return "the commit was stopped (" + outcomeOf(m) + "); it may have been recorded. Check before retrying or unstaging" +
-			runOutside + "\n  " + gitC + t + " log -1\n  " + gitC + t + statusCmd
+			runOutside + "\n  " + gitC + t + " log -1\n  " + gitC + t + statusCmd + maskedPathNote(p.top)
 	case p.added:
 		return "commit failed (" + outcomeOf(m) + "); the selected files are now staged. " +
-			"To unstage them, run outside the TUI:\n  " + restoreCommand(p.top, p.add)
+			"To unstage them, run outside the TUI:\n  " + restoreCommand(p.top, p.add) + maskedPathNote(append([]string{p.top}, p.add...)...)
 	}
 	return "commit failed (" + outcomeOf(m) + "): nothing was committed"
 }
@@ -556,7 +636,7 @@ func outcomeOf(m ui.RunMsg) string {
 // restoreCommand is the unstage command, as text for the user (R4): the
 // TUI never runs it (D11). Its paths are taken literally.
 func restoreCommand(top string, paths []string) string {
-	words := []string{"git", "-C", shellQuote(top), "--literal-pathspecs", "restore", "--staged", "--"}
+	words := []string{"git", "-C", quotePath(top), "--literal-pathspecs", "restore", "--staged", "--"}
 	for _, p := range paths[:min(len(paths), shownPaths)] {
 		words = append(words, shellQuote(mask.Text(p)))
 	}
@@ -564,6 +644,33 @@ func restoreCommand(top string, paths []string) string {
 		words = append(words, "… (+"+strconv.Itoa(n)+" more)")
 	}
 	return strings.Join(words, " ")
+}
+
+// whyMaskedPath follows commands with a part masked as a possible secret.
+const whyMaskedPath = "(" + mask.Mask + " stands for a part masked as a possible secret: put the real text back before running)"
+
+// quotePath is a path (or a name) in a command shown for running outside
+// the TUI: masked as the heading shows it (mask.Text), then quoted.
+func quotePath(p string) string { return shellQuote(mask.Text(p)) }
+
+// maskedPathNote is a line break and whyMaskedPath when quotePath masks
+// part of any of parts, else "".
+func maskedPathNote(parts ...string) string {
+	for _, p := range parts {
+		if mask.Text(p) != mask.Sanitize(p) {
+			return "\n" + whyMaskedPath
+		}
+	}
+	return ""
+}
+
+// withPathNote is lines with whyMaskedPath added when quotePath masks
+// part of any of parts.
+func withPathNote(lines []string, parts ...string) []string {
+	if maskedPathNote(parts...) != "" {
+		lines = append(lines, whyMaskedPath)
+	}
+	return lines
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)

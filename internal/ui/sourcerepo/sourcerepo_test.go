@@ -695,3 +695,115 @@ func TestBoundedLimitsWorkers(t *testing.T) {
 		t.Errorf("after the release: %v, %v", v, err)
 	}
 }
+
+// loadOther loads home2 into f's screen as a refresh would after the
+// home's symlink moved: the screen's repository becomes home2's.
+func loadOther(t *testing.T, f *fixture, home2 string) {
+	t.Helper()
+	gen, ctx := f.s.reads.Next(f.s.base)
+	f.s.Update(load(ctx, gen, f.git, nil, home2, f.s.limit))
+	if f.s.repo.Top != resolved(t, home2) {
+		t.Fatalf("screen did not switch to %s: %+v", home2, f.s.repo)
+	}
+}
+
+// A commit guard round started in one repository never authorizes a
+// commit in the repository a refresh replaced it with: its files were
+// neither selected nor scanned there. The round is dropped, the screen
+// returns to the list and the new repository's files start unselected
+// work again.
+func TestRepoChangeCancelsCommitGuard(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, skillA, "# a\n")
+	f := open(t, home)
+	press(f.s, "c")
+	typeText(f.s, commitMsg)
+	_, guard := f.s.Update(key("enter"))
+	if guard == nil {
+		t.Fatal("no guard round started")
+	}
+	other := newRepo(t)
+	write(t, other, skillA, "token = '"+opaqueWord+"'\n")
+	loadOther(t, f, other)
+	if out := drive(f.s, guard); len(out) != 0 {
+		t.Fatalf("the old guard round emitted %v in the new repository", out)
+	}
+	if f.s.mode != modeList || f.s.commit.busy {
+		t.Errorf("mode %v busy %v, want the list", f.s.mode, f.s.commit.busy)
+	}
+	if got := gittest.Git(t, other, "rev-list", "--count", "HEAD"); strings.TrimSpace(got) != "1" {
+		t.Errorf("the new repository has %s commits", got)
+	}
+}
+
+// Nor does a pull guard round started in one repository pull in the one
+// a refresh replaced it with (which may hold more than the home: R7).
+func TestRepoChangeCancelsPullGuard(t *testing.T) {
+	home, _ := newTracked(t)
+	f := open(t, home)
+	_, guard := f.s.Update(key("p"))
+	if guard == nil {
+		t.Fatal("no guard round started")
+	}
+	other, _ := newTracked(t)
+	loadOther(t, f, other)
+	if out := drive(f.s, guard); len(out) != 0 {
+		t.Fatalf("the old guard round emitted %v in the new repository", out)
+	}
+	if f.s.netBusy {
+		t.Error("the network keys stay busy after the repository changed")
+	}
+	if out := press(f.s, "p"); len(out) != 1 {
+		t.Errorf("a fresh pull in the new repository emitted %v", out)
+	}
+}
+
+// switchRepo points the screen at home2's repository without dropRepoWork,
+// as if a guard result arrived from a path that bypassed it.
+func switchRepo(t *testing.T, f *fixture, home2 string) {
+	t.Helper()
+	m := load(context.Background(), 0, f.git, nil, home2, f.s.limit)
+	f.s.repo = m.repo
+	f.s.applySnapshot(m.snap)
+}
+
+// A guard result acts only on the repository it read: delivered after the
+// screen moved to another one (even without dropRepoWork), it emits
+// nothing and the screen refreshes.
+func TestGuardResultBoundToItsRepository(t *testing.T) {
+	home := newRepo(t)
+	write(t, home, skillA, "# a\n")
+	f := open(t, home)
+	press(f.s, "c")
+	typeText(f.s, commitMsg)
+	_, guard := f.s.Update(key("enter"))
+	msg := guard()
+	other := newRepo(t)
+	write(t, other, skillA, "# b\n")
+	switchRepo(t, f, other)
+	_, next := f.s.Update(msg)
+	if out := drive(f.s, next); len(out) != 0 {
+		t.Fatalf("commit guard result emitted %v in another repository", out)
+	}
+	wantView(t, f.s, whyRepoChanged)
+
+	pull, _ := newTracked(t)
+	g := open(t, pull)
+	oldTop := g.s.repo.Top
+	_, guard = g.s.Update(key("p"))
+	msg = guard()
+	other2, _ := newTracked(t)
+	switchRepo(t, g, other2)
+	_, next = g.s.Update(msg)
+	if out := drive(g.s, next); len(out) != 0 {
+		t.Fatalf("pull guard result emitted %v in another repository", out)
+	}
+	wantView(t, g.s, whyRepoChanged)
+
+	switchRepo(t, g, other2) // the refresh above went back to the home
+	g.s.note = "pushed"
+	g.s.onUnpushed(unpushedMsg{n: 2, note: "pushed", top: oldTop})
+	if g.s.note != "pushed" {
+		t.Errorf("unpushed count from another repository extended the note: %q", g.s.note)
+	}
+}

@@ -4,8 +4,12 @@ import "github.com/lusky3/agentsync-tui/internal/actions"
 
 // The read argv of the Source repo tab's network keys (fetch, pull, push).
 // Each starts `-C <top>`; the git Program adds the fixed hardening. None
-// of them writes or touches the network. A function returns nil when an
+// of them writes, and only RemoteBranchArgv touches the network (the push
+// guard's one network read). A function returns nil when an
 // argument fails its check, so a caller can never run a half-built argv.
+
+// headsPrefix is the namespace of local branch refs.
+const headsPrefix = "refs/heads/"
 
 // UpstreamArgv reads the upstream of branch head: one line per matching
 // ref, "<refname> NUL <remote name> NUL <remote ref>". The pattern may
@@ -16,7 +20,7 @@ func UpstreamArgv(r Repo, head string) []string {
 		return nil
 	}
 	return []string{"-C", r.Top, "for-each-ref",
-		"--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/" + head}
+		"--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)", headsPrefix + head}
 }
 
 // MirrorArgv reads remote.<remote>.mirror as a boolean (exit 1 when unset).
@@ -46,6 +50,18 @@ func FetchURLArgv(r Repo, remote string) []string {
 	return []string{"-C", r.Top, "remote", "get-url", remote}
 }
 
+// RemoteBranchArgv asks remote (over the network, at its fetch URL) where
+// its branch is: at most one line "<object id> TAB refs/heads/<branch>"
+// among the lines ls-remote prints (a pattern also matches a longer ref
+// ending in it, so callers keep only the exact ref), none when the remote
+// has no such branch.
+func RemoteBranchArgv(r Repo, remote, branch string) []string {
+	if actions.ValidRemoteName(remote) != nil || actions.ValidBranchName(branch) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "ls-remote", "--refs", remote, headsPrefix + branch}
+}
+
 // BranchCommitArgv prints the object id of the commit branch points at,
 // named in full (refs/heads/<branch>), so neither HEAD moving to another
 // branch nor a tag of the same name changes what it reads.
@@ -53,7 +69,7 @@ func BranchCommitArgv(r Repo, branch string) []string {
 	if actions.ValidBranchName(branch) != nil {
 		return nil
 	}
-	return []string{"-C", r.Top, "rev-parse", "--verify", "refs/heads/" + branch + "^{commit}"}
+	return []string{"-C", r.Top, "rev-parse", "--verify", headsPrefix + branch + "^{commit}"}
 }
 
 // BranchUpstreamCommitArgv prints the object id of the commit branch's
@@ -72,7 +88,7 @@ func CommitsAfterArgv(r Repo, sha, branch string) []string {
 	if actions.ValidObjectID(sha) != nil || actions.ValidBranchName(branch) != nil {
 		return nil
 	}
-	return []string{"-C", r.Top, "rev-list", "--count", sha + "..refs/heads/" + branch, "--"}
+	return []string{"-C", r.Top, "rev-list", "--count", sha + ".." + headsPrefix + branch, "--"}
 }
 
 // outgoingRange is the revision range of the Outgoing*Argv reads:
@@ -121,9 +137,9 @@ func OutgoingPatchArgv(r Repo, base, tip string) []string {
 	if !ok {
 		return nil
 	}
-	return []string{"-C", r.Top, "log", "-p", "--no-ext-diff", "--no-textconv", "--no-color", "-U0",
-		"--no-renames", "--root", "--full-history", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/",
-		"--format=%H", rng, "--", r.Pathspec}
+	argv := append([]string{"-C", r.Top, "log", "-p"}, plainPatch...)
+	return append(argv, "-U0", "--no-renames", "--root", "--full-history", "--diff-merges=first-parent",
+		"--src-prefix=a/", "--dst-prefix=b/", "--format=%H", rng, "--", r.Pathspec)
 }
 
 // OutgoingMessagesArgv prints the raw message of every commit in
@@ -137,6 +153,31 @@ func OutgoingMessagesArgv(r Repo, base, tip string) []string {
 		return nil
 	}
 	return []string{"-C", r.Top, "log", "--format=%H%x00%B%x00", rng, "--"}
+}
+
+// OutgoingCommitsArgv lists, one object id per line, every commit in
+// base..tip (or, base "", tip's whole history): the same commits as
+// OutgoingMessagesArgv, read on their own so the list stays complete
+// whatever the messages' size. Like every git read it runs with
+// GIT_NO_REPLACE_OBJECTS=1 (the git Program's environment), so it lists
+// the commits a push sends, not their replacements. base and tip are as
+// outgoingRange takes them.
+func OutgoingCommitsArgv(r Repo, base, tip string) []string {
+	rng, ok := outgoingRange(base, tip)
+	if !ok {
+		return nil
+	}
+	return []string{"-C", r.Top, "rev-list", rng, "--"}
+}
+
+// CommitObjectArgv prints the raw commit object sha, as a push sends it:
+// its headers and its whole message, a NUL byte included (git log's %B
+// stops at one).
+func CommitObjectArgv(r Repo, sha string) []string {
+	if actions.ValidObjectID(sha) != nil {
+		return nil
+	}
+	return []string{"-C", r.Top, "cat-file", "commit", sha}
 }
 
 // BlobArgv prints the content of path (relative to the toplevel) as

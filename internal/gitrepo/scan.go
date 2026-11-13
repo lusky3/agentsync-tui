@@ -33,6 +33,9 @@ const (
 	// KindContextNotChecked: an added line past the 1 MiB of its file read for
 	// context, so whether it sits in a multi-line value is not known.
 	KindContextNotChecked = "multi-line context not checked beyond 1 MiB"
+	// KindNULInCommit: a commit object holding a NUL byte; git log shows
+	// its message only up to it, so the rest was not scanned (hard).
+	KindNULInCommit = "NUL byte in the commit: the rest of its message is not shown or scanned"
 )
 
 const (
@@ -70,8 +73,46 @@ func DiffArgv(r Repo, unborn bool, path string, unified int) []string {
 			base = emptyTreeSHA256
 		}
 	}
-	return []string{"-C", r.Top, "diff", "--no-ext-diff", "--no-textconv", "--no-color",
-		"-U" + strconv.Itoa(unified), base, "--", path}
+	argv := append([]string{"-C", r.Top, "diff"}, plainPatch...)
+	return append(argv, "-U"+strconv.Itoa(unified), base, "--", path)
+}
+
+// plainPatch makes a patch git's own bytes: no external diff driver, no
+// textconv filter, no colour.
+var plainPatch = []string{"--no-ext-diff", "--no-textconv", "--no-color"}
+
+// StoredAttrs are the attributes that make git store something other than
+// a new file's bytes: a clean filter and a working-tree encoding.
+var StoredAttrs = []string{"filter", "working-tree-encoding"}
+
+// CheckAttrArgv reads StoredAttrs for paths (relative to r.Top), NUL
+// separated: "<path> NUL <attribute> NUL <value> NUL" for each pair; the
+// value is "unspecified" or "unset" when the attribute does not apply.
+// nil when actions.ValidGitPath refuses a path.
+func CheckAttrArgv(r Repo, paths []string) []string {
+	argv := append([]string{"-C", r.Top, "check-attr", "-z"}, StoredAttrs...)
+	argv = append(argv, "--")
+	for _, p := range paths {
+		if actions.ValidGitPath(p) != nil {
+			return nil
+		}
+		argv = append(argv, p)
+	}
+	return argv
+}
+
+// StoredDiffArgv is a new file path (relative to r.Top) as git would store
+// it, shown as a patch against nothing with no context: `diff --no-index`
+// run in the repository applies its clean filter and working-tree
+// encoding, as git add does. External diffs, textconv and colour are off.
+// It exits 1 when it printed a patch. nil when actions.ValidGitPath
+// refuses path.
+func StoredDiffArgv(r Repo, path string) []string {
+	if actions.ValidGitPath(path) != nil {
+		return nil
+	}
+	argv := append([]string{"-C", r.Top, "diff", "--no-index"}, plainPatch...)
+	return append(argv, "-U0", "--", "/dev/null", path)
 }
 
 // Line is one added line of a patch: N is its line number in the new file.

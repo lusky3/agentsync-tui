@@ -6,8 +6,9 @@
 //
 // Every git call here is a local read run in a background round bounded by
 // Timeouts.Local (status, upstream, diff, the pre-commit and pre-push scans),
-// or an Action handed to the shell (add, then commit; fetch, pull, push;
-// agentsync init). Only the keys f, p, P and the bootstrap's enter emit an
+// the push guard's one network read (ls-remote of the branch, bounded as a
+// network action), or an Action handed to the shell (add, then commit;
+// fetch, pull, push; agentsync init). Only the keys f, p, P and the bootstrap's enter emit an
 // action that touches the network; nothing does on refresh or focus. Diff and file bytes reach only this screen's own diff message,
 // already masked; they never reach a note, the status line or the log.
 package sourcerepo
@@ -47,17 +48,21 @@ const (
 	whyMissing   = "no agentsync home"
 	whyNoChanges = "nothing to commit: no file is selected"
 	notShown     = "content not shown: "
+	// whyRepoChanged: a guard result read another repository than the
+	// screen now shows; it is dropped and the screen refreshed.
+	whyRepoChanged = "repository changed: refreshed"
 )
 
 // Screen is the Source repo tab.
 type Screen struct {
-	base  context.Context
-	limit time.Duration // ui.Deps.Limits().Local(): every read here
-	run   runner.Runner // agentsync, for the pre-commit check
-	git   runner.Runner
-	cz    runner.Runner
-	scope runner.Scope
-	home  string
+	base     context.Context
+	limit    time.Duration // ui.Deps.Limits().Local(): every local read here
+	netLimit time.Duration // the network bound: the push guard's ls-remote
+	run      runner.Runner // agentsync, for the pre-commit check
+	git      runner.Runner
+	cz       runner.Runner
+	scope    runner.Scope
+	home     string
 
 	reads, diffs, guards, nets ui.Rounds
 
@@ -99,10 +104,20 @@ type snapshot struct {
 // New returns the Source repo screen.
 func New(d ui.Deps) *Screen {
 	return &Screen{
-		base: ui.BaseCtx(d), limit: d.Limits().Local(), run: d.Runner, git: d.Git, cz: d.Chezmoi,
+		base: ui.BaseCtx(d), limit: d.Limits().Local(), netLimit: networkBound(d.Limits()), run: d.Runner, git: d.Git, cz: d.Chezmoi,
 		scope: d.Scope, home: ui.HomeFor(d, d.Scope), sel: map[string]bool{}, commit: newCommitState(),
 		netState: newNetState(), width: 80, height: 24,
 	}
+}
+
+// networkBound is the bound on a network read, as on the network actions:
+// Timeouts.Read, or ui.DefaultReadTimeout when that bound is lifted (R3:
+// git is always bounded).
+func networkBound(t ui.Timeouts) time.Duration {
+	if t.Read > 0 {
+		return t.Read
+	}
+	return ui.DefaultReadTimeout
 }
 
 // Title implements ui.Screen.
@@ -276,9 +291,11 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // apply takes a finished load. A load of another repository (the home's
 // symlink moved) first drops the old one's files, selection and upstream,
-// so they never stand under the new heading when its own read failed.
+// so they never stand under the new heading when its own read failed, and
+// the work started on the old one (dropRepoWork).
 func (s *Screen) apply(m loadMsg) {
 	if s.loaded && !sameRepo(s.repo, m.repo) {
+		s.dropRepoWork()
 		s.applySnapshot(snapshot{})
 	}
 	s.loaded, s.repo, s.loadNote = true, m.repo, m.note
@@ -288,6 +305,25 @@ func (s *Screen) apply(m loadMsg) {
 	}
 	if m.note == "" {
 		s.applySnapshot(m.snap)
+	}
+}
+
+// dropRepoWork supersedes the diff, commit guard and pull or push guard
+// rounds started on the old repository and returns to the list: a guard
+// result read there must never emit a commit, pull or push here, where its
+// files were neither selected nor scanned (and a pull refused below the
+// root may not be refused). The commit message is kept. An action already
+// handed to the shell names its repository in its own argv.
+func (s *Screen) dropRepoWork() {
+	s.diffs.Supersede()
+	s.guards.Supersede()
+	s.cancelNet()
+	s.commit.busy, s.commit.refusal, s.commit.findings, s.pushFindings = false, nil, nil, nil
+	if s.mode == modeCommit {
+		s.note = "the repository changed: select the files and commit again"
+	}
+	if s.mode == modeDiff || s.mode == modeCommit {
+		s.mode, s.diff = modeList, diffPane{}
 	}
 }
 

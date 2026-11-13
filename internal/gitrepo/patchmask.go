@@ -4,6 +4,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
 // PatchMasker masks the lines of one file's unified diff in order, as
@@ -21,10 +23,20 @@ import (
 // (no post-image, or one that ends before the hunk), removed and context
 // lines are masked as env values (fail closed). A context line is masked
 // when either side puts it under such a table.
+//
+// A line in the body of a multi-line string opened by a secret-named,
+// header or env key (its closing line included) is the secret's and is
+// masked whole, whatever it looks like: on the added side as the
+// post-image says (contextOf), on the removed side as the pre-image's
+// state is followed, each side on its own; in a config file a removed or
+// context line whose pre-image state is not known counts as one (fail
+// closed).
 type PatchMasker struct {
 	homeRel   string
+	config    bool // IsConfigFile(homeRel)
 	env       map[int]bool
-	post      []string // the post-image's lines; nil when unknown
+	bodies    map[int]mlOpener // post-image lines in a secret multi-line body
+	post      []string         // the post-image's lines; nil when unknown
 	havePost  bool
 	next      int // post-image line number of the next added or context line
 	oldLeft   int // removed or context lines left in the hunk
@@ -36,12 +48,18 @@ type PatchMasker struct {
 }
 
 // tableState follows TOML lines in order: whether the current [table] is
-// an env, environment or headers table, and the closing quotes of the
-// multi-line string open, if any (no header inside it).
+// an env, environment or headers table, the closing quotes of the
+// multi-line string open, if any (no header inside it), and whether that
+// string is a secret's (opened by a secret-named, header or env key).
 type tableState struct {
-	env   bool
-	delim string
+	env    bool
+	delim  string
+	secret bool
 }
+
+// inSecretBody reports whether the next line lies in a secret's
+// multi-line string body.
+func (s tableState) inSecretBody() bool { return s.delim != "" && s.secret }
 
 // feed moves the state past one line.
 func (s *tableState) feed(l string) {
@@ -56,14 +74,15 @@ func (s *tableState) feed(l string) {
 		return
 	}
 	if o := openerOf(l, s.env); o != nil {
-		s.delim = o.delim
+		s.delim, s.secret = o.delim, o.auth || o.secret || o.env
 	}
 }
 
 // NewPatchMasker masks a git diff of homeRel whose post-image is post
 // ("" when unknown; a post-image cut short must end at a whole line).
 func NewPatchMasker(homeRel, post string) *PatchMasker {
-	m := &PatchMasker{homeRel: homeRel, env: contextOf(post).env, postGapAt: 1}
+	c := contextOf(post)
+	m := &PatchMasker{homeRel: homeRel, config: IsConfigFile(homeRel), env: c.env, bodies: c.bodies, postGapAt: 1}
 	if post != "" {
 		m.havePost = true
 		m.post = strings.Split(strings.TrimSuffix(post, "\n"), "\n")
@@ -81,18 +100,35 @@ func NewAddedMasker(homeRel, content string) *PatchMasker {
 
 // Line masks the next line of the diff.
 func (m *PatchMasker) Line(line string) string {
-	return maskPatchLine(m.homeRel, line, m.step(line))
+	at := m.step(line)
+	if at.body {
+		return maskedBodyLine(line)
+	}
+	return maskPatchLine(m.homeRel, line, at.env)
 }
 
-// step follows the hunk through one line and reports whether the line
-// lies under an env, environment or headers table.
-func (m *PatchMasker) step(line string) bool {
+// maskedBodyLine is a diff line in a secret's multi-line body: its marker
+// and indent, then the mask.
+func maskedBodyLine(line string) string {
+	rest := line[1:]
+	return line[:1] + rest[:len(rest)-len(strings.TrimLeft(rest, " \t"))] + mask.Mask
+}
+
+// lineAt is where a diff line lies: under an env, environment or headers
+// table (env), in a secret's multi-line string body (body).
+type lineAt struct{ env, body bool }
+
+// or is where a context line lies: either side's answer counts.
+func (a lineAt) or(b lineAt) lineAt { return lineAt{env: a.env || b.env, body: a.body || b.body} }
+
+// step follows the hunk through one line and reports where it lies.
+func (m *PatchMasker) step(line string) lineAt {
 	if strings.HasPrefix(line, "@@") || m.oldLeft <= 0 && m.newLeft <= 0 {
 		m.startHunk(line)
-		return false
+		return lineAt{}
 	}
 	if line == "" {
-		return false
+		return lineAt{}
 	}
 	switch line[0] {
 	case '+':
@@ -103,30 +139,32 @@ func (m *PatchMasker) step(line string) bool {
 	case ' ':
 		m.oldLeft--
 		old := m.oldLine(line[1:])
-		return m.added(line[1:]) || old
+		return m.added(line[1:]).or(old)
 	}
-	return false
+	return lineAt{}
 }
 
 // added follows an added (or context) line on the post-image's side.
-func (m *PatchMasker) added(body string) bool {
+func (m *PatchMasker) added(body string) lineAt {
 	if e, ok := envHeader(body); ok {
 		m.newEnv = e
 	}
 	m.newLeft--
 	post := m.env[m.next]
+	_, inBody := m.bodies[m.next]
 	m.next++
 	m.postGapAt = m.next
-	return m.newEnv || post
+	return lineAt{env: m.newEnv || post, body: inBody}
 }
 
 // oldLine follows a removed (or context) line on the pre-image's side: it
-// is under an env table when the state before it says so, or when the
-// state is not known.
-func (m *PatchMasker) oldLine(body string) bool {
-	env := m.old.env || !m.oldKnown
+// is under an env table, or in a secret's body, when the state before it
+// says so, or when the state is not known (a body only in a config file).
+func (m *PatchMasker) oldLine(body string) lineAt {
+	unknown := !m.oldKnown
+	at := lineAt{env: m.old.env || unknown, body: m.old.inSecretBody() || unknown && m.config}
 	m.old.feed(body)
-	return env
+	return at
 }
 
 // startHunk reads a hunk header: its counts and starting line numbers,

@@ -102,25 +102,39 @@ func readDiff(ctx context.Context, gen int, git runner.Runner, repo gitrepo.Repo
 		return diffMsg{gen: gen, note: note}
 	}
 	patch, cut := strings.CutSuffix(res.Stdout, runner.TruncatedMark)
-	return maskedDiff(gen, gitrepo.NewPatchMasker(f.HomeRel, worktreePost(ctx, repo, f, limit)), patch, cut)
+	post, ok := worktreePost(ctx, repo, f, limit)
+	if !ok {
+		return diffMsg{gen: gen, note: whyNoPost}
+	}
+	return maskedDiff(gen, gitrepo.NewPatchMasker(f.HomeRel, post), patch, cut)
 }
+
+// whyNoPost withholds a config file's diff whose post-image was not read.
+const whyNoPost = notShown + "the file could not be read whole, and its diff is masked in its context"
 
 // worktreePost is the post-image of a tracked file's diff against HEAD:
 // its first maxScanned bytes in the worktree, cut to whole lines, or ""
-// when it cannot be read (deleted, replaced by a symlink, timed out).
-// Without it gitrepo.PatchMasker follows only the diff's own table
-// headers and masks removed lines past the file's start as env values.
-func worktreePost(ctx context.Context, repo gitrepo.Repo, f gitrepo.File, limit time.Duration) string {
+// when the diff needs none (a deletion, a symlink's target) or, for a
+// file that is not a config file, when it cannot be read. ok is false for
+// a config file whose post-image could not be read (replaced by a FIFO,
+// timed out) or was cut: an added line's env table or secret multi-line
+// body is then not known, so the diff is withheld (whyNoPost).
+func worktreePost(ctx context.Context, repo gitrepo.Repo, f gitrepo.File, limit time.Duration) (post string, ok bool) {
+	if f.Kind == gitrepo.Deleted {
+		return "", true
+	}
 	b, err := bounded(ctx, limit, func(ctx context.Context) (capped, error) { return readFile(ctx, repo.Top, f.Path, maxScanned) })
-	if err != nil {
-		return ""
-	}
-	if b.cut {
+	config := gitrepo.IsConfigFile(f.HomeRel)
+	switch {
+	case errors.Is(err, gitrepo.ErrSymlink):
+		return "", true
+	case err != nil:
+		return "", !config
+	case b.cut:
 		// gitrepo.PatchMasker needs whole lines: drop the cut one.
-		i := strings.LastIndexByte(b.data, '\n')
-		return b.data[:i+1]
+		return b.data[:strings.LastIndexByte(b.data, '\n')+1], !config
 	}
-	return b.data
+	return b.data, true
 }
 
 // addedPatch shows content as the added lines of a new file.

@@ -1,6 +1,7 @@
 package sourcerepo
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
+	"github.com/lusky3/agentsync-tui/internal/gitrepo"
 	"github.com/lusky3/agentsync-tui/internal/gitrepo/gittest"
 	"github.com/lusky3/agentsync-tui/internal/runner"
 	"github.com/lusky3/agentsync-tui/internal/runner/runnertest"
@@ -923,13 +925,20 @@ func TestCommitRefusedVisibleKeyInEnvTable(t *testing.T) {
 
 // The same for a new file: it is its own context.
 func TestCommitRefusedVisibleKeyInEnvTableNewFile(t *testing.T) {
+	const newPath = "mcp/y.toml"
 	home := newRepo(t)
-	write(t, home, tomlX, envTableTOML+"name = '"+opaqueWord+"'\n")
+	write(t, home, newPath, envTableTOML+"name = '"+opaqueWord+"'\n")
 	f := open(t, home)
+	if i := rowOf(f.s, newPath); i < 0 || f.s.status.Files[i].Kind != gitrepo.Untracked {
+		t.Fatalf("the new file is not listed as untracked: %+v", f.s.status.Files)
+	}
+	if !f.s.sel[newPath] {
+		selectRow(t, f.s, newPath)
+	}
 	if out := commit(f.s, commitMsg); len(out) != 0 {
 		t.Fatalf("emitted %v", out)
 	}
-	wantView(t, f.s, "refused", "mcp/x.toml:8")
+	wantView(t, f.s, "refused", newPath+":8")
 }
 
 // Outside an env table a visible key's token-shaped value stays soft
@@ -1008,5 +1017,64 @@ func TestListFindingsFitTheScreen(t *testing.T) {
 	}
 	if v := view(f.s); !strings.Contains(v, "more") {
 		t.Errorf("no count of the findings cut:\n%s", v)
+	}
+}
+
+// A repository path holding a credential shape is masked in every command
+// the screen shows for running outside the TUI, as in its heading, with a
+// line saying the masked part must be put back first; a plain path is
+// shown as is, with no such line.
+func TestGuidanceMasksRepositoryPath(t *testing.T) {
+	top := "/srv/" + ghpToken + "/home"
+	p := &pendingCommit{top: top, add: []string{skillA}, added: true}
+	stopped := ui.RunMsg{Err: context.DeadlineExceeded}
+	failed := ui.RunMsg{Result: runner.Result{ExitCode: 1}}
+	texts := map[string]string{
+		"stopped commit": commitOutcome(p, stopped, false),
+		"staged commit":  commitOutcome(p, failed, false),
+		"no upstream":    strings.Join(noUpstream(top, "main"), "\n"),
+		"below root":     strings.Join(belowRoot(top), "\n"),
+		"stopped pull":   pullOutcome(&pendingNet{top: top}, stopped, false),
+		"push refusal":   strings.Join(pushHardRefusal(1, top, ""), "\n"),
+	}
+	for name, txt := range texts {
+		if strings.Contains(txt, ghpToken) || !strings.Contains(txt, "/srv/") || !strings.Contains(txt, whyMaskedPath) {
+			t.Errorf("%s:\n%s", name, txt)
+		}
+	}
+	if txt := commitOutcome(&pendingCommit{top: "/srv/home"}, stopped, false); strings.Contains(txt, whyMaskedPath) ||
+		!strings.Contains(txt, "git -C /srv/home log -1") {
+		t.Errorf("plain path:\n%s", txt)
+	}
+}
+
+// git add stores what a clean filter (or a working-tree-encoding) makes
+// of the worktree file, not the file itself: a filter that expands a
+// reference into a credential would commit it although the file holds
+// only the reference. A new file with such an attribute is scanned as git
+// will store it (a tracked one already is: git diff applies the filter).
+func TestCommitScansCleanFilteredContent(t *testing.T) {
+	home := newRepo(t)
+	gittest.Commit(t, home, "attrs", map[string]string{".gitattributes": "mcp/*.toml filter=expand\n"})
+	gittest.Git(t, home, "config", "filter.expand.clean", "sed s/REF/"+ghpToken+"/")
+	write(t, home, "mcp/new.toml", "[x]\nk = 'REF'\n")
+	write(t, home, tomlX, baseTOML+"k = 'REF'\n")
+	for _, p := range []string{"mcp/new.toml", tomlX} {
+		f := open(t, home)
+		for _, q := range f.s.selectedPaths() {
+			if q != p {
+				selectRow(t, f.s, q)
+			}
+		}
+		if got := f.s.selectedPaths(); len(got) != 1 || got[0] != p {
+			t.Fatalf("selected %v, want only %s", got, p)
+		}
+		if out := commit(f.s, commitMsg); len(out) != 0 {
+			t.Fatalf("%s: emitted %v", p, out)
+		}
+		wantView(t, f.s, "refused: 1 hard finding", p)
+		if strings.Contains(view(f.s), ghpToken) {
+			t.Errorf("%s: token shown", p)
+		}
 	}
 }
