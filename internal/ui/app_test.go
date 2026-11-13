@@ -620,9 +620,9 @@ func TestDiscoverLazyCacheOpensOnFirstUse(t *testing.T) {
 	}
 }
 
-// A cache directory that cannot be opened reports the same error each time
-// (discovery then runs uncached).
-func TestDiscoverLazyCacheKeepsOpenError(t *testing.T) {
+// A refused cache directory (a symlink) is refused on every call: a retry
+// re-checks it rather than trusting an earlier attempt.
+func TestDiscoverLazyCacheRefusesSymlinkEachTime(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "link")
 	if err := os.Symlink(base, dir); err != nil {
@@ -633,5 +633,71 @@ func TestDiscoverLazyCacheKeepsOpenError(t *testing.T) {
 		if c, err := l.Open(); c != nil || err == nil {
 			t.Fatalf("Open() of a symlinked dir = %v, %v, want an error", c, err)
 		}
+	}
+}
+
+// A failed open is not sticky: once the cause is gone the next Open works.
+func TestDiscoverLazyCacheRetriesFailedOpen(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.WriteFile(parent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l := NewLazyCache(filepath.Join(parent, "agentsync-tui"))
+	if c, err := l.Open(); c != nil || err == nil {
+		t.Fatalf("Open() under a regular file = %v, %v, want an error", c, err)
+	}
+	if err := os.Remove(parent); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := l.Open(); c == nil || err != nil {
+		t.Fatalf("Open() after the cause is gone = %v, %v, want a cache", c, err)
+	}
+}
+
+// Close releases an opened cache and creates nothing when it was never
+// opened; afterwards Open refuses, so a late caller cannot reopen it.
+func TestDiscoverLazyCacheClose(t *testing.T) {
+	if err := (*LazyCache)(nil).Close(); err != nil {
+		t.Errorf("nil Close() = %v", err)
+	}
+	unused := filepath.Join(t.TempDir(), "unused")
+	if err := NewLazyCache(unused).Close(); err != nil {
+		t.Errorf("Close() before Open = %v", err)
+	}
+	if _, err := os.Lstat(unused); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Close created %s (err %v)", unused, err)
+	}
+	l := NewLazyCache(filepath.Join(t.TempDir(), "c"))
+	c, err := l.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	if err := c.Put("k", []byte("v")); err == nil {
+		t.Error("Put after Close succeeded, want the closed cache to refuse")
+	}
+	if c, err := l.Open(); c != nil || err == nil {
+		t.Errorf("Open() after Close = %v, %v, want an error", c, err)
+	}
+}
+
+// App.Close closes the discovery cache (main calls it once Run returns).
+func TestAppCloseClosesDiscoveryCache(t *testing.T) {
+	d := baseDeps(newFakeRunner())
+	d.Discover.Cache = NewLazyCache(filepath.Join(t.TempDir(), "c"))
+	c, err := d.Discover.Cache.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewApp(d).Close(); err != nil {
+		t.Fatalf("App.Close() = %v", err)
+	}
+	if err := c.Put("k", []byte("v")); err == nil {
+		t.Error("cache still open after App.Close")
+	}
+	if err := NewApp(baseDeps(newFakeRunner())).Close(); err != nil {
+		t.Errorf("App.Close() without discovery = %v", err)
 	}
 }

@@ -108,6 +108,11 @@ type Deps struct {
 	Discover Discover
 }
 
+// Close releases what the shell holds open for the screens (the discovery
+// cache). main calls it once the program has ended and its children are
+// gone.
+func (a *App) Close() error { return a.d.Discover.Cache.Close() }
+
 // BaseCtx is the context a screen derives its reads from: Deps.Ctx, or
 // context.Background when none was given.
 func BaseCtx(d Deps) context.Context {

@@ -190,7 +190,7 @@ func parseOptions(args []string, stderr io.Writer) (o options, exit int, ok bool
 	fs.DurationVar(&o.readTimeout, "read-timeout", ui.DefaultReadTimeout,
 		"bound on network reads (import previews, plugin outdated, git fetch/pull/push, discovery requests); 0 = none, except network git (fetch, pull, push) and discovery requests, which keep the 2m default. Local reads (lists, status, diff, explain, doctor, check) are bounded at min(30s, this)")
 	fs.BoolVar(&o.offline, "offline", false,
-		"disable discovery: no requests to the MCP Registry, the Docker MCP Catalog, skills.sh or GitHub archives (the discovery screens say so)")
+		"disable discovery: no requests to the MCP Registry, the Docker MCP Catalog, skills.sh or GitHub archives")
 	debugLog := fs.String("debug-log", "",
 		"append a masked sample (4 KiB per stream, parse error, exit code) of every read whose output could not be parsed to this file, for bug reports; off by default")
 	fs.DurationVar(&o.writeTimeout, "write-timeout", 0,
@@ -270,6 +270,7 @@ func runProgram(a *ui.App, h hooks) error {
 	}
 	a.RecordShutdown(endChildren(exit.get(), sigs, h))
 	h.stop(sigs)
+	_ = a.Close() // nothing to report: the cache only holds a directory handle
 	return err
 }
 

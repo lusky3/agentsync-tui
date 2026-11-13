@@ -187,6 +187,31 @@ func TestRunShutsDownChildrenOnEveryExit(t *testing.T) {
 	}
 }
 
+// Once the program has ended and its children are gone, the discovery
+// cache is closed: a later Open is refused.
+func TestRunProgramClosesDiscoveryCache(t *testing.T) {
+	hermetic(t)
+	lc := ui.NewLazyCache(filepath.Join(t.TempDir(), "cache"))
+	if _, err := lc.Open(); err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSignals{}
+	h := hooks{
+		notify:     src.notify,
+		stop:       src.stop,
+		newProgram: func(*ui.App) program { return &fakeProgram{} },
+		shutdown:   func(os.Signal, time.Duration, time.Duration) []runner.Ended { return nil },
+		killAll:    func() {},
+	}
+	a := ui.NewApp(ui.Deps{Discover: ui.Discover{Cache: lc}})
+	if err := runProgram(a, h); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := lc.Open(); c != nil || err == nil {
+		t.Errorf("cache Open after the program ended = %v, %v, want it closed", c, err)
+	}
+}
+
 type shutdownCall struct {
 	sig                 os.Signal
 	readWait, writeWait time.Duration
@@ -363,10 +388,32 @@ func cacheDirUnder(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("cache.DefaultDir: %v", err)
 	}
-	if !strings.HasPrefix(dir, os.Getenv("HOME")) && !strings.HasPrefix(dir, os.Getenv("XDG_CACHE_HOME")) {
+	if !within(os.Getenv("HOME"), dir) && !within(os.Getenv("XDG_CACHE_HOME"), dir) {
 		t.Fatalf("cache dir %q escapes the hermetic root", dir)
 	}
 	return dir
+}
+
+// within reports whether path lies inside root (lexically).
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return root != "" && err == nil && filepath.IsLocal(rel)
+}
+
+func TestWithin(t *testing.T) {
+	for _, tc := range []struct {
+		root, path string
+		want       bool
+	}{
+		{"/h", "/h/.cache/x", true},
+		{"/h", "/home/x", false},
+		{"/h", "/h/../etc", false},
+		{"", "/x", false},
+	} {
+		if got := within(tc.root, tc.path); got != tc.want {
+			t.Errorf("within(%q, %q) = %v, want %v", tc.root, tc.path, got, tc.want)
+		}
+	}
 }
 
 // wantNoDir fails when dir exists: building Deps must create nothing.

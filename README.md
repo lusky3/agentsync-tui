@@ -3,13 +3,11 @@
 A terminal UI over the [agentsync](https://github.com/spxrogers/agentsync) CLI.
 It lists MCP servers, drift, agents, plugins, secrets (names only), skills,
 hooks and more. Every change the TUI makes itself is a real `agentsync`
-command that you see and confirm. There are three exceptions: edit (`E`),
-which opens the file in your editor; the Source repo tab, which runs `git` on
-the repository that holds your agentsync home, again shown and confirmed; and
-Skill search's install, which copies a reviewed skill into `skills/<name>` of
-the home, also shown and confirmed (see the safety model). Discovery (MCP
-discover, Skill search) is the only part that talks to the network itself,
-read-only and only when you search or install; `--offline` turns it off.
+command that you see and confirm. There are two exceptions: edit (`E`), which
+opens the file in your editor, and the Source repo tab, which runs `git` on
+the repository that holds your agentsync home, again shown and confirmed (see
+the safety model). Discovery requests are the only network access the TUI
+makes itself (see Discovery and network access); `--offline` turns them off.
 
 ## Install
 
@@ -42,15 +40,14 @@ agentsync-tui                    # user scope
 agentsync-tui --project ./repo   # project scope
 agentsync-tui --version
 agentsync-tui --write-timeout 10m     # bound writes too (default: no bound)
-agentsync-tui --read-timeout 0       # no bound on network reads (default 2m)
+agentsync-tui --read-timeout 0       # no bound on agentsync network reads (default 2m)
 agentsync-tui --offline              # no discovery requests at all
 agentsync-tui --debug-log ./tui-debug.log   # keep masked samples of unparseable output
 ```
 
 `--read-timeout` bounds the network reads: import previews of plugins or a
-whole agent, the plugins screen's `plugin outdated`, and discovery requests
-(MCP discover, Skill search), which keep the 2m default when it is `0`,
-like network git below. Local reads (the
+whole agent, the plugins screen's `plugin outdated`, and discovery requests,
+which keep the 2m default when it is `0`, like network git below. Local reads (the
 lists, status, diff, explain, doctor and check a screen or the header chip
 runs, and the dry-run previews) are bounded at `min(30s, --read-timeout)`: the flag can lower that
 bound but not lift it. `--write-timeout` bounds every write (apply, revert,
@@ -168,46 +165,29 @@ Long views (command output, diffs, the plugin detail) scroll with the same keys 
 
 ## Discovery and network access
 
-agentsync-tui otherwise reaches the network only through the commands it
-runs. Discovery is the exception: the MCP discover and Skill search tabs
-make their own HTTPS requests. They are read-only GETs, sent only when you
-press `enter` on a search or choose to fetch a skill (never at startup, on
-a tab switch or on a timer), and only to these four hosts, on port 443:
+Apart from the commands it runs, the only network access the TUI makes
+itself is discovery requests: read-only HTTPS GETs, on port 443 only, to
+these four hosts and no others:
 
-- `registry.modelcontextprotocol.io`: the official MCP Registry
-  (`/v0.1/servers`).
+- `registry.modelcontextprotocol.io`: the official MCP Registry.
 - `desktop.docker.com`: the Docker MCP Catalog,
   `https://desktop.docker.com/mcp/catalog/v3/catalog.yaml`, built from the
   MIT-licensed [docker/mcp-registry](https://github.com/docker/mcp-registry).
-  Its images are pinned by digest; the TUI does not verify their signatures.
-- `skills.sh`: skill search through `GET /api/search`, the unauthenticated
-  endpoint Vercel's own `skills` CLI uses. It is undocumented and skills.sh's
-  `robots.txt` disallows `/api/`, so the TUI calls it only on an explicit
-  search, caches the results for 10 minutes and sends an honest User-Agent
-  (`agentsync-tui/<version> (+https://github.com/lusky3/agentsync-tui)`).
-  If skills.sh blocks it, type or paste `owner/repo` instead: that path never
-  touches skills.sh.
-- `codeload.github.com`: the archive of a skill's GitHub repository, which
-  is downloaded, size-capped and extracted into a staging directory for
-  review.
+- `skills.sh`: skill search.
+- `codeload.github.com`: GitHub repository archives.
 
-Redirects to any other host, plain `http` and other ports are refused, as
-are cookies. `HTTPS_PROXY` is honoured; the host list applies to the
-destination. Every request is bounded by `--read-timeout` (2m at `0`), and
-quitting, a scope switch or a newer search cancels it. Fetched content is
-masked before it is shown and never written to the activity log, which
-records only the source, host, byte count, sha256 and outcome.
+Plain `http`, other ports and redirects to a host outside this list are
+refused, and no cookies are kept. `HTTPS_PROXY` is honoured; the host list
+applies to the destination. Requests carry an honest User-Agent
+(`agentsync-tui/<version> (+https://github.com/lusky3/agentsync-tui)`) and
+are bounded by `--read-timeout`, which keeps the 2m default when it is `0`.
 
-Search results are cached under the user cache directory
+Discovery responses are cached under the user cache directory
 (`$XDG_CACHE_HOME/agentsync-tui`, default `~/.cache/agentsync-tui`;
-`~/Library/Caches/agentsync-tui` on macOS), mode 0700, for 10 minutes
-(registry and skills.sh) or an hour (the Docker catalog). Skill archives are
-staged under its `stage/` directory and removed after the install or when
-you leave the review. Neither directory is created until discovery first
-uses it. Delete the directory at any time to clear it.
+`~/Library/Caches/agentsync-tui` on macOS), mode 0700. The directory is
+created on first use, not at startup; delete it at any time to clear it.
 
-`--offline` turns discovery off: no request is made and nothing is cached
-or staged. The discovery tabs say so and the rest of the TUI works as usual.
+`--offline` turns discovery off: no request is made and nothing is cached.
 
 ## Safety model
 
@@ -218,15 +198,13 @@ or staged. The discovery tabs say so and the rest of the TUI works as usual.
   `doctor`, `check`, `version`, `status --legend`, `plugin outdated`,
   `reconcile --auto-safe` and similar read-only calls. Quitting, a refresh and
   a scope switch cancel any of these still in flight (the child gets SIGINT,
-  then SIGKILL). Apart from those agentsync commands, the TUI writes no
-  agentsync files directly, with three exceptions, each described below: `E`
-  hands a canonical file to your editor, which writes it; on the Source repo
-  tab a confirmed `git commit` records files of the home in its repository's
-  history (and `git add` stages them in its index), and a confirmed `git
-  pull` changes files and history inside the home; and Skill search's
-  confirmed install copies a reviewed skill into `skills/<name>` of the
-  home.
-- The one exception is `E` (edit) on MCP servers and on Skills, Subagents,
+  then SIGKILL). The TUI writes no agentsync files directly. The exceptions,
+  each described below: `E` hands a canonical file to your editor, which
+  writes it; and on the Source repo tab a confirmed `git commit` records
+  files of the home in its repository's history (and `git add` stages them
+  in its index), and a confirmed `git pull` changes files and history inside
+  the home.
+- The first exception is `E` (edit) on MCP servers and on Skills, Subagents,
   Commands, Hooks, LSP and Memory: it opens the canonical file in `$VISUAL`,
   then `$EDITOR`, falling back to `vi`, immediately and with no confirm dialog.
   Your editor writes the file, not the TUI. If the editor exits successfully,
@@ -283,23 +261,6 @@ or staged. The discovery tabs say so and the rest of the TUI works as usual.
   rendered, masked (a diff that holds a private key or an age identity is
   not shown at all): never written to the activity log, the status line or
   `--debug-log`.
-- The third exception is Skill search's install, which copies a reviewed
-  skill into `<home>/skills/<name>/`, the directory agentsync's own skill
-  authoring path uses (agentsync has no `skill add`). The skill is first
-  fetched from GitHub into the staging directory (see Discovery and network
-  access), where the archive is checked before anything is written: no
-  absolute or `..` paths, links, devices or `.git` content, and caps on size
-  and file count. You then review it: every file is listed with its size,
-  scripts, binaries and large files are flagged, and `SKILL.md` and any file
-  can be read, masked, before you install. The install is shown and confirmed
-  like a command (`y`), and no command runs for it: one function
-  (`install.Skill`) does the copy in-process. It refuses an invalid name or
-  an existing `skills/<name>` (it never overwrites, case-insensitively),
-  refuses when any staged file changed since the review (checked before and
-  after the copy), never follows a link, keeps only the exec bit, writes
-  nothing outside `<home>/skills`, and on any failure leaves the home as it
-  was (the copy is renamed into place at the end). `agentsync check` runs
-  afterwards.
 - Destructive actions (removing a server, agent, plugin, marketplace or
   secret; revert) need a typed verb (the subcommand, for example `remove`).
   `agent disable --purge` needs the word `purge`, so it cannot be confirmed as
