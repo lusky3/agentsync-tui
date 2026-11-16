@@ -379,7 +379,7 @@ func TestSetsUserAgentAndNoCookies(t *testing.T) {
 		if c := r.Header.Get("Cookie"); c != "" {
 			t.Errorf("request %d: sent Cookie %q", i, c)
 		}
-		if a := r.Header.Get("Authorization"); a != "" {
+		if r.Header.Get("Authorization") != "" {
 			t.Errorf("request %d: sent Authorization", i)
 		}
 	}
