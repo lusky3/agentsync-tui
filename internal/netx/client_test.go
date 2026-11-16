@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,10 +155,13 @@ func TestRedirectToDisallowedHostRefused(t *testing.T) {
 }
 
 func TestMoreThanThreeRedirectsRefused(t *testing.T) {
-	hops := func(n int) http.HandlerFunc {
+	// The hop count lives in the closure, so the Location is a constant and
+	// no request data reaches it.
+	hops := func(n int32) http.HandlerFunc {
+		var served atomic.Int32
 		return func(w http.ResponseWriter, r *http.Request) {
-			if strings.Count(r.URL.Path, "/r") < n {
-				http.Redirect(w, r, strings.TrimSuffix(r.URL.Path, "/")+"/r", http.StatusFound)
+			if served.Add(1) <= n {
+				http.Redirect(w, r, "/r", http.StatusFound)
 				return
 			}
 			_, _ = io.WriteString(w, "done")
@@ -369,8 +373,8 @@ func TestSetsUserAgentAndNoCookies(t *testing.T) {
 		t.Fatalf("server saw %d requests, want 4", len(reqs))
 	}
 	for i, r := range reqs {
-		if ua := r.UserAgent(); ua != "agentsync-tui/test (+https://github.com/lusky3/agentsync-tui)" {
-			t.Errorf("request %d: User-Agent %q", i, ua)
+		if r.UserAgent() != "agentsync-tui/test (+https://github.com/lusky3/agentsync-tui)" {
+			t.Errorf("request %d: User-Agent %q", i, r.UserAgent())
 		}
 		if c := r.Header.Get("Cookie"); c != "" {
 			t.Errorf("request %d: sent Cookie %q", i, c)
