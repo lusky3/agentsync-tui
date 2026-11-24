@@ -108,8 +108,10 @@ type wirePage struct {
 	} `json:"metadata"`
 }
 
+// wireEntry.Server is a pointer so that an absent or null server object
+// can be told from an empty one.
 type wireEntry struct {
-	Server wireServer `json:"server"`
+	Server *wireServer `json:"server"`
 	Meta   struct {
 		Official struct {
 			Status string `json:"status"`

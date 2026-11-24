@@ -179,11 +179,13 @@ func decode(raw []byte, cursor string) (Page, error) {
 }
 
 // decodeEntry decodes one record strictly: any ill-typed field (which
-// json would otherwise zero, turning "isSecret": "true" into false) or
-// an unreadable input name rejects the whole record.
+// json would otherwise zero, turning "isSecret": "true" into false), a
+// missing or null server object, a server without a name, or an
+// unreadable input name rejects the whole record.
 func decodeEntry(raw json.RawMessage) (Server, bool) {
 	var e wireEntry
-	if err := json.Unmarshal(raw, &e); err != nil || !namesOK(e.Server) {
+	if err := json.Unmarshal(raw, &e); err != nil || e.Server == nil ||
+		clean(e.Server.Name) == "" || !namesOK(*e.Server) {
 		return Server{}, false
 	}
 	return toServer(e), true
@@ -240,7 +242,7 @@ func distinctClean(names []string) bool {
 func clean(s string) string { return mask.Sanitize(s) }
 
 func toServer(e wireEntry) Server {
-	s := e.Server
+	s := *e.Server
 	out := Server{
 		Name:        clean(s.Name),
 		Description: clean(s.Description),

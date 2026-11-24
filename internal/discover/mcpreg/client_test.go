@@ -475,6 +475,20 @@ func TestUncleanOrCollidingInputNamesSkipEntry(t *testing.T) {
 	}
 }
 
+// A record without a server object (absent, null, or not even an
+// object), or whose server has no name, is unreadable, not an empty row.
+func TestRecordWithoutServerSkipped(t *testing.T) {
+	c, _ := newClient(t, nil, serveBytes(pageOf(`null`, `{}`, `{"server": null}`, `{"server": {}}`, `{"_meta": {}}`, goodEntry)))
+	p, err := c.Search(context.Background(), anyQuery, "")
+	if err != nil || len(p.Servers) != 1 || p.Servers[0].Name != "io.example/good" || p.Skipped != 5 {
+		t.Errorf("page = %+v, err = %v; want only io.example/good and Skipped 5", p, err)
+	}
+	c, _ = newClient(t, nil, serveBytes([]byte(`{"servers": [null, {}]}`)))
+	if _, err := c.Search(context.Background(), anyQuery, ""); !errors.Is(err, mcpreg.ErrBadResponse) {
+		t.Errorf("err = %v, want ErrBadResponse when every record lacks a server", err)
+	}
+}
+
 func TestUnknownRegistryTypeKept(t *testing.T) {
 	pk := find(t, searchSample(t), "io.example/bundle").Packages[0]
 	if pk.RegistryType != "mcpb" || pk.Transport != "stdio" {
