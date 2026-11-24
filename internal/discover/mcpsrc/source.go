@@ -47,8 +47,9 @@ type Entry struct {
 
 // Install is one way to install an entry. Exactly one of Draft and
 // Unsupported is set: Unsupported non-empty means the option is shown
-// with that reason and is not installable. Label may hold \n or \t:
-// render it with mask.OneLine.
+// with that reason and is not installable. Label and Unsupported may
+// hold \n or \t (a reason can quote a sanitized name): render them with
+// mask.OneLine.
 type Install struct {
 	Label       string
 	Draft       *mcpreg.Draft

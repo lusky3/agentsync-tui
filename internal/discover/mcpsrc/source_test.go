@@ -208,6 +208,9 @@ func TestPerInstallTrustStaysOnTheDraft(t *testing.T) {
 	if slices.Contains(e.Trust, trustMutable) {
 		t.Errorf("entry Trust %q holds a per-install line", e.Trust)
 	}
+	if len(e.Installs) != 1 {
+		t.Fatalf("installs = %+v, want one", e.Installs)
+	}
 	in := e.Installs[0]
 	if in.Draft == nil || !slices.Contains(in.Draft.Trust, trustMutable) {
 		t.Fatalf("install = %+v, want the OCI draft with the mutable-tag line", in)
@@ -275,9 +278,14 @@ func TestClientErrorsPassedThroughUnchanged(t *testing.T) {
 }
 
 func TestOfflineClientErrorPassedThrough(t *testing.T) {
-	_, err := mcpsrc.Official(mcpreg.NewClient(nil, nil)).Search(context.Background(), anyQuery, "")
-	if err == nil {
+	c := mcpreg.NewClient(nil, nil)
+	_, direct := c.Search(context.Background(), anyQuery, "")
+	if direct == nil {
 		t.Fatal("a client without HTTP answered a search with no cache")
+	}
+	_, err := mcpsrc.Official(c).Search(context.Background(), anyQuery, "")
+	if !errors.Is(err, direct) || err.Error() != direct.Error() {
+		t.Fatalf("err = %v, want the client's own error %v unchanged", err, direct)
 	}
 }
 
