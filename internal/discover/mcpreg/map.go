@@ -2,6 +2,7 @@ package mcpreg
 
 import (
 	"errors"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,7 +14,9 @@ import (
 )
 
 // Choice is one way to install a server: exactly one of Package or Remote
-// is set, pointing into the Server it came from.
+// is set, pointing into the Server it came from. Label is built from
+// sanitized registry text that may still hold \n or \t: render it with
+// mask.OneLine.
 type Choice struct {
 	Label   string
 	Package *Package
@@ -24,7 +27,8 @@ type Choice struct {
 // prefill the add form. Prompts are values the user must still supply;
 // secrets are never prompted for or carried as values, only as
 // ${secret:...} references in Spec. Trust lines describe risks of this
-// particular choice (the source adds its own).
+// particular choice (the source adds its own). Provenance and Trust may
+// hold \n or \t from registry text: render them with mask.OneLine.
 type Draft struct {
 	Spec       actions.AddSpec
 	Prompts    []Prompt
@@ -34,6 +38,9 @@ type Draft struct {
 
 // Prompt is a non-secret value the user must supply (an environment
 // variable the registry marks required but gives no fixed value for).
+// Description is registry text that may hold \n or \t: render it with
+// mask.OneLine. Default is empty when the registry's default is not one
+// the add form could carry safely (see ToDraft).
 type Prompt struct {
 	Name        string
 	Secret      bool
@@ -78,6 +85,10 @@ const (
 	reasonTemplateText    = "contains a reference or default this tool will not pass"
 	reasonHeaderName      = "declares a header name agentsync cannot pass"
 	reasonHeaderValue     = "requires a header value the registry leaves to you"
+	reasonHeaderText      = "sets a header value agentsync cannot pass safely"
+	reasonSecretInURL     = "puts a secret in the remote URL; this tool passes secrets only in headers"
+	reasonTooMany         = "declares more arguments, variables or headers than this tool accepts"
+	reasonSpecRejected    = "agentsync would not accept the resulting server definition"
 
 	trustMutableTag = "image tag is mutable (not digest-pinned)"
 	provenanceHead  = "official registry: "
@@ -88,6 +99,15 @@ const (
 	maxSuffix = 100
 	// shortNameLen bounds a name quoted in a refusal reason.
 	shortNameLen = 32
+
+	// Caps on what one record may ask for; beyond them the choice is
+	// unsupported.
+	maxIdentifier = 255
+	maxVersion    = 128
+	maxValue      = 4096
+	maxArgs       = 64
+	maxEnv        = 64
+	maxHeaders    = 32
 )
 
 var (
@@ -97,30 +117,54 @@ var (
 	npmNameRe = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]{0,213}$`)
 	// PyPI project names (PEP 508 / 503): letters, digits, ._- inside.
 	pypiNameRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]{0,198}[A-Za-z0-9])?$`)
-	// versionRe covers semver and PEP 440 release strings without epochs.
-	versionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$`)
-	// OCI repository: an optional registry host (with a dot, or localhost,
-	// optional port), then lowercase path components. No tag or digest:
-	// the version supplies the tag.
-	ociNameRe = regexp.MustCompile(`^((localhost|[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+)(:[0-9]{1,5})?/)?` +
-		`[a-z0-9]+([._-]+[a-z0-9]+)*(/[a-z0-9]+([._-]+[a-z0-9]+)*)*$`)
+	// npm versions: a strict semver (optional prerelease and build), or a
+	// dist-tag (letter first); see npmVersionOK. Anything else (a range, a
+	// file or URL spec) is refused.
+	semverRe  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
+	distTagRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*$`)
+	// pep440Re is a normalized PEP 440 public version (no epoch) with an
+	// optional local part: release, a/b/rc, .postN, .devN, +local.
+	pep440Re = regexp.MustCompile(`(?i)^[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?(\+[a-z0-9]+(\.[a-z0-9]+)*)?$`)
+	// OCI repository: an optional registry host (dotted labels that start
+	// and end with a letter or digit, or localhost; optional port), then
+	// lowercase path components joined by ., _, __ or dashes. No tag or
+	// digest: the version supplies the tag.
+	ociNameRe = regexp.MustCompile(`^((localhost|` + ociLabel + `(\.` + ociLabel + `)+)(:[0-9]{1,5})?/)?` +
+		ociComponent + `(/` + ociComponent + `)*$`)
 	ociTagRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 )
+
+const (
+	ociLabel     = `[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?`
+	ociComponent = `[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*`
+)
+
+// npmVersionOK accepts a strict semver or a dist-tag. A dist-tag ending in
+// .tgz, .tar or .tar.gz is refused: npm reads name@x.tgz as a local file.
+func npmVersionOK(v string) bool {
+	if semverRe.MatchString(v) {
+		return true
+	}
+	l := strings.ToLower(v)
+	return distTagRe.MatchString(v) &&
+		!strings.HasSuffix(l, ".tgz") && !strings.HasSuffix(l, ".tar") && !strings.HasSuffix(l, ".tar.gz")
+}
 
 // pkgRuntime is how a supported registryType runs: the command is fixed per
 // type and never taken from the record.
 type pkgRuntime struct {
-	command       string
-	name, version *regexp.Regexp
-	args          func(name, version string) []string
+	command string
+	name    *regexp.Regexp
+	version func(string) bool
+	args    func(name, version string) []string
 }
 
 var runtimes = map[string]pkgRuntime{
-	"npm": {command: "npx", name: npmNameRe, version: versionRe,
+	"npm": {command: "npx", name: npmNameRe, version: npmVersionOK,
 		args: func(n, v string) []string { return []string{"-y", n + "@" + v} }},
-	"pypi": {command: "uvx", name: pypiNameRe, version: versionRe,
+	"pypi": {command: "uvx", name: pypiNameRe, version: pep440Re.MatchString,
 		args: func(n, v string) []string { return []string{n + "==" + v} }},
-	registryOCI: {command: "docker", name: ociNameRe, version: ociTagRe,
+	registryOCI: {command: "docker", name: ociNameRe, version: ociTagRe.MatchString,
 		args: func(n, v string) []string { return []string{"run", "-i", "--rm", n + ":" + v} }},
 }
 
@@ -173,6 +217,10 @@ func ToDraft(s Server, c Choice, id string) (Draft, error) {
 	if err != nil {
 		return Draft{}, err
 	}
+	// Final gate: never hand out a draft the add command would refuse.
+	if _, err := actions.McpAdd(b.d.Spec); err != nil {
+		return Draft{}, unsupported(reasonSpecRejected)
+	}
 	return b.d, nil
 }
 
@@ -193,20 +241,12 @@ type builder struct {
 }
 
 func (b *builder) pkg(p Package) error {
-	rt := runtimes[p.RegistryType]
-	if rt.command == "" {
+	rt, ok := runtimes[p.RegistryType]
+	if !ok {
 		return unsupported(reasonNoChoice)
 	}
-	if !rt.name.MatchString(p.Identifier) || !rt.version.MatchString(p.Version) {
-		return ErrUnsafeIdentifier
-	}
-	if err := checkTransport(p.Transport); err != nil {
+	if err := checkPackage(p, rt); err != nil {
 		return err
-	}
-	// Runtime options would go before the package token and can widen what
-	// the runtime does (a docker volume, an npm registry): never applied.
-	if len(p.RuntimeArgs) > 0 {
-		return unsupported(reasonRuntimeArgs)
 	}
 	extra, err := packageArgs(p.PackageArgs)
 	if err != nil {
@@ -220,6 +260,30 @@ func (b *builder) pkg(p Package) error {
 	b.d.Spec.Args = append(rt.args(p.Identifier, p.Version), extra...)
 	if p.RegistryType == registryOCI {
 		b.d.Trust = append(b.d.Trust, trustMutableTag)
+	}
+	return nil
+}
+
+// checkPackage refuses an unsafe identity, a non-stdio transport, runtime
+// options and oversized input lists.
+func checkPackage(p Package, rt pkgRuntime) error {
+	// The leading-dash refusal is independent of the per-type patterns: the
+	// identifier is the first token after the runtime's own options.
+	if strings.HasPrefix(p.Identifier, "-") || strings.HasPrefix(p.Version, "-") ||
+		len(p.Identifier) > maxIdentifier || len(p.Version) > maxVersion ||
+		!rt.name.MatchString(p.Identifier) || !rt.version(p.Version) {
+		return ErrUnsafeIdentifier
+	}
+	if err := checkTransport(p.Transport); err != nil {
+		return err
+	}
+	// Runtime options would go before the package token and can widen what
+	// the runtime does (a docker volume, an npm registry): never applied.
+	if len(p.RuntimeArgs) > 0 {
+		return unsupported(reasonRuntimeArgs)
+	}
+	if len(p.PackageArgs) > maxArgs || len(p.Env) > maxEnv {
+		return unsupported(reasonTooMany)
 	}
 	return nil
 }
@@ -310,9 +374,7 @@ func (b *builder) env(vars []EnvVar) error {
 func (b *builder) envVar(v EnvVar) error {
 	switch {
 	case v.Value != "":
-		// addEnv refuses ',' and '\'; '{' and '$' could be a template or a
-		// reference to another server's secret.
-		if strings.ContainsAny(v.Value, `,\{$`) {
+		if unsafeValue(v.Value) {
 			return unsupported(reasonEnvValue)
 		}
 		b.setEnv(v.Name, v.Value)
@@ -323,11 +385,23 @@ func (b *builder) envVar(v EnvVar) error {
 		}
 		b.setEnv(v.Name, ref)
 	case v.Required:
+		def := v.Default
+		if unsafeValue(def) {
+			def = "" // the user types the value; never suggest a reference
+		}
 		b.d.Prompts = append(b.d.Prompts, Prompt{
-			Name: v.Name, Required: true, Default: v.Default, Description: v.Description,
+			Name: v.Name, Required: true, Default: def, Description: v.Description,
 		})
 	}
 	return nil
+}
+
+// unsafeValue reports whether a fixed or default value cannot be offered:
+// too long, holding a control character (Sanitize keeps \n and \t), ',' or
+// '\' (addEnv refuses both), or '{' or '$' (a template, or a reference to
+// another server's secret).
+func unsafeValue(s string) bool {
+	return len(s) > maxValue || strings.ContainsAny(s, `,\{$`) || strings.IndexFunc(s, unicode.IsControl) >= 0
 }
 
 func (b *builder) setEnv(name, value string) {
@@ -356,11 +430,17 @@ func (b *builder) remote(r Remote) error {
 	if !ok {
 		return unsupported(reasonNoChoice)
 	}
-	if !strings.HasPrefix(r.URL, httpsPrefix) || len(r.URL) == len(httpsPrefix) || hasSpace(r.URL) {
+	if !strings.HasPrefix(r.URL, httpsPrefix) {
 		return unsupported(reasonNotHTTPS)
 	}
-	u, err := b.fill(r.URL, r.Variables)
+	if len(r.Headers) > maxHeaders {
+		return unsupported(reasonTooMany)
+	}
+	u, err := b.fill(r.URL, r.Variables, false)
 	if err != nil {
+		return err
+	}
+	if err := checkURL(u); err != nil {
 		return err
 	}
 	var headers []string
@@ -379,6 +459,16 @@ func (b *builder) remote(r Remote) error {
 	return nil
 }
 
+// checkURL takes the filled URL: https, a host, no userinfo, no
+// whitespace or control character.
+func checkURL(u string) error {
+	pu, err := url.Parse(u)
+	if err != nil || pu.Scheme != "https" || pu.Host == "" || pu.User != nil || hasSpace(u) {
+		return unsupported(reasonNotHTTPS)
+	}
+	return nil
+}
+
 // header returns "Name: value", or "" for an optional header with nothing
 // to send. A header with no value that is secret becomes a reference
 // named after the header itself.
@@ -390,7 +480,7 @@ func (b *builder) header(h Header) (string, error) {
 	var err error
 	switch {
 	case h.Value != "":
-		v, err = b.fill(h.Value, h.Variables)
+		v, err = b.fill(h.Value, h.Variables, true)
 	case h.Secret:
 		v, err = b.ref(h.Name)
 	case h.Required:
@@ -401,14 +491,18 @@ func (b *builder) header(h Header) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if len(v) > maxValue || strings.IndexFunc(v, unicode.IsControl) >= 0 {
+		return "", unsupported(reasonHeaderText)
+	}
 	return h.Name + ": " + v, nil
 }
 
 // fill replaces each {name} placeholder in tmpl with the declared
-// variable's secret reference or default. The template itself may hold no
-// '$' (so it can never write a reference of its own); a placeholder that is
-// undeclared, unbalanced, nested or neither secret nor defaulted refuses.
-func (b *builder) fill(tmpl string, vars []EnvVar) (string, error) {
+// variable's secret reference (only when secrets is set: a URL never
+// carries one) or default. The template itself may hold no '$' (so it can
+// never write a reference of its own); a placeholder that is undeclared,
+// unbalanced, nested or neither secret nor defaulted refuses.
+func (b *builder) fill(tmpl string, vars []EnvVar, secrets bool) (string, error) {
 	if strings.Contains(tmpl, "$") {
 		return "", unsupported(reasonTemplateText)
 	}
@@ -424,7 +518,7 @@ func (b *builder) fill(tmpl string, vars []EnvVar) (string, error) {
 		if rest[i] == '}' || j < 0 {
 			return "", unsupported(reasonPlaceholder)
 		}
-		val, err := b.resolve(rest[i+1:i+1+j], vars)
+		val, err := b.resolve(rest[i+1:i+1+j], vars, secrets)
 		if err != nil {
 			return "", err
 		}
@@ -435,10 +529,13 @@ func (b *builder) fill(tmpl string, vars []EnvVar) (string, error) {
 }
 
 // resolve fills one placeholder from its declared variable.
-func (b *builder) resolve(name string, vars []EnvVar) (string, error) {
+func (b *builder) resolve(name string, vars []EnvVar, secrets bool) (string, error) {
 	for _, v := range vars {
 		if v.Name != name {
 			continue
+		}
+		if v.Secret && !secrets {
+			return "", unsupported(reasonSecretInURL)
 		}
 		if v.Secret {
 			return b.ref(name)

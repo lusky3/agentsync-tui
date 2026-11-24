@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -44,6 +45,12 @@ const (
 	commaVal     = "a,b"
 	backslashVal = `a\b`
 	spaceVal     = "a b"
+	stealRef     = "${secret:github.token}"
+	headersFmt   = "Headers = %q, want %q"
+	logLevel     = "LOG_LEVEL"
+	newlineVal   = "a\nb"
+	tabVal       = "a\tb"
+	braceVal     = "{x}"
 )
 
 // pkgOf is a stdio package of the given registry type.
@@ -196,7 +203,7 @@ func TestRequiredPlainEnvBecomesPrompt(t *testing.T) {
 
 func TestEnvDefaultBecomesPromptDefault(t *testing.T) {
 	p := pkgOf(typeNPM, npmPkg)
-	p.Env = []mcpreg.EnvVar{{Name: "LOG_LEVEL", Required: true, Default: "info"}}
+	p.Env = []mcpreg.EnvVar{{Name: logLevel, Required: true, Default: "info"}}
 	d := draft(t, serverWith(p))
 	if len(d.Prompts) != 1 || d.Prompts[0].Default != "info" || !d.Prompts[0].Required {
 		t.Errorf("Prompts = %+v, want LOG_LEVEL required with default info", d.Prompts)
@@ -213,7 +220,7 @@ func TestFixedEnvValueIsLiteral(t *testing.T) {
 }
 
 func TestFixedEnvValueWithCommaBackslashOrBraceUnsupported(t *testing.T) {
-	for _, v := range []string{commaVal, backslashVal, "{x}", "${secret:github.token}", "$HOME"} {
+	for _, v := range []string{commaVal, backslashVal, braceVal, stealRef, "$HOME"} {
 		p := pkgOf(typeNPM, npmPkg)
 		p.Env = []mcpreg.EnvVar{{Name: modeEnv, Value: v}}
 		unsupported(t, serverWith(p), "")
@@ -312,12 +319,34 @@ func TestSecretNameCollisionUnsupported(t *testing.T) {
 
 func TestSameSecretNameReusedIsOneRef(t *testing.T) {
 	v := []mcpreg.EnvVar{{Name: apiKeyVar, Secret: true}}
-	r := mcpreg.Remote{Type: streamable, URL: "https://mcp.example.com/{api_key}", Variables: v,
-		Headers: []mcpreg.Header{{Name: authHeader, Value: "Bearer {api_key}", Variables: v}}}
+	r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{
+		{Name: authHeader, Value: "Bearer {api_key}", Variables: v},
+		{Name: "X-Key", Value: "{api_key}", Variables: v},
+	}}
 	d := draft(t, remoteServer(r))
-	if d.Spec.URL != "https://mcp.example.com/"+demoRef {
-		t.Errorf("URL = %q", d.Spec.URL)
+	want := []string{"Authorization: Bearer " + demoRef, "X-Key: " + demoRef}
+	if !slices.Equal(d.Spec.Headers, want) {
+		t.Errorf(headersFmt, d.Spec.Headers, want)
 	}
+}
+
+// D27: secrets go only in headers, never in a URL path or query.
+func TestSecretURLVariableUnsupported(t *testing.T) {
+	v := []mcpreg.EnvVar{{Name: apiKeyVar, Secret: true}}
+	for _, u := range []string{"https://mcp.example.com/{api_key}", "https://mcp.example.com/mcp?key={api_key}"} {
+		unsupported(t, remoteServer(mcpreg.Remote{Type: streamable, URL: u, Variables: v}), "")
+	}
+}
+
+func TestRemoteURLShapesUnsupported(t *testing.T) {
+	urls := []string{"https:///etc/passwd", "https://@evil", "https://evil.com@x/x", "https://user:pw@x.example/",
+		"https://", "https://x.example/" + strings.Repeat("a", 3000)}
+	for _, u := range urls {
+		unsupported(t, remoteServer(mcpreg.Remote{Type: streamable, URL: u}), "")
+	}
+	// A defaulted variable cannot build a userinfo or empty host either.
+	v := []mcpreg.EnvVar{{Name: regionVar, Default: "evil.com@x"}}
+	unsupported(t, remoteServer(mcpreg.Remote{Type: streamable, URL: "https://{region}/mcp", Variables: v}), "")
 }
 
 func TestBearerTemplateHeaderBecomesSecretRef(t *testing.T) {
@@ -328,7 +357,7 @@ func TestBearerTemplateHeaderBecomesSecretRef(t *testing.T) {
 	d := draft(t, remoteServer(r))
 	want := []string{"Authorization: Bearer " + demoRef}
 	if !slices.Equal(d.Spec.Headers, want) {
-		t.Errorf("Headers = %q, want %q", d.Spec.Headers, want)
+		t.Errorf(headersFmt, d.Spec.Headers, want)
 	}
 }
 
@@ -341,7 +370,7 @@ func TestSecretHeaderWithoutValueBecomesSecretRef(t *testing.T) {
 	d := draft(t, remoteServer(r))
 	want := []string{"X-API-Key: ${secret:demo.x_api_key}", "X-Fixed: v1, v2"}
 	if !slices.Equal(d.Spec.Headers, want) {
-		t.Errorf("Headers = %q, want %q", d.Spec.Headers, want)
+		t.Errorf(headersFmt, d.Spec.Headers, want)
 	}
 }
 
@@ -373,7 +402,7 @@ func TestUndeclaredPlaceholderUnsupported(t *testing.T) {
 func TestLiteralSecretReferenceFromRegistryRefused(t *testing.T) {
 	// A record must not be able to point a new server at another server's
 	// vault entry by writing a reference itself.
-	steal := "${secret:github.token}"
+	steal := stealRef
 	r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{{Name: authHeader, Value: "Bearer " + steal}}}
 	unsupported(t, remoteServer(r), "")
 	unsupported(t, remoteServer(mcpreg.Remote{Type: streamable, URL: remoteURL + "?k=" + steal}), "")
@@ -396,7 +425,7 @@ func TestDeclaredURLVariableWithDefaultResolved(t *testing.T) {
 }
 
 func TestUnsafeVariableDefaultUnsupported(t *testing.T) {
-	for _, def := range []string{spaceVal, "{x}", "a}", "a\tb"} {
+	for _, def := range []string{spaceVal, braceVal, "a}", tabVal} {
 		r := mcpreg.Remote{Type: streamable, URL: "https://{region}.example/mcp",
 			Variables: []mcpreg.EnvVar{{Name: regionVar, Default: def}}}
 		unsupported(t, remoteServer(r), "")
@@ -427,7 +456,7 @@ func TestUnsafePackageArgumentUnsupported(t *testing.T) {
 		{Type: positional, Value: "x;y"},
 		{Type: positional, Value: "--"},
 		{Type: positional, Value: backslashVal},
-		{Type: positional, Value: "a\nb"},
+		{Type: positional, Value: newlineVal},
 		{Type: named, Name: "mode", Value: "x"},
 		{Type: named, Name: "--mode=x", Value: "y"},
 		{Type: named, Name: modeFlag, Value: "x;id"},
@@ -496,7 +525,112 @@ func refuseIdentifier(t *testing.T, typ string, ids ...string) {
 
 func TestIdentifierWithLeadingDashRefused(t *testing.T) {
 	for _, typ := range []string{typeNPM, typePyPI, typeOCI} {
-		refuseIdentifier(t, typ, "--registry=evil", "-x")
+		refuseIdentifier(t, typ, "--registry=evil", "-x", "-p.x")
+	}
+	refuseIdentifier(t, typeOCI, "-Pde.x/y", "--privileged.io/img", "a.-b/c", "a-.b/c")
+}
+
+// TestDockerOptionSmuggledThroughHostRefused is the review's case: a host
+// label starting with '-' made `docker run -i --rm -Pde.x/y:t alpine`.
+func TestDockerOptionSmuggledThroughHostRefused(t *testing.T) {
+	p := pkgOf(typeOCI, "-Pde.x/y")
+	p.Version = "t"
+	p.PackageArgs = []mcpreg.Argument{{Type: positional, Value: "alpine"}}
+	if err := refused(t, serverWith(p)); !errors.Is(err, mcpreg.ErrUnsafeIdentifier) {
+		t.Errorf(wantUnsafe, err)
+	}
+}
+
+// versionOK reports whether ToDraft accepts version v for registry type typ.
+func versionOK(typ, id, v string) bool {
+	p := pkgOf(typ, id)
+	p.Version = v
+	s := serverWith(p)
+	_, err := mcpreg.ToDraft(s, mcpreg.Choices(s)[0], mapID)
+	return err == nil
+}
+
+func TestNPMVersionShapes(t *testing.T) {
+	for _, v := range []string{mapVersion, "0.0.1", "1.0.0-beta.1+build.5", "2.0.0-rc-1", "latest", "next", "beta.2"} {
+		if !versionOK(typeNPM, npmPkg, v) {
+			t.Errorf("npm version %q refused", v)
+		}
+	}
+	bad := []string{"1.0.0.tgz", "1.0.tar", "1.0.tar.gz", "LATEST.TGZ", "next.Tar.Gz", "1.0", "01.0.0", "1.0.0;x",
+		"x/y", "file:x", "~1.0.0", "^1.0.0", ">=1", "1.x", ".hidden", strings.Repeat("a", 129)}
+	for _, v := range bad {
+		if versionOK(typeNPM, npmPkg, v) {
+			t.Errorf("npm version %q accepted", v)
+		}
+	}
+}
+
+func TestPyPIVersionShapes(t *testing.T) {
+	for _, v := range []string{mapVersion, "1.0rc1", "2.0.post1", "1.0.dev3", "1.0a1", "1.0+local.1", "2024.10"} {
+		if !versionOK(typePyPI, pypiPkg, v) {
+			t.Errorf("pypi version %q refused", v)
+		}
+	}
+	bad := []string{"1.0;python_version", "1.0@x", "==1.0", "1.0==2", "https://x", "1.0 ", "latest", "1!2.0", "v1.0", ">=1.0"}
+	for _, v := range bad {
+		if versionOK(typePyPI, pypiPkg, v) {
+			t.Errorf("pypi version %q accepted", v)
+		}
+	}
+}
+
+func TestIdentifierAndVersionCaps(t *testing.T) {
+	refuseIdentifier(t, typeOCI, "a/"+strings.Repeat("b", 254))
+	if versionOK(typeOCI, ociImage, strings.Repeat("t", 129)) {
+		t.Error("OCI tag over 128 bytes accepted")
+	}
+}
+
+func TestInputCountCaps(t *testing.T) {
+	p := pkgOf(typeNPM, npmPkg)
+	for range 65 {
+		p.PackageArgs = append(p.PackageArgs, mcpreg.Argument{Type: positional, Value: "x"})
+	}
+	unsupported(t, serverWith(p), "")
+	p = pkgOf(typeNPM, npmPkg)
+	for i := range 65 {
+		p.Env = append(p.Env, mcpreg.EnvVar{Name: "E" + strconv.Itoa(i), Value: "v"})
+	}
+	unsupported(t, serverWith(p), "")
+	r := mcpreg.Remote{Type: streamable, URL: remoteURL}
+	for i := range 33 {
+		r.Headers = append(r.Headers, mcpreg.Header{Name: "H" + strconv.Itoa(i), Value: "v"})
+	}
+	unsupported(t, remoteServer(r), "")
+}
+
+func TestOverlongValuesUnsupported(t *testing.T) {
+	long := strings.Repeat("v", 4097)
+	p := pkgOf(typeNPM, npmPkg)
+	p.Env = []mcpreg.EnvVar{{Name: modeEnv, Value: long}}
+	unsupported(t, serverWith(p), "")
+	r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{{Name: authHeader, Value: long}}}
+	unsupported(t, remoteServer(r), "")
+}
+
+func TestControlCharactersUnsupported(t *testing.T) {
+	p := pkgOf(typeNPM, npmPkg)
+	p.Env = []mcpreg.EnvVar{{Name: modeEnv, Value: newlineVal}}
+	unsupported(t, serverWith(p), "")
+	for _, v := range []string{tabVal, newlineVal, "a\x7fb"} {
+		r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{{Name: authHeader, Value: v}}}
+		unsupported(t, remoteServer(r), "")
+	}
+}
+
+func TestUnsafePromptDefaultDropped(t *testing.T) {
+	for _, def := range []string{stealRef, commaVal, backslashVal, braceVal, newlineVal, tabVal, "a\x00b"} {
+		p := pkgOf(typeNPM, npmPkg)
+		p.Env = []mcpreg.EnvVar{{Name: logLevel, Required: true, Default: def}}
+		d := draft(t, serverWith(p))
+		if len(d.Prompts) != 1 || d.Prompts[0].Name != logLevel || d.Prompts[0].Default != "" {
+			t.Errorf("default %q: Prompts = %+v, want the prompt kept with no default", def, d.Prompts)
+		}
 	}
 }
 
@@ -508,7 +642,7 @@ func TestIdentifierWithCommaRefused(t *testing.T) {
 
 func TestIdentifierWithSpaceOrBackslashRefused(t *testing.T) {
 	for _, typ := range []string{typeNPM, typePyPI, typeOCI} {
-		refuseIdentifier(t, typ, spaceVal, backslashVal, "a\nb", "a\n", "a\tb", "\na", "")
+		refuseIdentifier(t, typ, spaceVal, backslashVal, newlineVal, "a\n", tabVal, "\na", "")
 	}
 	refuseIdentifier(t, typeOCI, "img:1.0", "img@sha256:abc", "Upper/case")
 	refuseIdentifier(t, typeNPM, "pkg@1.0", "@scope", "Upper")
