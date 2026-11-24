@@ -134,10 +134,11 @@ var (
 	pep440Re = regexp.MustCompile(`(?i)^[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?(\+[a-z0-9]+(\.[a-z0-9]+)*)?$`)
 	// OCI repository: an optional registry host (dotted labels that start
 	// and end with a letter or digit, or localhost; optional port), then
-	// lowercase path components joined by ., _, __ or dashes. No tag or
-	// digest: the version supplies the tag.
-	ociNameRe = regexp.MustCompile(`^` + OCIRepoPattern + `$`)
-	ociTagRe  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+	// lowercase path components joined by ., _, __ or dashes. The tag or
+	// digest is split off first (see ociIdentity).
+	ociNameRe   = regexp.MustCompile(`^` + OCIRepoPattern + `$`)
+	ociTagRe    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+	ociDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 const (
@@ -192,21 +193,55 @@ func npmVersionOK(v string) bool {
 }
 
 // pkgRuntime is how a supported registryType runs: the command is fixed per
-// type and never taken from the record.
+// type and never taken from the record. The argv is prefix, then the one
+// identity token that names the package (see identity).
 type pkgRuntime struct {
 	command string
-	name    *regexp.Regexp
-	version func(string) bool
-	args    func(name, version string) []string
+	prefix  []string
+	// identity checks the record's identifier and version and returns the
+	// token the runtime is given, or false when either is unsafe.
+	identity func(name, version string) (string, bool)
 }
 
 var runtimes = map[string]pkgRuntime{
-	"npm": {command: "npx", name: npmNameRe, version: npmVersionOK,
-		args: func(n, v string) []string { return []string{"-y", n + "@" + v} }},
-	"pypi": {command: "uvx", name: pypiNameRe, version: pep440Re.MatchString,
-		args: func(n, v string) []string { return []string{n + "==" + v} }},
-	registryOCI: {command: "docker", name: ociNameRe, version: ociTagRe.MatchString,
-		args: func(n, v string) []string { return []string{"run", "-i", "--rm", n + ":" + v} }},
+	"npm":       {command: "npx", prefix: []string{"-y"}, identity: joined(npmNameRe, npmVersionOK, "@")},
+	"pypi":      {command: "uvx", identity: joined(pypiNameRe, pep440Re.MatchString, "==")},
+	registryOCI: {command: "docker", prefix: []string{"run", "-i", "--rm"}, identity: ociIdentity},
+}
+
+// joined is the identity of a name@version style runtime: name and
+// version checked on their own, then joined by sep.
+func joined(name *regexp.Regexp, version func(string) bool, sep string) func(string, string) (string, bool) {
+	return func(n, v string) (string, bool) {
+		if !name.MatchString(n) || !version(v) {
+			return "", false
+		}
+		return n + sep + v, true
+	}
+}
+
+// ociIdentity is the image reference docker runs. The v0.1 registry puts
+// the tag (or a sha256 digest) in the identifier and leaves the version
+// empty; older records give the repository with the tag as the version.
+// A version beside a tagged identifier must equal the tag, and none may
+// stand beside a digest. Without a tag or digest (docker would pull
+// :latest), or with both, the identity is refused.
+func ociIdentity(n, v string) (string, bool) {
+	if repo, digest, ok := strings.Cut(n, "@"); ok {
+		return n, v == "" && ociNameRe.MatchString(repo) && ociDigestRe.MatchString(digest)
+	}
+	repo, tag := n, v
+	// A ':' before the last '/' is a registry port, not a tag.
+	if i := strings.LastIndexByte(n, ':'); i > strings.LastIndexByte(n, '/') {
+		repo, tag = n[:i], n[i+1:]
+		if v != "" && v != tag {
+			return "", false
+		}
+	}
+	if !ociNameRe.MatchString(repo) || !ociTagRe.MatchString(tag) {
+		return "", false
+	}
+	return repo + ":" + tag, true
 }
 
 // remoteTypes maps a registry remote type to the agentsync --type.
@@ -286,10 +321,11 @@ func (b *builder) pkg(p Package) error {
 	if !ok {
 		return unsupported(reasonNoChoice)
 	}
-	if err := checkPackage(p, rt); err != nil {
+	token, err := checkPackage(p, rt)
+	if err != nil {
 		return err
 	}
-	idArgs := rt.args(p.Identifier, p.Version)
+	idArgs := append(slices.Clone(rt.prefix), token)
 	// The confirm modal shows these words through mask.CommandLine: a
 	// name it would mask could not be checked by the user.
 	if !slices.Equal(mask.CommandLine(idArgs), idArgs) {
@@ -305,34 +341,37 @@ func (b *builder) pkg(p Package) error {
 	b.d.Spec.Type = typeStdio
 	b.d.Spec.Command = rt.command
 	b.d.Spec.Args = append(idArgs, extra...)
-	if p.RegistryType == registryOCI {
+	if p.RegistryType == registryOCI && !strings.Contains(token, "@") {
 		b.d.Trust = append(b.d.Trust, trustMutableTag)
 	}
 	return nil
 }
 
 // checkPackage refuses an unsafe identity, a non-stdio transport, runtime
-// options and oversized input lists.
-func checkPackage(p Package, rt pkgRuntime) error {
+// options and oversized input lists. It returns the identity token.
+func checkPackage(p Package, rt pkgRuntime) (string, error) {
 	// The leading-dash refusal is independent of the per-type patterns: the
 	// identifier is the first token after the runtime's own options.
 	if strings.HasPrefix(p.Identifier, "-") || strings.HasPrefix(p.Version, "-") ||
-		len(p.Identifier) > maxIdentifier || len(p.Version) > maxVersion ||
-		!rt.name.MatchString(p.Identifier) || !rt.version(p.Version) {
-		return ErrUnsafeIdentifier
+		len(p.Identifier) > maxIdentifier || len(p.Version) > maxVersion {
+		return "", ErrUnsafeIdentifier
+	}
+	token, ok := rt.identity(p.Identifier, p.Version)
+	if !ok {
+		return "", ErrUnsafeIdentifier
 	}
 	if err := checkTransport(p.Transport); err != nil {
-		return err
+		return "", err
 	}
 	// Runtime options would go before the package token and can widen what
 	// the runtime does (a docker volume, an npm registry): never applied.
 	if len(p.RuntimeArgs) > 0 {
-		return unsupported(reasonRuntimeArgs)
+		return "", unsupported(reasonRuntimeArgs)
 	}
 	if len(p.PackageArgs) > maxArgs || len(p.Env) > maxEnv {
-		return unsupported(reasonTooMany)
+		return "", unsupported(reasonTooMany)
 	}
-	return nil
+	return token, nil
 }
 
 // checkTransport accepts only stdio: a package's own url/headers for a

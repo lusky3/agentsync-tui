@@ -881,3 +881,66 @@ func TestSecretSegmentPyPINamesInstallable(t *testing.T) {
 		}
 	}
 }
+
+// ociPkg is an OCI package whose identifier is the whole image reference
+// and whose version is v (the v0.1 form leaves it empty).
+func ociPkg(identifier, v string) mcpreg.Package {
+	p := pkgOf(typeOCI, identifier)
+	p.Version = v
+	return p
+}
+
+const ociDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+// The official registry documents OCI packages as one image reference
+// with the tag in the identifier and no version (live records use it).
+func TestOCITaggedIdentifierAccepted(t *testing.T) {
+	for _, c := range []struct{ id, v string }{
+		{"ghcr.io/modelcontextprotocol/server-example:v1.2.3", ""},
+		{"docker.io/aliengiraffe/spotdb:0.1.0", ""},
+		{"localhost:5000/a/b:1", ""},
+		{"example/demo:1.0", "1.0"}, // a version equal to the tag is the same identity
+	} {
+		d := draft(t, serverWith(ociPkg(c.id, c.v)))
+		checkStdio(t, d, "docker", "run", "-i", "--rm", c.id)
+		if !slices.Contains(d.Trust, mutableLine) {
+			t.Errorf("%s: Trust = %q, want %q", c.id, d.Trust, mutableLine)
+		}
+		a, _ := actions.McpAdd(d.Spec)
+		if !strings.Contains(a.Display(), c.id) {
+			t.Errorf("Display() = %q, want it to show %q verbatim", a.Display(), c.id)
+		}
+	}
+}
+
+func TestOCIDigestIdentifierAcceptedWithoutMutableLine(t *testing.T) {
+	id := ociImage + "@" + ociDigest
+	d := draft(t, serverWith(ociPkg(id, "")))
+	checkStdio(t, d, "docker", "run", "-i", "--rm", id)
+	if slices.Contains(d.Trust, mutableLine) {
+		t.Errorf("Trust = %q, a digest-pinned image is not mutable", d.Trust)
+	}
+}
+
+func TestOCIIdentifierShapesRefused(t *testing.T) {
+	for _, c := range []struct{ id, v string }{
+		{ociImage, ""},                       // no tag at all: docker would pull :latest
+		{"localhost:5000/a", ""},             // that colon is a port, not a tag
+		{ociImage + ":", ""},                 // empty tag
+		{ociImage + ":-v", ""},               // tag starting with '-'
+		{ociImage + ":.v", ""},               // tag starting with '.'
+		{ociImage + ":a:b", ""},              // two tags
+		{ociImage + ":1.0", "2.0"},           // version disagrees with the tag
+		{ociImage + "@" + ociDigest, "1.0"},  // a version beside a digest
+		{ociImage + ":1.0@" + ociDigest, ""}, // tag and digest together
+		{ociImage + "@sha256:abc", ""},       // short digest
+		{ociImage + "@sha512:" + ociDigest[7:], ""},
+		{"-x/y:1", ""},
+		{"Ghcr.io/X/Y:1", ""}, // repository path must be lowercase
+	} {
+		err := refused(t, serverWith(ociPkg(c.id, c.v)))
+		if !errors.Is(err, mcpreg.ErrUnsafeIdentifier) {
+			t.Errorf("%q version %q: "+wantUnsafe, c.id, c.v, err)
+		}
+	}
+}
