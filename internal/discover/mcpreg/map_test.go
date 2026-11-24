@@ -1052,3 +1052,37 @@ func TestPaddedHeaderTemplateStillMaps(t *testing.T) {
 		t.Errorf("Headers = %q", got)
 	}
 }
+
+const (
+	envCredentialReason = "an environment variable name reads like a credential and could not be shown"
+	tokenShapedEnv      = "AKIAIOSFODNN7EXAMPLE"
+)
+
+// An env name the confirm modal and the form would mask (-e ••••, or
+// ••••=value) cannot be checked by the user, so the choice is refused,
+// however the variable is filled and whatever the runtime.
+func TestCredentialShapedEnvNameUnsupported(t *testing.T) {
+	for _, v := range []mcpreg.EnvVar{
+		{Name: tokenShapedEnv, Secret: true},
+		{Name: tokenShapedEnv, Required: true},
+		{Name: tokenShapedEnv, Value: "x"},
+	} {
+		for _, p := range []mcpreg.Package{ociPkg(ociImage+":1.0", ""), pkgOf(typeNPM, npmPkg), pkgOf(typePyPI, pypiPkg)} {
+			p.Env = []mcpreg.EnvVar{v}
+			unsupported(t, serverWith(p), envCredentialReason)
+		}
+	}
+}
+
+// Ordinary secret-like names are shown as they are, so they are accepted.
+func TestSecretLikeEnvNamesAccepted(t *testing.T) {
+	for _, n := range []string{"API_KEY", "GITHUB_TOKEN", "BRAVE_API_KEY", "DB_PASSWORD"} {
+		for _, p := range []mcpreg.Package{ociPkg(ociImage+":1.0", ""), pkgOf(typeNPM, npmPkg)} {
+			p.Env = []mcpreg.EnvVar{{Name: n, Secret: true}}
+			d := draft(t, serverWith(p))
+			if _, ok := d.Spec.Env[n]; !ok {
+				t.Errorf("%s: Env = %v, want %s set", p.RegistryType, d.Spec.Env, n)
+			}
+		}
+	}
+}

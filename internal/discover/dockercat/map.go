@@ -169,6 +169,8 @@ const (
 	// ReasonImageCredential: the confirm modal would mask the image.
 	ReasonImageCredential = "the image reference reads like a credential and could not be shown"
 	ReasonHeaderTwice     = "declares the same header name twice"
+	// ReasonEnvCredential: the confirm modal would mask an -e NAME word.
+	ReasonEnvCredential = "an environment variable name reads like a credential and could not be shown"
 )
 
 // Entry-level trust lines.
@@ -300,6 +302,12 @@ func (b *builder) server(e Entry) error {
 	}
 	for _, n := range names {
 		args = append(args, "-e", n)
+	}
+	// The confirm modal shows argv through mask.CommandLine; checkImage
+	// already holds the image to that, and the same goes for each -e NAME.
+	// Only a name masking would change refuses (GITHUB_TOKEN is shown).
+	if !slices.Equal(mask.CommandLine(args), args) {
+		return unsupported(ReasonEnvCredential)
 	}
 	args = append(args, e.Image)
 	b.d.Spec.Type = typeStdio

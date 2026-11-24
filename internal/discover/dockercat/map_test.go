@@ -411,3 +411,27 @@ func TestOverlongSecretKeyUnsupported(t *testing.T) {
 		e.Remote.Headers = []dockercat.Header{{Name: authHeader, Value: "${" + long + "}"}}
 	}), dockercat.ReasonSecretName)
 }
+
+// An env name the confirm modal would mask (-e ••••) is refused, whether
+// it carries a secret or a plain value.
+func TestCredentialShapedEnvNameUnsupported(t *testing.T) {
+	const name = "AKIAIOSFODNN7EXAMPLE"
+	refuse(t, "token secret env", server(func(e *dockercat.Entry) {
+		e.Secrets = []dockercat.Secret{{Name: "demo.key", Env: name}}
+	}), dockercat.ReasonEnvCredential)
+	refuse(t, "token plain env", server(func(e *dockercat.Entry) {
+		e.Env = []dockercat.EnvVar{{Name: name, Value: "x"}}
+	}), dockercat.ReasonEnvCredential)
+}
+
+// Ordinary secret-like names are shown as they are, so they are accepted.
+func TestSecretLikeEnvNamesAccepted(t *testing.T) {
+	for _, n := range []string{"API_KEY", "GITHUB_TOKEN", "BRAVE_API_KEY"} {
+		d := accept(t, server(func(e *dockercat.Entry) {
+			e.Secrets = []dockercat.Secret{{Name: "demo.key", Env: n}}
+		}))
+		if !slices.Contains(d.Spec.Args, n) {
+			t.Errorf("%s: Args = %q, want -e %s", n, d.Spec.Args, n)
+		}
+	}
+}

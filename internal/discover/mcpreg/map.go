@@ -93,6 +93,7 @@ const (
 	reasonTooMany         = "declares more arguments, variables or headers than this tool accepts"
 	reasonSpecRejected    = "agentsync would not accept the resulting server definition"
 	reasonCredentialName  = "the package name reads like a credential and could not be shown"
+	reasonCredentialEnv   = "an environment variable name reads like a credential and could not be shown"
 	reasonHeaderTwice     = "declares the header "
 	reasonTooLong         = "fills a header value or URL past the length this tool accepts"
 	reasonChecksum        = "declares a file checksum its runtime cannot verify before running it"
@@ -355,6 +356,13 @@ func (b *builder) pkg(p Package) error {
 		// environment: each variable must be named with -e before the image.
 		idArgs = slices.Insert(idArgs, len(rt.prefix), forwardFlags(passed)...)
 	}
+	// The same rule for the variable names: the confirm modal shows each
+	// -e NAME word through mask.CommandLine and each env entry's name
+	// through mask.Text. Only a name masking would change refuses; a
+	// secret-like name such as GITHUB_TOKEN is shown as it is.
+	if !shownAsIs(idArgs, passed) {
+		return unsupported(reasonCredentialEnv)
+	}
 	b.d.Spec.Type = typeStdio
 	b.d.Spec.Command = rt.command
 	b.d.Spec.Args = append(idArgs, extra...)
@@ -555,6 +563,15 @@ func (b *builder) envVar(v EnvVar) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// shownAsIs reports whether mask.CommandLine leaves args unchanged and
+// mask.Text leaves every name unchanged.
+func shownAsIs(args, names []string) bool {
+	if !slices.Equal(mask.CommandLine(args), args) {
+		return false
+	}
+	return !slices.ContainsFunc(names, func(n string) bool { return mask.Text(n) != n })
 }
 
 // forwardFlags is "-e NAME" for each name, as docker run takes them.
