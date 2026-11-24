@@ -1,6 +1,8 @@
 package discover
 
 import (
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -129,12 +131,18 @@ func unsupportedOnly(e mcpsrc.Entry) string {
 	return e.Installs[0].Unsupported
 }
 
-// detailView is the entry, its trust lines (always shown), then every
-// install option with its own lines; the chosen option stays in view.
+// detailView is the entry with its trust lines in the fixed head (never
+// scrolled off), then every install option with its own lines; the whole
+// block of the chosen option stays in view (its label first, when the
+// block does not fit).
 func (s *MCPScreen) detailView(e mcpsrc.Entry) []string {
 	head := []string{
 		theme.Bold.Render(mask.OneLine(e.Title)) + theme.Dim.Render("  "+sources[s.src].name+": "+mask.OneLine(e.ID)),
 		s.status(),
+		theme.Bold.Render("trust"),
+	}
+	for _, t := range e.Trust {
+		head = append(head, "  "+theme.Warn.Render(mask.OneLine(t)))
 	}
 	body := []string{}
 	if e.Deprecated {
@@ -143,26 +151,23 @@ func (s *MCPScreen) detailView(e mcpsrc.Entry) []string {
 	if e.Description != "" {
 		body = append(body, mask.OneLine(e.Description))
 	}
-	body = append(body, "", theme.Bold.Render("trust"))
-	for _, t := range e.Trust {
-		body = append(body, "  "+theme.Warn.Render(mask.OneLine(t)))
-	}
 	body = append(body, "", theme.Bold.Render("install options"))
 	s.opt.Clamp(len(e.Installs))
-	anchor := 0
+	first, last := 0, 0
 	for i, in := range e.Installs {
+		lines := optionLines(e, in, i == s.opt.Cursor)
 		if i == s.opt.Cursor {
-			anchor = len(body)
+			first, last = len(body), len(body)+len(lines)-1
 		}
-		body = append(body, optionLines(e, in, i == s.opt.Cursor)...)
+		body = append(body, lines...)
 	}
-	return s.opt.FrameAt(anchor, head, body, ui.KeyLines(keysDetail, s.width), s.height)
+	return s.opt.FrameSpan(first, last, head, body, ui.KeyLines(keysDetail, s.width), s.height)
 }
 
 // optionLines renders one install option: its label, then either the
 // reason it is unsupported or its provenance, its own trust lines (those
-// mcpsrc.InstallTrust adds to the entry's) and the values the form will
-// ask for.
+// mcpsrc.InstallTrust adds to the entry's), the environment it sets and
+// the values the form will ask for.
 func optionLines(e mcpsrc.Entry, in mcpsrc.Install, chosen bool) []string {
 	label := "  " + mask.OneLine(in.Label)
 	if chosen {
@@ -177,6 +182,7 @@ func optionLines(e mcpsrc.Entry, in mcpsrc.Install, chosen bool) []string {
 	for _, t := range all[min(len(e.Trust), len(all)):] {
 		out = append(out, indent+theme.Warn.Render(mask.OneLine(t)))
 	}
+	out = append(out, envLines(in.Draft.Spec.Env)...)
 	for _, p := range in.Draft.Prompts {
 		line := indent + "asks for " + mask.OneLine(p.Name)
 		if p.Required {
@@ -186,6 +192,21 @@ func optionLines(e mcpsrc.Entry, in mcpsrc.Install, chosen bool) []string {
 			line += ": " + mask.OneLine(p.Description)
 		}
 		out = append(out, line)
+	}
+	return out
+}
+
+// envLines lists the environment an option sets, sorted by name: each
+// value masked (Text), or masked whole unless it is a reference (Value)
+// when the name reads like a credential, on one inert row.
+func envLines(env map[string]string) []string {
+	var out []string
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		v := mask.Text(env[k])
+		if mask.SensitiveKey(k) {
+			v = mask.Value(env[k])
+		}
+		out = append(out, indent+"sets "+mask.OneLine(k)+"="+mask.OneLine(v))
 	}
 	return out
 }

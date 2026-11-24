@@ -26,7 +26,11 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
-const wantRequests = "requests = %d, want %d"
+const (
+	wantRequests   = "requests = %d, want %d"
+	unreadableFrom = "unreadable response from "
+	staleTitle     = "stale-entry"
+)
 
 func wantReqs(t *testing.T, f *fake, n int) {
 	t.Helper()
@@ -116,7 +120,7 @@ func TestBlockedShowsOneErrorNoRetry(t *testing.T) {
 		{"forbidden", "nope", "refused the request", http.StatusForbidden},
 		{"rate limited", "slow down", mcpreg.Host + ": " + NoteRateLimited, http.StatusTooManyRequests},
 		{"html", "<html>challenge</html>", "refused the request", http.StatusOK},
-		{"bad json", `{"servers": [`, "unreadable response from " + mcpreg.Host, http.StatusOK},
+		{"bad json", `{"servers": [`, unreadableFrom + mcpreg.Host, http.StatusOK},
 		{"server error", "boom", "HTTP 500", http.StatusInternalServerError},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -145,12 +149,12 @@ func TestBadResponseNamesItsHost(t *testing.T) {
 	f.registry = func(url.Values) (int, string) { return http.StatusOK, `{"servers": 5}` }
 	s := newScreen(f.deps())
 	search(s, "")
-	if got, want := s.cur().err, "unreadable response from "+mcpreg.Host; got != want {
+	if got, want := s.cur().err, unreadableFrom+mcpreg.Host; got != want {
 		t.Errorf("registry note %q, want %q", got, want)
 	}
 	press(s, "m")
 	search(s, "")
-	if got, want := s.cur().err, "unreadable response from "+dockercat.Host; got != want {
+	if got, want := s.cur().err, unreadableFrom+dockercat.Host; got != want {
 		t.Errorf("catalog note %q, want %q", got, want)
 	}
 }
@@ -461,7 +465,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // A result from a superseded round (a newer search, a source switch, a
 // scope switch, quit) is ignored.
 func TestResultsTaggedByOwnRounds(t *testing.T) {
-	stale := mcpsrc.Page{Entries: []mcpsrc.Entry{{ID: "stale", Title: "stale-entry"}}}
+	stale := mcpsrc.Page{Entries: []mcpsrc.Entry{{ID: "stale", Title: staleTitle}}}
 	for name, supersede := range map[string]func(s *MCPScreen){
 		"newer search":  func(s *MCPScreen) { search(s, "newer") },
 		"source switch": func(s *MCPScreen) { press(s, "m", "m") },
@@ -476,7 +480,7 @@ func TestResultsTaggedByOwnRounds(t *testing.T) {
 			old := s.rounds.Gen()
 			supersede(s)
 			s.Update(pageMsg{gen: old, src: 0, page: stale})
-			if strings.Contains(view(s), "stale-entry") {
+			if strings.Contains(view(s), staleTitle) {
 				t.Errorf("stale result shown:\n%s", view(s))
 			}
 		})
@@ -484,7 +488,7 @@ func TestResultsTaggedByOwnRounds(t *testing.T) {
 	// The current round's result is shown.
 	s := newScreen(ui.Deps{})
 	s.Update(pageMsg{gen: s.rounds.Gen(), src: 0, page: stale})
-	if !strings.Contains(view(s), "stale-entry") {
+	if !strings.Contains(view(s), staleTitle) {
 		t.Error("a current result is not shown")
 	}
 }

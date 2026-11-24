@@ -15,7 +15,11 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"net"
+	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -42,6 +46,7 @@ const (
 	noteNoInstall   = "not installable: "
 	noteRefused     = "not opened: "
 	noteChoose      = "several install options: choose one with j/k, then i"
+	noteNoMore      = "no more results to load"
 	maxQuery        = 200
 )
 
@@ -64,8 +69,10 @@ var sources = []sourceInfo{
 }
 
 // results is one source's current search: what it answered, the cursors
-// already requested (so a cursor that comes back is not offered again,
-// whatever the cycle length), and the notes to show.
+// whose page has arrived (so a cursor that comes back is not offered
+// again, whatever the cycle length), and the notes to show. A cursor
+// counts only once its page arrives, so a failed or interrupted request
+// can be made again.
 type results struct {
 	query    string // the query these results answer
 	searched bool
@@ -82,10 +89,11 @@ type results struct {
 // switch, quit) is recognised and dropped; the type is unexported, so no
 // other screen acts on it when the shell broadcasts it.
 type pageMsg struct {
-	gen  int
-	src  int
-	page mcpsrc.Page
-	err  error
+	gen    int
+	src    int
+	cursor string
+	page   mcpsrc.Page
+	err    error
 }
 
 // MCPScreen is the MCP discover tab.
@@ -165,6 +173,11 @@ func (s *MCPScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.width, s.height = msg.Width, msg.Height
 	case pageMsg:
 		s.page(msg)
+	case tea.PasteMsg:
+		if s.focus {
+			// One line: line breaks are dropped, not folded to spaces.
+			s.query.Insert(strings.NewReplacer("\r", "", "\n", "").Replace(msg.Content))
+		}
 	case tea.KeyPressMsg:
 		return s, s.key(msg)
 	}
@@ -187,6 +200,10 @@ func (s *MCPScreen) page(m pageMsg) {
 		return
 	}
 	r.err = ""
+	if r.used == nil {
+		r.used = map[string]bool{}
+	}
+	r.used[m.cursor] = true
 	r.skipped += m.page.Skipped
 	r.entries = appendNew(r.entries, m.page.Entries)
 	r.next = m.page.Next
@@ -212,18 +229,27 @@ func appendNew(have, page []mcpsrc.Entry) []mcpsrc.Entry {
 	return have
 }
 
-// errNote is the display-safe note for a failed request to host.
+// errNote is the display-safe note for a failed request to host. It never
+// quotes a response body; only the fallback quotes the error itself, whose
+// URLs netx has masked, masked again and kept to one inert row.
 func errNote(host string, err error) string {
 	var se *netx.StatusError
+	var ne net.Error
 	switch {
-	case errors.As(err, &se) && se.Code == 429:
+	case errors.As(err, &se) && se.Code == http.StatusTooManyRequests:
 		return host + ": " + NoteRateLimited
+	case errors.As(err, &se):
+		return host + " refused the request (HTTP " + strconv.Itoa(se.Code) + ")"
+	case errors.Is(err, mcpreg.ErrBlocked), errors.Is(err, dockercat.ErrBlocked):
+		return host + " refused the request"
 	case errors.Is(err, mcpreg.ErrBadResponse), errors.Is(err, dockercat.ErrBadResponse):
 		return "unreadable response from " + host
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
+		return "timed out reaching " + host
+	case errors.As(err, &ne):
+		return "could not reach " + host
 	}
-	// netx masks URLs in its errors, and the sources' own errors carry
-	// no response text; OneLine keeps it to one inert row.
-	return mask.OneLine(err.Error())
+	return "request to " + host + " failed: " + mask.FirstLine(err.Error())
 }
 
 func (s *MCPScreen) key(k tea.KeyPressMsg) tea.Cmd {
@@ -253,6 +279,7 @@ func (s *MCPScreen) fieldKey(k tea.KeyPressMsg) tea.Cmd {
 func (s *MCPScreen) listKey(k string) tea.Cmd {
 	r := s.cur()
 	if s.list.Key(k, len(r.entries)) {
+		s.note = "" // it was about the row left behind
 		return nil
 	}
 	switch k {
@@ -277,6 +304,7 @@ func (s *MCPScreen) detailKey(k string) tea.Cmd {
 		return nil
 	}
 	if s.opt.Key(k, len(e.Installs)) {
+		s.note = "" // it was about the option left behind
 		return nil
 	}
 	switch k {
@@ -435,17 +463,23 @@ func (s *MCPScreen) search() tea.Cmd {
 	return s.request("")
 }
 
-// nextPage fetches the page after the last one, unless there is none, it
-// was asked for already in this search, or a request is in flight.
+// nextPage fetches the page after the last one, unless a request is in
+// flight, no request may be made, or there is no page left (or its cursor
+// already came back in this search), which the note says.
 func (s *MCPScreen) nextPage() tea.Cmd {
 	r := s.cur()
-	if r.loading || r.next == "" || r.used[r.next] {
+	if r.loading {
 		return nil
 	}
 	if why := s.blocked(); why != "" {
 		s.note = why
 		return nil
 	}
+	if r.next == "" || r.used[r.next] {
+		s.note = noteNoMore
+		return nil
+	}
+	s.note = ""
 	return s.request(r.next)
 }
 
@@ -455,10 +489,6 @@ func (s *MCPScreen) nextPage() tea.Cmd {
 // A cache that cannot be opened only means the search runs uncached.
 func (s *MCPScreen) request(cursor string) tea.Cmd {
 	r := s.cur()
-	if r.used == nil {
-		r.used = map[string]bool{}
-	}
-	r.used[cursor] = true
 	r.loading, r.err = true, ""
 	gen, ctx := s.rounds.Next(s.base)
 	src, hc, lc, q := s.src, s.disc.HTTP, s.disc.Cache, r.query
@@ -468,6 +498,6 @@ func (s *MCPScreen) request(cursor string) tea.Cmd {
 			c = nil
 		}
 		p, err := sources[src].build(hc, c).Search(ctx, q, cursor)
-		return pageMsg{gen: gen, src: src, page: p, err: err}
+		return pageMsg{gen: gen, src: src, cursor: cursor, page: p, err: err}
 	}
 }

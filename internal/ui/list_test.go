@@ -176,3 +176,18 @@ func TestKeyLinesWrap(t *testing.T) {
 		t.Errorf("tiny width: %q", got)
 	}
 }
+
+// FrameSpan shows the whole block first..last when it fits, and its first
+// row when it does not.
+func TestListFrameSpan(t *testing.T) {
+	rows := rowsN(30)
+	var l List
+	out := l.FrameSpan(20, 24, nil, rows, nil, 10)
+	if !slices.Contains(out, rows[20]) || !slices.Contains(out, rows[24]) {
+		t.Errorf("block 20..24 not in view: %q", out)
+	}
+	out = l.FrameSpan(2, 20, nil, rows, nil, 10)
+	if out[0] != rows[2] {
+		t.Errorf("first row of an oversized block not on top: %q", out)
+	}
+}
