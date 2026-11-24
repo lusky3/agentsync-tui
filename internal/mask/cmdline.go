@@ -1,6 +1,7 @@
 package mask
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -137,25 +138,40 @@ func commandLine(words []string, depth int) []string {
 
 // assignment splits a NAME=value / --flag=value word. A name is never empty
 // and never holds whitespace: "mytool --api-key=x" is a script, not a word
-// named "mytool --api-key". A value that starts with '=' (name==version, a
-// pinned requirement as uvx takes it) is not an assignment; see pinned.
+// named "mytool --api-key".
 func assignment(w string) (name, val string, ok bool) {
 	name, val, ok = strings.Cut(w, "=")
-	if !ok || name == "" || strings.ContainsAny(name, " \t\n") || strings.HasPrefix(val, "=") {
+	if !ok || name == "" || strings.ContainsAny(name, " \t\n") {
 		return "", "", false
 	}
 	return name, val, true
 }
 
-// pinned renders a name==version word: as Text (so a token-shaped version
-// is still caught) unless the name reads like a secret (DB_PASS==x,
-// --token==x), whose value is masked as an assignment's would be.
+var (
+	// pinnedNameRe is a package-shaped name (no leading '-').
+	pinnedNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	// pinnedVersionRe is a version-shaped value.
+	pinnedVersionRe = regexp.MustCompile(`^[0-9][0-9A-Za-z.+!-]{0,63}$`)
+	// envStyleRe is an ENV_STYLE name, whose "==" value stays masked.
+	envStyleRe = regexp.MustCompile(`^[A-Z0-9_]+$`)
+)
+
+// pinned renders a package==version word (a pinned requirement as uvx
+// takes it, D41): its first '=' starts "==", the name is package-shaped
+// and the value version-shaped. It is shown through Text (a token-shaped
+// name or version is still caught), except that an ENV_STYLE name
+// (TOKEN==123) keeps its value masked. Any other word is not pinned and
+// is judged as an assignment.
 func pinned(w string) (string, bool) {
-	name, _, ok := strings.Cut(w, "==")
-	if !ok || name == "" || strings.ContainsAny(name, " \t\n") {
+	i := strings.IndexByte(w, '=')
+	if i < 0 || !strings.HasPrefix(w[i:], "==") {
 		return "", false
 	}
-	if secretFlag("--" + strings.TrimLeft(name, "-")) {
+	name, ver := w[:i], w[i+2:]
+	if !pinnedNameRe.MatchString(name) || !pinnedVersionRe.MatchString(ver) {
+		return "", false
+	}
+	if envStyleRe.MatchString(name) {
 		return Text(name) + "==" + Mask, true
 	}
 	return Text(w), true

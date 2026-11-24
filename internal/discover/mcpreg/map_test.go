@@ -835,3 +835,18 @@ func TestOverlongSecretKeyUnsupported(t *testing.T) {
 	p.Env = []mcpreg.EnvVar{{Name: strings.Repeat("K", 128-len(mapID)-1), Secret: true}}
 	draft(t, serverWith(p))
 }
+
+// D41: a PyPI name with a secret-looking segment is still installable and
+// its version shows at confirm.
+func TestSecretSegmentPyPINamesInstallable(t *testing.T) {
+	for _, id := range []string{"api-key-mcp", "keycloak-mcp", "token-counter", "auth0-mcp", "oauth-mcp"} {
+		d := draft(t, serverWith(pkgOf(typePyPI, id)))
+		a, err := actions.McpAdd(d.Spec)
+		if err != nil {
+			t.Fatalf("McpAdd: %v", err)
+		}
+		if want := id + "==" + mapVersion; !strings.Contains(a.Display(), want) {
+			t.Errorf("Display() = %q, want %q", a.Display(), want)
+		}
+	}
+}

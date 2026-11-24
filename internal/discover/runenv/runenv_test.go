@@ -42,3 +42,23 @@ func TestReasonShortensLongNames(t *testing.T) {
 		t.Errorf("Reason = %q, want the name shortened", got)
 	}
 }
+
+func TestReservedPlatformAndShellNames(t *testing.T) {
+	for _, n := range []string{
+		"NODE_TLS_REJECT_UNAUTHORIZED", "node_tls_reject_unauthorized", "COMSPEC", "ComSpec", "PATHEXT", "USERPROFILE",
+		"APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "xdg_data_home", "TMPDIR", "TEMP", "TMP", "tmp", "BASH_ENV", "ENV", "env",
+	} {
+		if !runenv.Reserved(n) {
+			t.Errorf("Reserved(%q) = false, want true", n)
+		}
+	}
+}
+
+// Harmless Python output settings are allowed despite the PYTHON prefix.
+func TestPythonAllowList(t *testing.T) {
+	for _, n := range []string{"PYTHONUNBUFFERED", "PYTHONIOENCODING", "PYTHONUTF8", "PYTHONDONTWRITEBYTECODE", "pythonunbuffered"} {
+		if runenv.Reserved(n) {
+			t.Errorf("Reserved(%q) = true, want false", n)
+		}
+	}
+}

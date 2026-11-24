@@ -264,3 +264,31 @@ func TestCommandLineDoubleEqualsIsNotAnAssignment(t *testing.T) {
 		t.Errorf("CommandLine(MODE=fast) = %q", got[0])
 	}
 }
+
+// D41: only a package==version word is pinned; every other word with "=="
+// is an assignment as before, its value masked whole.
+func TestCommandLinePinnedOnlyForPackageVersion(t *testing.T) {
+	const pw = "hunter2"
+	for _, w := range []string{"mcp-server-fetch==2025.4.7", "api-key-mcp==1.0", "oauth-mcp==0.3.1"} {
+		if got := CommandLine([]string{w}); got[0] != w {
+			t.Errorf("CommandLine(%q) = %q, want it verbatim", w, got[0])
+		}
+	}
+	for _, c := range []struct{ in, secret string }{
+		{"DB_PASS=" + pw + "==", pw},
+		{"MODE=dGhpcyBpcyBhIHNlY3JldA==", "dGhpcyBpcyBhIHNlY3JldA"},
+		{"FOO=" + pw + "==", pw},
+		{"a=b==c", "b==c"},
+		{"DB_PASS==correct horse", "horse"},
+		{"TOKEN==123", "123"},
+		{"--password==x", "==x"},
+		{"--api-key=abc==", "abc"},
+	} {
+		if got := strings.Join(CommandLine([]string{c.in}), " "); strings.Contains(got, c.secret) {
+			t.Errorf("CommandLine(%q) = %q, want %q masked", c.in, got, c.secret)
+		}
+	}
+	if got := FreeText("FOO=" + pw + "=="); strings.Contains(got, pw) {
+		t.Errorf("FreeText = %q, want the value masked", got)
+	}
+}
