@@ -94,6 +94,7 @@ const (
 	reasonSpecRejected    = "agentsync would not accept the resulting server definition"
 	reasonCredentialName  = "the package name reads like a credential and could not be shown"
 	reasonHeaderTwice     = "declares the header "
+	reasonChecksum        = "declares a file checksum its runtime cannot verify before running it"
 	reasonRegistryBase    = "is published to a package registry other than the one its runtime installs from"
 	reasonSecretLiteral   = "gives a fixed value for a secret; this tool never stores a secret as plain text"
 
@@ -380,6 +381,11 @@ func checkPackage(p Package, rt pkgRuntime) (string, error) {
 	}
 	if len(p.PackageArgs) > maxArgs || len(p.Env) > maxEnv {
 		return "", unsupported(reasonTooMany)
+	}
+	// The schema requires a client to check a declared digest before it
+	// runs the package; npx, uvx and docker run have no way to.
+	if p.FileSHA256 != "" {
+		return "", unsupported(reasonChecksum)
 	}
 	return token, nil
 }

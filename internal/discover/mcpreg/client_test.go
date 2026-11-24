@@ -232,6 +232,9 @@ func TestArgumentsDefaultsAndVariablesDecoded(t *testing.T) {
 	if lvl := env(t, pk.Env, "LOG_LEVEL"); lvl.Default != "info" || lvl.Required || lvl.Value != "" {
 		t.Errorf("LOG_LEVEL = %+v", lvl)
 	}
+	if pk.FileSHA256 != "fe333e598595000ae021bd27117db32ec69af6987f507ba7a63c90638ff633ce" {
+		t.Errorf("FileSHA256 = %q", pk.FileSHA256)
+	}
 	if mode := env(t, pk.Env, "MODE"); mode.Value != "strict" {
 		t.Errorf("MODE = %+v, want fixed value strict", mode)
 	}

@@ -31,6 +31,8 @@ type Package struct {
 	Identifier      string
 	Version         string
 	RuntimeHint     string
+	// FileSHA256 is the declared sha256 of the package file, if any.
+	FileSHA256 string
 	// Transport is the transport type ("stdio", "streamable-http", "sse").
 	Transport   string
 	Env         []EnvVar
@@ -129,6 +131,7 @@ type wireServer struct {
 type wirePackage struct {
 	RegistryType    string `json:"registryType"`
 	RegistryBaseURL string `json:"registryBaseUrl"`
+	FileSHA256      string `json:"fileSha256"`
 	Identifier      string `json:"identifier"`
 	Version         string `json:"version"`
 	RuntimeHint     string `json:"runtimeHint"`

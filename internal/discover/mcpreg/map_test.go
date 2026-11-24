@@ -999,3 +999,12 @@ func TestRegistryBaseURL(t *testing.T) {
 		}
 	}
 }
+
+// The schema says a client must check a declared fileSha256 before it
+// runs the package; npx, uvx and docker run cannot, so it is refused.
+func TestDeclaredFileSHA256Unsupported(t *testing.T) {
+	for _, p := range []mcpreg.Package{pkgOf(typeNPM, npmPkg), pkgOf(typePyPI, pypiPkg), ociPkg(ociImage+":1", "")} {
+		p.FileSHA256 = ociDigest[len("sha256:"):]
+		unsupported(t, serverWith(p), "checksum")
+	}
+}

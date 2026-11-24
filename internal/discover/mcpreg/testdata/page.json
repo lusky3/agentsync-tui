@@ -110,6 +110,7 @@
           {
             "registryType": "pypi",
             "identifier": "args-demo-mcp",
+            "fileSha256": "fe333e598595000ae021bd27117db32ec69af6987f507ba7a63c90638ff633ce",
             "version": "1.2.0",
             "runtimeHint": "uvx",
             "transport": {

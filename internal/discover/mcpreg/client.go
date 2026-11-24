@@ -264,6 +264,7 @@ func toPackage(p wirePackage) Package {
 		Identifier:      clean(p.Identifier),
 		Version:         clean(p.Version),
 		RuntimeHint:     clean(p.RuntimeHint),
+		FileSHA256:      clean(p.FileSHA256),
 		Transport:       clean(p.Transport.Type),
 		RuntimeArgs:     toArgs(p.RuntimeArgs),
 		PackageArgs:     toArgs(p.PackageArgs),
