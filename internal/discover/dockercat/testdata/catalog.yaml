@@ -1,0 +1,114 @@
+# Synthesized (not captured) in the shape of the Docker MCP Catalog v3
+# (https://desktop.docker.com/mcp/catalog/v3/catalog.yaml): entries trimmed
+# to the fields this tool reads plus a few it ignores. Digests are made up.
+version: 3
+name: docker-mcp
+displayName: Docker MCP Catalog
+registry:
+  brave:
+    description: Search the Web for pages, images, news, videos, and more using the Brave Search API.
+    title: Brave Search
+    type: server
+    dateAdded: "2025-05-05T21:05:40Z"
+    image: mcp/brave-search@sha256:a1bb216b2bbb7eb30b25960e6840aea87490f642a086e0c0ef4aae2ee7ce56f4
+    ref: ""
+    readme: http://desktop.docker.com/mcp/catalog/v3/readme/brave.md
+    source: https://github.com/brave/brave-search-mcp-server/tree/main
+    upstream: https://github.com/brave/brave-search-mcp-server
+    icon: https://avatars.githubusercontent.com/u/12301619?s=200&v=4
+    tools:
+      - name: brave_web_search
+      - name: brave_local_search
+    secrets:
+      - name: brave.api_key
+        env: BRAVE_API_KEY
+        example: YOUR_API_KEY_HERE
+    metadata:
+      pulls: 30000
+      githubStars: 300
+      category: search
+      tags:
+        - search
+        - brave
+      license: MIT License
+      owner: brave
+  context7:
+    description: Up-to-date code docs for any prompt.
+    title: Context7
+    type: remote
+    dateAdded: "2025-06-10T10:00:00Z"
+    remote:
+      transport_type: streamable-http
+      url: https://mcp.context7.com/mcp
+      headers:
+        CONTEXT7_API_KEY: ${CONTEXT7_API_KEY}
+    secrets:
+      - name: context7.api_key
+        env: CONTEXT7_API_KEY
+    metadata:
+      category: devops
+      owner: upstash
+  curl:
+    description: Fetch URLs with curl in a short-lived container.
+    title: Curl
+    type: poci
+    image: alpine/curl@sha256:427e4b79b1f0fc90306cbe064b1297b21dc6835bfa656d3bf46bc156e3f24bb0
+    tools:
+      - name: curl
+        container:
+          image: alpine/curl@sha256:427e4b79b1f0fc90306cbe064b1297b21dc6835bfa656d3bf46bc156e3f24bb0
+          command:
+            - "{{args}}"
+  filesystem:
+    description: Local filesystem access with configurable allowed paths.
+    title: Filesystem (Reference)
+    type: server
+    image: mcp/filesystem@sha256:cbf61858f3260072d96d9b1d2e037fc35824944b9c94d0087b1a53385eccaead
+    command:
+      - "{{filesystem.paths|into}}"
+    volumes:
+      - "{{filesystem.paths|volume|into}}"
+    config:
+      - name: filesystem
+        description: Configure the paths the server may read and write.
+        type: object
+        properties:
+          paths:
+            type: array
+            items:
+              type: string
+        required:
+          - paths
+  linear:
+    description: Track issues and projects in Linear.
+    title: Linear
+    type: remote
+    remote:
+      transport_type: sse
+      url: https://mcp.linear.app/sse
+    oauth:
+      providers:
+        - provider: linear
+          secret: linear.personal_access_token
+          env: LINEAR_PERSONAL_ACCESS_TOKEN
+  stripe:
+    description: Interact with the Stripe API.
+    title: Stripe
+    type: server
+    image: mcp/stripe@sha256:2bed2032ed3d8300b7714ff77101e6c43637597977337c699191dd844c86a72d
+    command:
+      - --tools=all
+    secrets:
+      - name: stripe.secret_key
+        env: STRIPE_SECRET_KEY
+    allowHosts:
+      - api.stripe.com:443
+  time:
+    description: Time and timezone conversion.
+    title: Time
+    type: server
+    image: mcp/time@sha256:336074805fc853987abe6f7fe3ad97a6a6f3077a16391fec744f671a015fbd7e
+    disableNetwork: true
+    env:
+      - name: LOCAL_TIMEZONE
+        value: UTC

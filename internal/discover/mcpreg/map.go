@@ -129,15 +129,47 @@ var (
 	// and end with a letter or digit, or localhost; optional port), then
 	// lowercase path components joined by ., _, __ or dashes. No tag or
 	// digest: the version supplies the tag.
-	ociNameRe = regexp.MustCompile(`^((localhost|` + ociLabel + `(\.` + ociLabel + `)+)(:[0-9]{1,5})?/)?` +
-		ociComponent + `(/` + ociComponent + `)*$`)
-	ociTagRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+	ociNameRe = regexp.MustCompile(`^` + OCIRepoPattern + `$`)
+	ociTagRe  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 )
 
 const (
 	ociLabel     = `[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?`
 	ociComponent = `[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*`
 )
+
+// OCIRepoPattern is the unanchored regexp source of an OCI repository
+// reference as ToDraft accepts it (optional registry host whose labels
+// start and end with a letter or digit, optional port, then lowercase path
+// components; no tag or digest). Other sources build on it.
+const OCIRepoPattern = `((localhost|` + ociLabel + `(\.` + ociLabel + `)+)(:[0-9]{1,5})?/)?` +
+	ociComponent + `(/` + ociComponent + `)*`
+
+// Caps other sources apply as ToDraft does: a longer value, or more
+// arguments, environment variables or headers, is unsupported.
+const (
+	MaxValue   = maxValue
+	MaxArgs    = maxArgs
+	MaxEnv     = maxEnv
+	MaxHeaders = maxHeaders
+)
+
+// ValidEnvName reports whether s is an environment variable name agentsync
+// can pass: [A-Za-z_][A-Za-z0-9_]*.
+func ValidEnvName(s string) bool { return envNameRe.MatchString(s) }
+
+// ValidHeaderName reports whether s is a header name ToDraft accepts.
+func ValidHeaderName(s string) bool { return headerNameRe.MatchString(s) }
+
+// UnsafeValue reports whether a fixed or default value cannot be offered:
+// too long, holding a control character, ',' or a backslash (addEnv refuses both),
+// or '{' or '$' (a template, or a reference to another server's secret).
+func UnsafeValue(s string) bool { return unsafeValue(s) }
+
+// ValidRemoteURL reports whether u, with every placeholder already filled,
+// is a plain https URL: scheme https, a host, no userinfo, no whitespace
+// or control character.
+func ValidRemoteURL(u string) bool { return checkURL(u) == nil }
 
 // npmVersionOK accepts a strict semver or a dist-tag. Any version ending in
 // .tgz, .tar or .tar.gz (any case) is refused: npm reads name@x.tgz as a

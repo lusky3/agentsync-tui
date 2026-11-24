@@ -9,6 +9,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/pelletier/go-toml/v2 v2.4.3
+	go.yaml.in/yaml/v3 v3.0.6
 )
 
 // Test-only (only _test.go files import it): teatest is an untagged exp
