@@ -159,25 +159,49 @@ actions ask you to type a word instead (see the safety model).
 | 9 | Skills | canonical skills | `E`/`enter` edit, then `check` runs |
 | 10-14 | Subagents, Commands, Hooks, LSP, Memory | same as Skills | `E`/`enter` edit, then `check` runs |
 | 15 | Health | `doctor` and `check` results | `r` re-run |
-| 16 | Source repo | git status of the home, masked diff, commit, fetch, pull, push | `space` select, `a` all, `enter`/`d` diff, `c` commit, `f` fetch, `p` pull, `P` push, `i` clone a home (when missing), `r` refresh; after a pull, `D` Drift / `A` Apply |
+| 16 | MCP discover | search the official MCP Registry or the Docker MCP Catalog and open a result in the MCP servers add form (see Discovery and network access) | `/` search field (`enter` runs the search, `esc` leaves the field), `m` switch source, `enter` detail, `j`/`k` choose an install option in the detail, `i` install, `n` next page, `esc` back |
+| 17 | Source repo | git status of the home, masked diff, commit, fetch, pull, push | `space` select, `a` all, `enter`/`d` diff, `c` commit, `f` fetch, `p` pull, `P` push, `i` clone a home (when missing), `r` refresh; after a pull, `D` Drift / `A` Apply |
 
 Long views (command output, diffs, the plugin detail) scroll with the same keys as the lists.
 
 ## Discovery and network access
 
-The discovery screens are not in this build yet; they come in a later
-release (there are no release tags so far). Until then the TUI makes no
-discovery request, and what follows describes how those requests will
-behave.
+The MCP discover tab (tab 16) searches two sources, one at a time (`m`
+switches between them; each keeps its own results and the query stays):
+
+- the official MCP Registry (`registry.modelcontextprotocol.io`). Entries
+  are not reviewed: the registry does not scan them; it only verifies
+  namespace ownership when an entry is published.
+- the Docker MCP Catalog (`desktop.docker.com`,
+  `https://desktop.docker.com/mcp/catalog/v3/catalog.yaml`, built from the
+  MIT-licensed [docker/mcp-registry](https://github.com/docker/mcp-registry)).
+  Entries are reviewed by Docker and their images are pinned by digest,
+  but this tool does not verify image signatures or attestations. Its
+  servers run with `docker run`, so they need Docker; an entry that
+  declares `allowHosts` gets no such limit from plain `docker run`.
+
+Nothing is requested when you open the tab, type or switch the source:
+a request is made only when you press `enter` in the search field, or `n`
+for the next page of results. Entries this tool cannot install safely (an
+unpinned image, Docker template values, an OAuth sign-in, an unsafe
+package name, and the like) are listed with the reason and `i` does
+nothing for them; deprecated entries are marked. `i` on an installable
+entry opens the MCP servers tab's add form prefilled from it, with the
+entry's source and trust notes shown above the fields. Nothing is
+installed until you submit that form and confirm the resulting
+`agentsync mcp add` like any other. Secrets are never asked for: the form
+holds `${secret:<id>.<name>}` references, and after the add a note lists
+the referenced secrets the vault does not hold yet (set them on the
+Secrets tab).
 
 Apart from the commands it runs, the only network access the TUI makes
-itself is discovery requests: read-only HTTPS GETs, on port 443 only, to
-these four hosts and no others:
+itself is discovery requests: read-only HTTPS GETs, on port 443 only. The
+discovery client is allowed these four hosts and no others; in this build
+only the first two are ever requested (by the MCP discover tab), and the
+other two are on the list for a skill search that is not in this build:
 
 - `registry.modelcontextprotocol.io`: the official MCP Registry.
-- `desktop.docker.com`: the Docker MCP Catalog,
-  `https://desktop.docker.com/mcp/catalog/v3/catalog.yaml`, built from the
-  MIT-licensed [docker/mcp-registry](https://github.com/docker/mcp-registry).
+- `desktop.docker.com`: the Docker MCP Catalog.
 - `skills.sh`: skill search.
 - `codeload.github.com`: GitHub repository archives.
 
@@ -191,10 +215,12 @@ are bounded by `--read-timeout`, which keeps the 2m default when it is `0`.
 Discovery responses are cached in `agentsync-tui` under Go's
 `os.UserCacheDir` (`$XDG_CACHE_HOME`, default `~/.cache`, on Linux;
 `~/Library/Caches` on macOS; `%LocalAppData%` on Windows), mode 0700 where
-the OS has Unix modes. The directory is created on first use, not at
-startup; delete it at any time to clear it.
+the OS has Unix modes: a registry search is reused for 10 minutes and the
+Docker catalog for 1 hour. The directory is created by the first search,
+not at startup or when the tab opens; delete it at any time to clear it.
 
-`--offline` turns discovery off: no request is made and nothing is cached.
+`--offline` turns discovery off: the tab says so, no request is made and
+nothing is cached.
 
 ## Safety model
 

@@ -5,6 +5,7 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 	"github.com/lusky3/agentsync-tui/internal/ui/agents"
 	"github.com/lusky3/agentsync-tui/internal/ui/apply"
+	"github.com/lusky3/agentsync-tui/internal/ui/discover"
 	"github.com/lusky3/agentsync-tui/internal/ui/drift"
 	"github.com/lusky3/agentsync-tui/internal/ui/health"
 	"github.com/lusky3/agentsync-tui/internal/ui/importer"
@@ -16,7 +17,7 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui/sourcerepo"
 )
 
-// Screens returns every screen in tab order (16 tabs). Digits 1-9 jump to the
+// Screens returns every screen in tab order (17 tabs). Digits 1-9 jump to the
 // first nine; tab and shift+tab reach the rest. Source repo stays last, so
 // shift+tab from the first tab reaches it.
 func Screens(d ui.Deps) []ui.Screen {
@@ -36,6 +37,7 @@ func Screens(d ui.Deps) []ui.Screen {
 		library.New(d, library.LSP),
 		library.New(d, library.Memory),
 		health.New(d),
+		discover.NewMCP(d),
 		sourcerepo.New(d),
 	}
 }
