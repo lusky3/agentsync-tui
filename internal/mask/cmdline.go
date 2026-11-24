@@ -123,7 +123,9 @@ func commandLine(words []string, depth int) []string {
 			out[i] = w
 			valueNext = true
 		default:
-			if name, val, ok := assignment(w); ok {
+			if shown, ok := pinned(w); ok {
+				out[i] = shown
+			} else if name, val, ok := assignment(w); ok {
 				out[i] = Text(name) + "=" + assignedValue(name, val)
 			} else {
 				out[i] = Text(w)
@@ -135,13 +137,28 @@ func commandLine(words []string, depth int) []string {
 
 // assignment splits a NAME=value / --flag=value word. A name is never empty
 // and never holds whitespace: "mytool --api-key=x" is a script, not a word
-// named "mytool --api-key".
+// named "mytool --api-key". A value that starts with '=' (name==version, a
+// pinned requirement as uvx takes it) is not an assignment; see pinned.
 func assignment(w string) (name, val string, ok bool) {
 	name, val, ok = strings.Cut(w, "=")
-	if !ok || name == "" || strings.ContainsAny(name, " \t\n") {
+	if !ok || name == "" || strings.ContainsAny(name, " \t\n") || strings.HasPrefix(val, "=") {
 		return "", "", false
 	}
 	return name, val, true
+}
+
+// pinned renders a name==version word: as Text (so a token-shaped version
+// is still caught) unless the name reads like a secret (DB_PASS==x,
+// --token==x), whose value is masked as an assignment's would be.
+func pinned(w string) (string, bool) {
+	name, _, ok := strings.Cut(w, "==")
+	if !ok || name == "" || strings.ContainsAny(name, " \t\n") {
+		return "", false
+	}
+	if secretFlag("--" + strings.TrimLeft(name, "-")) {
+		return Text(name) + "==" + Mask, true
+	}
+	return Text(w), true
 }
 
 // assignedValue masks the value of an assignment with Value semantics

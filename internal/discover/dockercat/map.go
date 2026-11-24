@@ -13,7 +13,9 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/discover/argtok"
 	"github.com/lusky3/agentsync-tui/internal/discover/mcpreg"
 	"github.com/lusky3/agentsync-tui/internal/discover/mcpsrc"
+	"github.com/lusky3/agentsync-tui/internal/discover/runenv"
 	"github.com/lusky3/agentsync-tui/internal/ident"
+	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
 // Entry kinds in the catalog.
@@ -164,6 +166,9 @@ const (
 	ReasonKind       = "is of a kind this tool does not know"
 	ReasonNoID       = "the catalog key gives no usable server id"
 	ReasonRejected   = "agentsync would not accept the resulting server definition"
+	// ReasonImageCredential: the confirm modal would mask the image.
+	ReasonImageCredential = "the image reference reads like a credential and could not be shown"
+	ReasonHeaderTwice     = "declares the same header name twice"
 )
 
 // Entry-level trust lines.
@@ -303,13 +308,17 @@ func (b *builder) server(e Entry) error {
 	return nil
 }
 
-// checkImage requires a digest-pinned, well-formed reference.
+// checkImage requires a digest-pinned, well-formed reference that the
+// confirm modal (mask.CommandLine) shows as it is.
 func checkImage(image string) error {
 	if digest(image) == "" {
 		return unsupported(ReasonNoDigest)
 	}
 	if strings.HasPrefix(image, "-") || len(image) > maxImage || !imageRe.MatchString(image) {
 		return unsupported(ReasonImage)
+	}
+	if mask.CommandLine([]string{image})[0] != image {
+		return unsupported(ReasonImageCredential)
 	}
 	return nil
 }
@@ -329,7 +338,8 @@ func hasTemplate(e Entry) bool {
 
 // env sets the spec's environment: each secret as its namespaced
 // reference, each plain variable as its literal value. It returns the
-// names in order (secrets first) for the -e flags.
+// names in order (secrets first) for the -e flags. A runtime or loader
+// variable (runenv.Reserved) refuses either way (D40).
 func (b *builder) env(e Entry) ([]string, error) {
 	var names []string
 	add := func(name, value string) {
@@ -341,10 +351,9 @@ func (b *builder) env(e Entry) ([]string, error) {
 	}
 	seen := map[string]bool{}
 	for _, s := range e.Secrets {
-		if !mcpreg.ValidEnvName(s.Env) || seen[s.Env] {
-			return nil, unsupported(ReasonEnvName)
+		if err := checkEnvName(s.Env, seen); err != nil {
+			return nil, err
 		}
-		seen[s.Env] = true
 		r, err := b.ref(s.Env)
 		if err != nil {
 			return nil, err
@@ -352,16 +361,28 @@ func (b *builder) env(e Entry) ([]string, error) {
 		add(s.Env, r)
 	}
 	for _, v := range e.Env {
-		if !mcpreg.ValidEnvName(v.Name) || seen[v.Name] {
-			return nil, unsupported(ReasonEnvName)
+		if err := checkEnvName(v.Name, seen); err != nil {
+			return nil, err
 		}
-		seen[v.Name] = true
 		if mcpreg.UnsafeValue(v.Value) {
 			return nil, unsupported(ReasonEnvValue)
 		}
 		add(v.Name, v.Value)
 	}
 	return names, nil
+}
+
+// checkEnvName refuses an invalid, repeated or reserved variable name and
+// records a good one in seen.
+func checkEnvName(name string, seen map[string]bool) error {
+	if !mcpreg.ValidEnvName(name) || seen[name] {
+		return unsupported(ReasonEnvName)
+	}
+	seen[name] = true
+	if runenv.Reserved(name) {
+		return unsupported(runenv.Reason(name))
+	}
+	return nil
 }
 
 func (b *builder) remote(e Entry) error {
@@ -383,20 +404,36 @@ func (b *builder) remote(e Entry) error {
 	if len(e.Remote.Headers) > mcpreg.MaxHeaders {
 		return unsupported(ReasonTooMany)
 	}
-	var headers []string
-	for _, h := range e.Remote.Headers {
-		line, err := b.header(h)
-		if err != nil {
-			return err
-		}
-		if line != "" {
-			headers = append(headers, line)
-		}
+	headers, err := b.headers(e.Remote.Headers)
+	if err != nil {
+		return err
 	}
 	b.d.Spec.Type = typ
 	b.d.Spec.URL = u
 	b.d.Spec.Headers = headers
 	return nil
+}
+
+// headers maps each header in order, refusing a name given twice in any
+// case (the add form would keep only one).
+func (b *builder) headers(hs []Header) ([]string, error) {
+	var out []string
+	seen := make(map[string]bool, len(hs))
+	for _, h := range hs {
+		k := strings.ToLower(h.Name)
+		if seen[k] {
+			return nil, unsupported(ReasonHeaderTwice)
+		}
+		seen[k] = true
+		line, err := b.header(h)
+		if err != nil {
+			return nil, err
+		}
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out, nil
 }
 
 // header returns "Name: value" with each ${NAME} replaced by its secret
@@ -416,6 +453,8 @@ func (b *builder) header(h Header) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Trimmed as the add form trims a header value, so the prefill keeps it.
+	v = strings.TrimSpace(v)
 	if len(v) > mcpreg.MaxValue || strings.IndexFunc(v, unicode.IsControl) >= 0 {
 		return "", unsupported(ReasonHeader)
 	}

@@ -739,3 +739,99 @@ func TestMissingArgumentNameIsShortened(t *testing.T) {
 		t.Errorf("err = %q, want the name cut to 32 runes", err)
 	}
 }
+
+// The confirm modal shows the package identity verbatim: the runtime
+// token survives actions.McpAdd(...).Display() for every package type.
+func TestDisplayShowsPackageIdentity(t *testing.T) {
+	for _, c := range []struct{ typ, id, token string }{
+		{typeNPM, npmPkg, npmPkg + "@" + mapVersion},
+		{typePyPI, "mcp-server-fetch", "mcp-server-fetch==" + mapVersion},
+		{typeOCI, ociImage, ociImage + ":" + mapVersion},
+	} {
+		d := draft(t, serverWith(pkgOf(c.typ, c.id)))
+		a, err := actions.McpAdd(d.Spec)
+		if err != nil {
+			t.Fatalf("McpAdd: %v", err)
+		}
+		if got := a.Display(); !strings.Contains(got, c.token) {
+			t.Errorf("%s: Display() = %q, want it to show %q", c.typ, got, c.token)
+		}
+	}
+}
+
+const (
+	credentialReason = "the package name reads like a credential and could not be shown"
+	runtimeReason    = "which changes how the runtime itself behaves"
+)
+
+// A package name the confirm modal would mask cannot be checked by the
+// user, so the choice is refused.
+func TestCredentialShapedPackageNameUnsupported(t *testing.T) {
+	for _, p := range []mcpreg.Package{
+		pkgOf(typeNPM, "sk-"+strings.Repeat("a", 50)),
+		pkgOf(typePyPI, "AKIAIOSFODNN7EXAMPLE"),
+		pkgOf(typeOCI, "ghcr.io/x/sk-"+strings.Repeat("a", 50)),
+	} {
+		unsupported(t, serverWith(p), credentialReason)
+	}
+}
+
+// D40: a fixed value, a prompt or a secret for a runtime or loader
+// variable is refused.
+func TestRuntimeEnvNamesUnsupported(t *testing.T) {
+	for _, name := range []string{"NPM_CONFIG_REGISTRY", "npm_config_registry", "PIP_INDEX_URL", "PATH", "LD_PRELOAD", "https_proxy", "DOCKER_HOST"} {
+		for _, v := range []mcpreg.EnvVar{
+			{Name: name, Value: "x"},
+			{Name: name, Required: true},
+			{Name: name, Secret: true},
+		} {
+			p := pkgOf(typeNPM, npmPkg)
+			p.Env = []mcpreg.EnvVar{v}
+			unsupported(t, serverWith(p), "sets "+name+", "+runtimeReason)
+		}
+	}
+	// The reviewer's case: an OCI package pointing docker at another daemon.
+	p := pkgOf(typeOCI, ociImage)
+	p.Env = []mcpreg.EnvVar{{Name: "DOCKER_HOST", Value: "tcp://evil.example:2375"}}
+	unsupported(t, serverWith(p), runtimeReason)
+	// An optional one with nothing to set is simply omitted.
+	p = pkgOf(typeNPM, npmPkg)
+	p.Env = []mcpreg.EnvVar{{Name: "NODE_OPTIONS"}}
+	draft(t, serverWith(p))
+}
+
+// Header values are trimmed, as the add form trims them, so the prefill
+// round-trip keeps them.
+func TestHeaderValueTrimmed(t *testing.T) {
+	v := []mcpreg.EnvVar{{Name: "a", Secret: true}, {Name: "b", Secret: true}}
+	r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{
+		{Name: "X-Pair", Value: "{a}:{b} ", Variables: v},
+		{Name: "X-Fixed", Value: "  v1 "},
+	}}
+	want := []string{"X-Pair: ${secret:demo.a}:${secret:demo.b}", "X-Fixed: v1"}
+	if got := draft(t, remoteServer(r)).Spec.Headers; !slices.Equal(got, want) {
+		t.Errorf(headersFmt, got, want)
+	}
+}
+
+func TestDuplicateHeaderNameUnsupported(t *testing.T) {
+	for _, second := range []string{"X-A", "x-a"} {
+		r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{
+			{Name: "X-A", Value: "1"}, {Name: second, Value: "2"},
+		}}
+		unsupported(t, remoteServer(r), "declares the header "+second+" twice")
+	}
+}
+
+// A vault key id.name longer than an identifier allows is refused: the
+// after-add note could never find it set.
+func TestOverlongSecretKeyUnsupported(t *testing.T) {
+	p := pkgOf(typeNPM, npmPkg)
+	p.Env = []mcpreg.EnvVar{{Name: strings.Repeat("K", 140), Secret: true}}
+	unsupported(t, serverWith(p), "declares a secret whose name cannot form a vault key")
+	r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{{Name: strings.Repeat("H", 140), Secret: true}}}
+	unsupported(t, remoteServer(r), "declares a secret whose name cannot form a vault key")
+	// At the limit it is accepted.
+	p.Env = []mcpreg.EnvVar{{Name: strings.Repeat("K", 128-len(mapID)-1), Secret: true}}
+	draft(t, serverWith(p))
+}

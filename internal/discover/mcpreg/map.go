@@ -4,13 +4,16 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/lusky3/agentsync-tui/internal/actions"
 	"github.com/lusky3/agentsync-tui/internal/discover/argtok"
+	"github.com/lusky3/agentsync-tui/internal/discover/runenv"
 	"github.com/lusky3/agentsync-tui/internal/ident"
+	"github.com/lusky3/agentsync-tui/internal/mask"
 )
 
 // Choice is one way to install a server: exactly one of Package or Remote
@@ -89,6 +92,8 @@ const (
 	reasonSecretInURL     = "puts a secret in the remote URL; this tool passes secrets only in headers"
 	reasonTooMany         = "declares more arguments, variables or headers than this tool accepts"
 	reasonSpecRejected    = "agentsync would not accept the resulting server definition"
+	reasonCredentialName  = "the package name reads like a credential and could not be shown"
+	reasonHeaderTwice     = "declares the header "
 
 	trustMutableTag = "image tag is mutable (not digest-pinned)"
 	provenanceHead  = "official registry: "
@@ -282,6 +287,12 @@ func (b *builder) pkg(p Package) error {
 	if err := checkPackage(p, rt); err != nil {
 		return err
 	}
+	idArgs := rt.args(p.Identifier, p.Version)
+	// The confirm modal shows these words through mask.CommandLine: a
+	// name it would mask could not be checked by the user.
+	if !slices.Equal(mask.CommandLine(idArgs), idArgs) {
+		return unsupported(reasonCredentialName)
+	}
 	extra, err := packageArgs(p.PackageArgs)
 	if err != nil {
 		return err
@@ -291,7 +302,7 @@ func (b *builder) pkg(p Package) error {
 	}
 	b.d.Spec.Type = typeStdio
 	b.d.Spec.Command = rt.command
-	b.d.Spec.Args = append(rt.args(p.Identifier, p.Version), extra...)
+	b.d.Spec.Args = append(idArgs, extra...)
 	if p.RegistryType == registryOCI {
 		b.d.Trust = append(b.d.Trust, trustMutableTag)
 	}
@@ -390,7 +401,8 @@ func argTokens(a Argument) ([]string, error) {
 
 // env maps environment variables: a fixed value is passed literally, a
 // secret becomes a namespaced reference, a required plain one becomes a
-// Prompt, and an optional plain one is omitted.
+// Prompt, and an optional plain one is omitted. Setting a runtime or
+// loader variable (runenv.Reserved) in any of those ways refuses (D40).
 func (b *builder) env(vars []EnvVar) error {
 	seen := make(map[string]bool, len(vars))
 	for _, v := range vars {
@@ -398,6 +410,9 @@ func (b *builder) env(vars []EnvVar) error {
 			return unsupported(reasonEnvName)
 		}
 		seen[v.Name] = true
+		if runenv.Reserved(v.Name) && (v.Value != "" || v.Secret || v.Required) {
+			return unsupported(runenv.Reason(v.Name))
+		}
 		if err := b.envVar(v); err != nil {
 			return err
 		}
@@ -446,10 +461,11 @@ func (b *builder) setEnv(name, value string) {
 }
 
 // ref returns SecretRef(b.id, name), refusing a name with no lower_snake
-// form or one whose form another name of this draft already took.
+// form, one whose vault key would be too long, or one whose form another
+// name of this draft already took.
 func (b *builder) ref(name string) (string, error) {
 	key := lowerSnake(name)
-	if key == "" {
+	if SecretRef(b.id, name) == "" {
 		return "", unsupported(reasonSecretName)
 	}
 	if prev, ok := b.snake[key]; ok && prev != name {
@@ -477,20 +493,36 @@ func (b *builder) remote(r Remote) error {
 	if err := checkURL(u); err != nil {
 		return err
 	}
-	var headers []string
-	for _, h := range r.Headers {
-		line, err := b.header(h)
-		if err != nil {
-			return err
-		}
-		if line != "" {
-			headers = append(headers, line)
-		}
+	headers, err := b.headers(r.Headers)
+	if err != nil {
+		return err
 	}
 	b.d.Spec.Type = typ
 	b.d.Spec.URL = u
 	b.d.Spec.Headers = headers
 	return nil
+}
+
+// headers maps each header in order, refusing a name given twice in any
+// case (the add form would keep only one).
+func (b *builder) headers(hs []Header) ([]string, error) {
+	var out []string
+	seen := make(map[string]bool, len(hs))
+	for _, h := range hs {
+		k := strings.ToLower(h.Name)
+		if seen[k] {
+			return nil, unsupported(reasonHeaderTwice + shortName(h.Name) + " twice")
+		}
+		seen[k] = true
+		line, err := b.header(h)
+		if err != nil {
+			return nil, err
+		}
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out, nil
 }
 
 // checkURL takes the filled URL: https, a host, no userinfo, no
@@ -525,6 +557,8 @@ func (b *builder) header(h Header) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Trimmed as the add form trims a header value, so the prefill keeps it.
+	v = strings.TrimSpace(v)
 	if len(v) > maxValue || strings.IndexFunc(v, unicode.IsControl) >= 0 {
 		return "", unsupported(reasonHeaderText)
 	}
@@ -600,13 +634,14 @@ func shortName(s string) string {
 
 // SecretRef is the vault reference for input name of server id:
 // ${secret:<id>.<lower_snake_name>}, or "" when name has no ASCII letter
-// or digit. lower_snake lowercases ASCII letters, turns every run of other
+// or digit or the key <id>.<lower_snake_name> would be longer than
+// ident.MaxLen. lower_snake lowercases ASCII letters, turns every run of other
 // characters into one '_' and trims '_' from both ends ("X-Api-Key" →
 // "x_api_key", "apiKey" → "apikey"). The key has no '.', so the last '.'
 // always separates the server id from the name.
 func SecretRef(id, name string) string {
 	key := lowerSnake(name)
-	if key == "" {
+	if key == "" || len(id)+1+len(key) > ident.MaxLen {
 		return ""
 	}
 	return "${secret:" + id + "." + key + "}"

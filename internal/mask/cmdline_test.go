@@ -240,3 +240,27 @@ func TestFreeTextRequotesTabs(t *testing.T) {
 		t.Errorf("display splits into %q (%v), want %q", words, err, want)
 	}
 }
+
+// A pinned requirement (pkg==version, as uvx takes it) is not NAME=value:
+// the version stays visible. A word whose name reads like a credential, or
+// whose value is token-shaped, is still masked.
+func TestCommandLineDoubleEqualsIsNotAnAssignment(t *testing.T) {
+	const canaryMark = "CANARY"
+	for _, w := range []string{"mcp-server-fetch==2025.4.7", "Demo_MCP.x==1.0rc1", "a==1"} {
+		if got := CommandLine([]string{w}); got[0] != w {
+			t.Errorf("CommandLine(%q) = %q, want it unchanged", w, got[0])
+		}
+	}
+	for _, w := range []string{
+		"DB_PASS==plainCANARY", "--api-key==plainCANARY", "PASSWORD==plainCANARY", "--token==plainCANARY",
+		"X==sk-CANARY" + strings.Repeat("a", 48), "MODE==ghp_CANARY" + strings.Repeat("A", 36),
+	} {
+		if got := CommandLine([]string{w}); strings.Contains(got[0], canaryMark) {
+			t.Errorf("CommandLine(%q) = %q, want the value masked", w, got[0])
+		}
+	}
+	// A single '=' is still an assignment, its literal value masked.
+	if got := CommandLine([]string{"MODE=fast"}); got[0] != "MODE="+Mask {
+		t.Errorf("CommandLine(MODE=fast) = %q", got[0])
+	}
+}

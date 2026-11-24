@@ -12,6 +12,7 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/discover/dockercat"
 	"github.com/lusky3/agentsync-tui/internal/discover/mcpreg"
 	"github.com/lusky3/agentsync-tui/internal/discover/mcpsrc"
+	"github.com/lusky3/agentsync-tui/internal/discover/runenv"
 )
 
 const (
@@ -28,6 +29,8 @@ const (
 	envFlag    = "-e"
 	iFlag      = "-i"
 	stdioWord  = "stdio"
+	reasonFmt  = "reason = %q"
+	atSHA      = "@sha256:"
 )
 
 // fixtureDigest is the made-up digest testdata/catalog.yaml gives key.
@@ -182,7 +185,7 @@ func TestUnsafeHeaderUnsupported(t *testing.T) {
 func TestFilesystemTemplateIsUnsupportedNotRendered(t *testing.T) {
 	e := find(t, searchSample(t), keyFS)
 	if r := reasonOf(t, e); r != dockercat.ReasonTemplate {
-		t.Errorf("reason = %q", r)
+		t.Errorf(reasonFmt, r)
 	}
 	for name, mod := range map[string]func(*dockercat.Entry){
 		"env value":  func(e *dockercat.Entry) { e.Env = []dockercat.EnvVar{{Name: "P", Value: "{{x.y}}"}} },
@@ -200,29 +203,29 @@ func TestImageWithoutDigestUnsupported(t *testing.T) {
 	}
 	e := searchBody(t, []byte("registry:\n  nodigest:\n    type: server\n    image: mcp/x:1\n"), "")
 	if r := reasonOf(t, e.Entries[0]); r != dockercat.ReasonNoDigest {
-		t.Errorf("reason = %q", r)
+		t.Errorf(reasonFmt, r)
 	}
 }
 
 func TestBadImageReferenceUnsupported(t *testing.T) {
 	for _, img := range []string{"-v/x", "--privileged", "evil.-host.io/x", "Mcp/X", "mcp/x y", "mcp/x;id", "mcp//x"} {
-		refuse(t, img, server(func(e *dockercat.Entry) { e.Image = img + "@sha256:" + digest64 }), dockercat.ReasonImage)
+		refuse(t, img, server(func(e *dockercat.Entry) { e.Image = img + atSHA + digest64 }), dockercat.ReasonImage)
 	}
 	for _, img := range []string{"mcp/x", "docker.io/mcp/x:1.2", "localhost:5000/a/b_c"} {
-		accept(t, server(func(e *dockercat.Entry) { e.Image = img + "@sha256:" + digest64 }))
+		accept(t, server(func(e *dockercat.Entry) { e.Image = img + atSHA + digest64 }))
 	}
 }
 
 func TestPociUnsupported(t *testing.T) {
 	if r := reasonOf(t, find(t, searchSample(t), keyCurl)); r != dockercat.ReasonPoci {
-		t.Errorf("reason = %q", r)
+		t.Errorf(reasonFmt, r)
 	}
 	refuse(t, "unknown kind", dockercat.Entry{Kind: "plugin", Image: image}, dockercat.ReasonKind)
 }
 
 func TestOAuthRemoteUnsupported(t *testing.T) {
 	if r := reasonOf(t, find(t, searchSample(t), keyLinear)); r != dockercat.ReasonOAuth {
-		t.Errorf("reason = %q", r)
+		t.Errorf(reasonFmt, r)
 	}
 	for _, oauth := range []string{"oauth: {}", "oauth: [x]", "oauth: yes"} {
 		body := "registry:\n  r:\n    type: remote\n    " + oauth + "\n    remote: {transport_type: sse, url: 'https://a.example.com'}\n"
@@ -326,7 +329,7 @@ func TestInvalidIDRefused(t *testing.T) {
 	}
 	e := searchBody(t, []byte("registry:\n  '...':\n    type: server\n    image: "+image+"\n"), "").Entries[0]
 	if r := reasonOf(t, e); r != dockercat.ReasonNoID {
-		t.Errorf("reason = %q", r)
+		t.Errorf(reasonFmt, r)
 	}
 }
 
@@ -354,4 +357,57 @@ func TestEveryInstallableDraftPassesMcpAdd(t *testing.T) {
 func TestOverlongURLRejectedByAddGate(t *testing.T) {
 	u := "https://a.example.com/" + strings.Repeat("a", 2049-len("https://a.example.com/"))
 	refuse(t, "2049-byte url", remote(func(e *dockercat.Entry) { e.Remote.URL = u }), dockercat.ReasonRejected)
+}
+
+// The confirm modal shows the image reference verbatim.
+func TestDisplayShowsImage(t *testing.T) {
+	d := accept(t, server(func(e *dockercat.Entry) { e.Env = []dockercat.EnvVar{{Name: "MODE", Value: "fast"}} }))
+	a, err := actions.McpAdd(d.Spec)
+	if err != nil {
+		t.Fatalf("McpAdd: %v", err)
+	}
+	if got := a.Display(); !strings.Contains(got, image) {
+		t.Errorf("Display() = %q, want it to show %q", got, image)
+	}
+}
+
+// An image reference the confirm modal would mask is refused.
+func TestCredentialShapedImageUnsupported(t *testing.T) {
+	img := "mcp/sk-" + strings.Repeat("a", 50) + atSHA + digest64
+	refuse(t, "token image", server(func(e *dockercat.Entry) { e.Image = img }), dockercat.ReasonImageCredential)
+}
+
+// D40: an env value or secret for a runtime or loader variable is refused,
+// whatever its case.
+func TestRuntimeEnvNamesUnsupported(t *testing.T) {
+	for _, n := range []string{"DOCKER_HOST", "docker_config", "LD_PRELOAD", "PATH", "http_proxy", "GIT_SSH_COMMAND"} {
+		refuse(t, "env "+n, server(func(e *dockercat.Entry) {
+			e.Env = []dockercat.EnvVar{{Name: n, Value: "tcp://evil.example:2375"}}
+		}), runenv.Reason(n))
+		refuse(t, "secret "+n, server(func(e *dockercat.Entry) {
+			e.Secrets = []dockercat.Secret{{Name: "x.y", Env: n}}
+		}), runenv.Reason(n))
+	}
+}
+
+func TestHeaderTrimmedAndDuplicateUnsupported(t *testing.T) {
+	d := accept(t, remote(func(e *dockercat.Entry) {
+		e.Remote.Headers = []dockercat.Header{{Name: "X-Pair", Value: "${A}:${B} "}}
+	}))
+	if want := []string{"X-Pair: ${secret:srv.a}:${secret:srv.b}"}; !slices.Equal(d.Spec.Headers, want) {
+		t.Errorf("headers = %q, want %q", d.Spec.Headers, want)
+	}
+	for _, second := range []string{"X-A", "x-a"} {
+		refuse(t, "duplicate "+second, remote(func(e *dockercat.Entry) {
+			e.Remote.Headers = []dockercat.Header{{Name: "X-A", Value: "1"}, {Name: second, Value: "2"}}
+		}), dockercat.ReasonHeaderTwice)
+	}
+}
+
+func TestOverlongSecretKeyUnsupported(t *testing.T) {
+	long := strings.Repeat("K", 140)
+	refuse(t, "secret", server(func(e *dockercat.Entry) { e.Secrets = []dockercat.Secret{{Env: long}} }), dockercat.ReasonSecretName)
+	refuse(t, "header", remote(func(e *dockercat.Entry) {
+		e.Remote.Headers = []dockercat.Header{{Name: authHeader, Value: "${" + long + "}"}}
+	}), dockercat.ReasonSecretName)
 }
