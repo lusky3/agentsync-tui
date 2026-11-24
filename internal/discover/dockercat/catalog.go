@@ -39,8 +39,9 @@ const (
 	cacheTTL = time.Hour
 	// cachePrefix namespaces this source's cache keys.
 	cachePrefix = "dockercat:"
-	// MaxBody caps the catalog; it is about 570 KB today.
-	MaxBody int64 = 4 << 20
+	// MaxBody caps the catalog; it is about 570 KB today, and parsing
+	// costs about 100 times the body in memory (D34).
+	MaxBody int64 = 2 << 20
 )
 
 // Errors Search returns besides those from netx. Match them with errors.Is.
@@ -304,7 +305,7 @@ func decodeItem(k, v *yaml.Node) (string, Entry, bool) {
 }
 
 // withinBudget reports whether the tree at n holds no alias, no mapping
-// of more than maxPairs pairs, and at most maxNodes nodes. It walks
+// that keysOK refuses, and at most maxNodes nodes. It walks
 // iteratively and stops as soon as visited plus pending nodes pass
 // maxNodes, so its own work is bounded by that.
 func withinBudget(n *yaml.Node) bool {
@@ -312,14 +313,33 @@ func withinBudget(n *yaml.Node) bool {
 	for count := 0; len(stack) > 0; count++ {
 		cur := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if cur.Kind == yaml.AliasNode ||
-			(cur.Kind == yaml.MappingNode && len(cur.Content) > 2*maxPairs) {
+		if cur.Kind == yaml.AliasNode || (cur.Kind == yaml.MappingNode && !keysOK(cur)) {
 			return false
 		}
 		stack = append(stack, cur.Content...)
 		if count+1+len(stack) > maxNodes { // visited plus pending
 			return false
 		}
+	}
+	return true
+}
+
+// keysOK reports whether mapping m has at most maxPairs pairs whose keys
+// are distinct plain scalars and none a merge key ("<<" or tagged
+// !!merge; the catalog uses none). yaml.v3's Decode compares every key
+// pair of a mapping and formats an error for each duplicate, and a merge
+// key multiplies that work, so neither may reach it.
+func keysOK(m *yaml.Node) bool {
+	if len(m.Content) > 2*maxPairs {
+		return false
+	}
+	seen := make(map[string]bool, len(m.Content)/2)
+	for i := 0; i < len(m.Content); i += 2 {
+		k := m.Content[i]
+		if k.Kind != yaml.ScalarNode || k.Value == "<<" || k.Tag == "!!merge" || seen[k.Value] {
+			return false
+		}
+		seen[k.Value] = true
 	}
 	return true
 }

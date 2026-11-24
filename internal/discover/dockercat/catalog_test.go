@@ -37,6 +37,7 @@ const (
 	keyLinear   = "linear"
 	cacheKey    = "dockercat:" + dockercat.CatalogURL
 	keyCommand  = "command"
+	keyOK       = "ok"
 )
 
 // fake counts requests to the catalog stand-in.
@@ -373,7 +374,7 @@ func TestWideMappingInEntrySkippedQuickly(t *testing.T) {
 	}
 	timed(t, func() {
 		p := searchBody(t, []byte(b.String()), "")
-		if got := keys(p); !slices.Equal(got, []string{"ok"}) || p.Skipped != 1 {
+		if got := keys(p); !slices.Equal(got, []string{keyOK}) || p.Skipped != 1 {
 			t.Errorf("keys %q, skipped %d; want the wide entry skipped", got, p.Skipped)
 		}
 	})
@@ -382,7 +383,7 @@ func TestWideMappingInEntrySkippedQuickly(t *testing.T) {
 func TestHugeRegistryRefusedQuickly(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("registry:\n")
-	for i := range 100000 {
+	for i := range 50000 { // under 2 MiB, ten times the entry cap
 		fmt.Fprintf(&b, "  k%d: {type: poci}\n", i)
 	}
 	c, _ := newClient(t, nil, serveBytes([]byte(b.String())))
@@ -563,4 +564,39 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func TestDuplicateKeyEntriesSkippedBeforeDecode(t *testing.T) {
+	var dup strings.Builder
+	for range 128 {
+		dup.WriteString("a: x, ")
+	}
+	var b strings.Builder
+	b.WriteString("registry:\n  ok:\n    type: poci\n")
+	for i := range 400 {
+		fmt.Fprintf(&b, "  d%d:\n    type: server\n    env: [{%s}, {%s}]\n", i, dup.String(), dup.String())
+	}
+	p := searchBody(t, []byte(b.String()), "")
+	if got := keys(p); !slices.Equal(got, []string{keyOK}) || p.Skipped != 400 {
+		t.Errorf("keys %q, skipped %d; want 400 skipped", got, p.Skipped)
+	}
+}
+
+func TestMergeKeyEntriesSkipped(t *testing.T) {
+	for name, extra := range map[string]string{
+		"merge key":  "    <<: {title: merged}\n",
+		"merge list": "    remote: {<<: [{url: 'https://a.example.com'}]}\n",
+		"merge tag":  "    !!merge m: {title: merged}\n",
+	} {
+		p := searchBody(t, entryWith(extra), "")
+		if got := keys(p); !slices.Equal(got, []string{keyOK}) || p.Skipped != 1 {
+			t.Errorf("%s: keys %q, skipped %d; want the merge entry skipped", name, got, p.Skipped)
+		}
+	}
+}
+
+func TestCatalogCapIsTwoMiB(t *testing.T) {
+	if dockercat.MaxBody != 2<<20 {
+		t.Errorf("MaxBody = %d, want 2 MiB", dockercat.MaxBody)
+	}
 }
