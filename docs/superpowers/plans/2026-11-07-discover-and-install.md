@@ -193,11 +193,11 @@ Dependency order: 1 → 2 → 3; 4,5 need 1-3; 5A needs 4,5; 5B needs 5A; 7 need
 **Interfaces:**
 - Consumes: Task 4-5 types (`mcpreg.Server`, `mcpreg.Draft`, `mcpreg.Prompt`, `mcpreg.Choices`, `mcpreg.ToDraft`).
 - Produces:
-  - `type Entry struct{ Source, ID, Title, Description string; Trust []string; Deprecated bool; Installs []Install }`
+  - `type Entry struct{ Source, ID, Title, Description string; Trust []string; Deprecated bool; Installs []Install }` (`ID` = the source's stable record key, the registry name or catalog key, so `(Source, ID)` is the row identity; the suggested agentsync id is each `Draft.Spec.ID`. `Trust` = entry-level lines; per-option lines stay in `Install.Draft.Trust`, and `InstallTrust(e, in)` joins them for the detail pane and the add form. `Deprecated` = status `deprecated` or `deleted` (D20). An entry with no known option gets one unsupported `Install`.)
   - `type Install struct{ Label string; Draft *mcpreg.Draft; Unsupported string }` (`Unsupported` non-empty means shown with that reason and not installable)
-  - `type Page struct{ Entries []Entry; Next string }`
+  - `type Page struct{ Entries []Entry; Next string; Skipped int }` (`Skipped` = records the source could not read, carried from `mcpreg.Page.Skipped`; Task 6 shows it, D21)
   - `type Source interface{ Name() string; Search(ctx context.Context, query, cursor string) (Page, error) }`
-  - `func Official(c *mcpreg.Client) Source`: adapts the registry; `Trust` = `["unreviewed: the registry does not scan entries", "namespace ownership is verified at publish time"]`; the adapter computes the id with `SuggestID` (taken = none at this point; the form re-checks) and passes it to `ToDraft`; choices whose `ToDraft` fails become `Unsupported` with the error text.
+  - `func Official(c *mcpreg.Client) Source`: adapts the registry; `Trust` = `["unreviewed: the registry does not scan entries", "namespace ownership is verified at publish time"]`; the adapter computes the id with `SuggestID` (taken = none at this point; the form re-checks) and passes it to `ToDraft`; choices whose `ToDraft` fails become `Unsupported` with the error text; when `SuggestID` gives `""` every choice is `Unsupported` (`the registry name gives no usable server id`). Client errors pass through unchanged; a nil client is `ErrNoClient`.
 
 - [ ] **Step 1: Write failing tests:** `TestOfficialAdapterMapsEntries`, `TestUnsafeIdentifierBecomesUnsupportedNotDropped` (the entry is still listed, with the refusal reason, and has no `Draft`), `TestDeprecatedCarriedThrough`, `TestTrustLinesAlwaysPresentForOfficial`, `TestSourceNameStable` (`"official"`).
 - [ ] **Step 2: Run** `go test ./internal/discover/mcpsrc/... -v`. Expected: FAIL.
