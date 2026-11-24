@@ -259,13 +259,14 @@ func toServer(e wireEntry) Server {
 
 func toPackage(p wirePackage) Package {
 	out := Package{
-		RegistryType: clean(p.RegistryType),
-		Identifier:   clean(p.Identifier),
-		Version:      clean(p.Version),
-		RuntimeHint:  clean(p.RuntimeHint),
-		Transport:    clean(p.Transport.Type),
-		RuntimeArgs:  toArgs(p.RuntimeArgs),
-		PackageArgs:  toArgs(p.PackageArgs),
+		RegistryType:    clean(p.RegistryType),
+		RegistryBaseURL: clean(p.RegistryBaseURL),
+		Identifier:      clean(p.Identifier),
+		Version:         clean(p.Version),
+		RuntimeHint:     clean(p.RuntimeHint),
+		Transport:       clean(p.Transport.Type),
+		RuntimeArgs:     toArgs(p.RuntimeArgs),
+		PackageArgs:     toArgs(p.PackageArgs),
 	}
 	for _, e := range p.Env {
 		out.Env = append(out.Env, toEnv(e.Name, e.Value, e.wireInput))

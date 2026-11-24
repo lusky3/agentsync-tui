@@ -25,9 +25,12 @@ type Server struct {
 // RegistryType is kept as the registry sent it, known or not.
 type Package struct {
 	RegistryType string
-	Identifier   string
-	Version      string
-	RuntimeHint  string
+	// RegistryBaseURL is the registry the package is published to, empty
+	// when the record leaves it to the default.
+	RegistryBaseURL string
+	Identifier      string
+	Version         string
+	RuntimeHint     string
 	// Transport is the transport type ("stdio", "streamable-http", "sse").
 	Transport   string
 	Env         []EnvVar
@@ -124,11 +127,12 @@ type wireServer struct {
 }
 
 type wirePackage struct {
-	RegistryType string `json:"registryType"`
-	Identifier   string `json:"identifier"`
-	Version      string `json:"version"`
-	RuntimeHint  string `json:"runtimeHint"`
-	Transport    struct {
+	RegistryType    string `json:"registryType"`
+	RegistryBaseURL string `json:"registryBaseUrl"`
+	Identifier      string `json:"identifier"`
+	Version         string `json:"version"`
+	RuntimeHint     string `json:"runtimeHint"`
+	Transport       struct {
 		Type string `json:"type"`
 	} `json:"transport"`
 	Env         []wireEnv      `json:"environmentVariables"`

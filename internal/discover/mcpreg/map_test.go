@@ -968,3 +968,34 @@ func TestNonOCIEnvNotForwardedAsArgs(t *testing.T) {
 	p.Env = []mcpreg.EnvVar{{Name: apiKey, Secret: true}}
 	checkStdio(t, draft(t, serverWith(p)), npx, "-y", npmPkg+"@"+mapVersion)
 }
+
+// npx and uvx resolve a bare name from the user's default registry, so a
+// package published elsewhere would install a different package.
+func TestRegistryBaseURL(t *testing.T) {
+	for _, c := range []struct {
+		p    mcpreg.Package
+		base string
+		ok   bool
+	}{
+		{pkgOf(typeNPM, npmPkg), "https://registry.npmjs.org", true},
+		{pkgOf(typeNPM, npmPkg), "https://registry.npmjs.org/", true},
+		{pkgOf(typeNPM, npmPkg), "https://npm.pkg.github.com", false},
+		{pkgOf(typeNPM, npmPkg), "http://registry.npmjs.org", false},
+		{pkgOf(typePyPI, pypiPkg), "https://pypi.org", true},
+		{pkgOf(typePyPI, pypiPkg), "https://test.pypi.org", false},
+		{pkgOf(typePyPI, pypiPkg), "https://registry.npmjs.org", false},
+		{ociPkg("ghcr.io/x/y:1", ""), "https://ghcr.io", true},
+		{ociPkg("ghcr.io/x/y:1", ""), "https://docker.io", false},
+		{ociPkg("example/demo:1", ""), "https://docker.io", true},
+		{ociPkg("docker.io/example/demo:1", ""), "https://docker.io", true},
+		{ociPkg("example/demo:1", ""), "https://ghcr.io", false},
+	} {
+		c.p.RegistryBaseURL = c.base
+		s := serverWith(c.p)
+		if c.ok {
+			draft(t, s)
+		} else {
+			unsupported(t, s, "registry")
+		}
+	}
+}

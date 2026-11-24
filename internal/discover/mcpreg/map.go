@@ -94,6 +94,7 @@ const (
 	reasonSpecRejected    = "agentsync would not accept the resulting server definition"
 	reasonCredentialName  = "the package name reads like a credential and could not be shown"
 	reasonHeaderTwice     = "declares the header "
+	reasonRegistryBase    = "is published to a package registry other than the one its runtime installs from"
 	reasonSecretLiteral   = "gives a fixed value for a secret; this tool never stores a secret as plain text"
 
 	trustMutableTag = "image tag is mutable (not digest-pinned)"
@@ -366,6 +367,9 @@ func checkPackage(p Package, rt pkgRuntime) (string, error) {
 	if !ok {
 		return "", ErrUnsafeIdentifier
 	}
+	if !baseOK(p) {
+		return "", unsupported(reasonRegistryBase)
+	}
 	if err := checkTransport(p.Transport); err != nil {
 		return "", err
 	}
@@ -378,6 +382,34 @@ func checkPackage(p Package, rt pkgRuntime) (string, error) {
 		return "", unsupported(reasonTooMany)
 	}
 	return token, nil
+}
+
+// defaultBases are the registries npx and uvx install a bare name from.
+var defaultBases = map[string]string{"npm": "https://registry.npmjs.org", "pypi": "https://pypi.org"}
+
+// baseOK reports whether the package's registryBaseUrl, if any, is where
+// its runtime will look: the default registry for npm and pypi (npx and
+// uvx would fetch a bare name from there, whatever the record says), and
+// for oci the registry host the image reference itself names.
+func baseOK(p Package) bool {
+	base := strings.TrimSuffix(p.RegistryBaseURL, "/")
+	if base == "" {
+		return true
+	}
+	want := defaultBases[p.RegistryType]
+	if p.RegistryType == registryOCI {
+		want = httpsPrefix + ociHost(p.Identifier)
+	}
+	return strings.EqualFold(base, want)
+}
+
+// ociHost is the registry an image reference pulls from: its first path
+// component when that looks like a host, else Docker Hub.
+func ociHost(ref string) string {
+	if first, _, ok := strings.Cut(ref, "/"); ok && (first == "localhost" || strings.ContainsAny(first, ".:")) {
+		return first
+	}
+	return "docker.io"
 }
 
 // checkTransport accepts only stdio: a package's own url/headers for a

@@ -181,7 +181,7 @@ func TestParsesRealSample(t *testing.T) {
 func checkFSPackage(t *testing.T, pk mcpreg.Package) {
 	t.Helper()
 	if pk.RegistryType != "npm" || pk.Identifier != "remote-filesystem-mcp-server" || pk.Version != "0.1.5" ||
-		pk.Transport != "stdio" || pk.RuntimeHint != "npx" {
+		pk.Transport != "stdio" || pk.RuntimeHint != "npx" || pk.RegistryBaseURL != "https://registry.npmjs.org" {
 		t.Errorf("package = %+v", pk)
 	}
 	if key := env(t, pk.Env, "GCS_PRIVATE_KEY"); !key.Secret || key.Required {
