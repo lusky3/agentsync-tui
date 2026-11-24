@@ -1,6 +1,7 @@
 package dockercat
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -16,7 +17,7 @@ func FuzzDecodeCatalog(f *testing.F) {
 	}
 	f.Add([]byte("registry:\n  a:\n    type: remote\n    remote: {transport_type: sse, url: 'https://a.example.com', headers: {A: 'Bearer ${T}'}}\n"))
 	f.Fuzz(func(t *testing.T, raw []byte) {
-		cat, err := decode(raw)
+		cat, err := decode(context.Background(), raw)
 		if err != nil {
 			return
 		}

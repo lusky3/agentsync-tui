@@ -35,6 +35,8 @@ const (
 	keyFS       = "filesystem"
 	keyCurl     = "curl"
 	keyLinear   = "linear"
+	cacheKey    = "dockercat:" + dockercat.CatalogURL
+	keyCommand  = "command"
 )
 
 // fake counts requests to the catalog stand-in.
@@ -239,7 +241,7 @@ func TestCachedForOneHour(t *testing.T) {
 	if len(second.Entries) != 1 || !reflect.DeepEqual(second.Entries[0], find(t, first, keyStripe)) {
 		t.Errorf("cached search differs")
 	}
-	if _, ok := dc.Get("dockercat:"+dockercat.CatalogURL, 59*time.Minute); !ok {
+	if _, ok := dc.Get(cacheKey, 59*time.Minute); !ok {
 		t.Error("no entry under the source-namespaced key")
 	}
 }
@@ -305,6 +307,19 @@ const hostileYAML = `registry:
     secrets:
       - name: x
         env: "API\u200B_KEY"
+  image:
+    type: server
+    image: "mcp/x\e[0m@sha256:` + digest64 + `"
+  command:
+    type: server
+    image: mcp/x@sha256:` + digest64 + `
+    command: ["--tools=all\u200B"]
+  "esc\e]8;;http://x\akey":
+    type: poci
+  "bidi\u202Ekey":
+    type: poci
+  "nul\0key":
+    type: poci
 `
 
 const digest64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -320,9 +335,85 @@ func TestSanitizesHostileText(t *testing.T) {
 	if !strings.Contains(e.Title, "Click") {
 		t.Errorf("title lost its text: %q", e.Title)
 	}
-	in := find(t, p, "names").Installs[0]
-	if in.Draft != nil || in.Unsupported != dockercat.ReasonNames {
-		t.Errorf("a secret name changed by sanitizing: %+v", in)
+	for _, key := range []string{"names", "image", keyCommand} {
+		in := find(t, p, key).Installs[0]
+		if in.Draft != nil || in.Unsupported != dockercat.ReasonNames {
+			t.Errorf("%s changed by sanitizing: %+v", key, in)
+		}
+	}
+	if got := keys(p); !slices.Equal(got, []string{keyCommand, "evil", "image", "names"}) || p.Skipped != 3 {
+		t.Errorf("keys %q, skipped %d; want the three hostile keys skipped", got, p.Skipped)
+	}
+}
+
+func TestDuplicateKeyKeepsFirst(t *testing.T) {
+	body := "registry:\n  dup:\n    type: poci\n    title: first\n  dup:\n    type: poci\n    title: second\n"
+	p := searchBody(t, []byte(body), "")
+	if len(p.Entries) != 1 || p.Entries[0].Title != "first" || p.Skipped != 1 {
+		t.Errorf("entries %+v, skipped %d; want the first dup and one skipped", p.Entries, p.Skipped)
+	}
+}
+
+// timed fails t when f takes over a second (timeScale seconds under the
+// race detector).
+func timed(t *testing.T, f func()) {
+	t.Helper()
+	start := time.Now()
+	f()
+	if d := time.Since(start); d > timeScale*time.Second {
+		t.Errorf("took %v", d)
+	}
+}
+
+func TestWideMappingInEntrySkippedQuickly(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("registry:\n  ok:\n    type: poci\n  wide:\n    type: remote\n    remote:\n      headers:\n")
+	for i := range 10000 {
+		fmt.Fprintf(&b, "        h%d: v\n", i)
+	}
+	timed(t, func() {
+		p := searchBody(t, []byte(b.String()), "")
+		if got := keys(p); !slices.Equal(got, []string{"ok"}) || p.Skipped != 1 {
+			t.Errorf("keys %q, skipped %d; want the wide entry skipped", got, p.Skipped)
+		}
+	})
+}
+
+func TestHugeRegistryRefusedQuickly(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("registry:\n")
+	for i := range 100000 {
+		fmt.Fprintf(&b, "  k%d: {type: poci}\n", i)
+	}
+	c, _ := newClient(t, nil, serveBytes([]byte(b.String())))
+	timed(t, func() {
+		if _, err := c.Search(context.Background(), "", ""); !errors.Is(err, dockercat.ErrBadResponse) {
+			t.Errorf(errWant, err, dockercat.ErrBadResponse)
+		}
+	})
+}
+
+func TestCanceledContextStopsCachedDecode(t *testing.T) {
+	dc := openCache(t)
+	if err := dc.Put(cacheKey, readFile(t, catalogPath)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := dockercat.NewClient(nil, dc).Search(ctx, "", ""); !errors.Is(err, context.Canceled) {
+		t.Errorf(errWant, err, context.Canceled)
+	}
+}
+
+func TestOversizeCachedCatalogNotServed(t *testing.T) {
+	dc := openCache(t)
+	big := append(readFile(t, catalogPath), '#')
+	big = append(big, bytes.Repeat([]byte("x"), int(dockercat.MaxBody))...)
+	if err := dc.Put(cacheKey, big); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := dockercat.NewClient(nil, dc).Search(context.Background(), "", ""); err == nil {
+		t.Errorf("an oversize cached catalog was served: %d entries", len(p.Entries))
 	}
 }
 
@@ -432,4 +523,44 @@ func TestSkippedOnlyOnFirstPage(t *testing.T) {
 	if first.Skipped != 1 || second.Skipped != 0 || len(second.Entries) != 10 {
 		t.Errorf("skipped %d then %d, second page %d entries", first.Skipped, second.Skipped, len(second.Entries))
 	}
+}
+
+// entryWith is a one-entry catalog whose remote entry ends with extra.
+func entryWith(extra string) []byte {
+	return []byte("registry:\n  ok:\n    type: poci\n  e:\n    type: remote\n" + extra)
+}
+
+func TestEntryBudget(t *testing.T) {
+	var pairs128, pairs129, nodes strings.Builder
+	for i := range 129 {
+		if i < 128 {
+			fmt.Fprintf(&pairs128, "      h%d: v\n", i)
+		}
+		fmt.Fprintf(&pairs129, "      h%d: v\n", i)
+	}
+	for i := range 10000 {
+		fmt.Fprintf(&nodes, "      - t%d\n", i)
+	}
+	for name, tc := range map[string]struct {
+		extra string
+		kept  bool
+	}{
+		"128 pairs":    {"    remote:\n      transport_type: sse\n    headers2:\n" + pairs128.String(), true},
+		"129 pairs":    {"    headers2:\n" + pairs129.String(), false},
+		"10000 nodes":  {"    tools:\n" + nodes.String(), false},
+		"small entry":  {"    tools:\n      - a\n", true},
+		"alias inside": {"    title: &t x\n    description: *t\n", false},
+	} {
+		p := searchBody(t, entryWith(tc.extra), "")
+		if kept := len(p.Entries) == 2; kept != tc.kept || p.Skipped != boolInt(!tc.kept) {
+			t.Errorf("%s: kept %v (skipped %d), want %v", name, kept, p.Skipped, tc.kept)
+		}
+	}
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

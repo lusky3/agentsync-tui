@@ -23,9 +23,10 @@ const (
 	KindPoci   = "poci"
 )
 
-// Entry is one catalog entry, every string sanitized. Names (env and
-// secret variable names, header names) that sanitizing would have changed
-// are kept as cleaned text but make ToDraft refuse the entry.
+// Entry is one catalog entry, every string sanitized. When sanitizing
+// would have changed text that reaches argv or a variable name (the
+// image, a command argument, an env or secret variable name, a header
+// name), the cleaned text is kept but ToDraft refuses the entry.
 type Entry struct {
 	Kind           string
 	Title          string
@@ -41,8 +42,8 @@ type Entry struct {
 	// OAuth is true when the entry declares an OAuth sign-in.
 	OAuth bool
 
-	// namesChanged is set when a name changed under sanitizing.
-	namesChanged bool
+	// notPlain is set when argv text or a name changed under sanitizing.
+	notPlain bool
 }
 
 // EnvVar is a plain environment variable with a fixed value.
@@ -97,31 +98,33 @@ func toCatalogEntry(w wireEntry) Entry {
 		Kind:           clean(w.Type),
 		Title:          clean(w.Title),
 		Description:    clean(w.Description),
-		Image:          clean(w.Image),
-		Command:        cleanAll(w.Command),
 		Volumes:        cleanAll(w.Volumes),
 		DisableNetwork: w.DisableNetwork,
 		AllowHosts:     cleanAll(w.AllowHosts),
 		OAuth:          present(w.OAuth),
 		Remote:         Remote{Transport: clean(w.Remote.Transport), URL: clean(w.Remote.URL)},
 	}
+	e.Image = e.plain(w.Image)
+	for _, c := range w.Command {
+		e.Command = append(e.Command, e.plain(c))
+	}
 	for _, v := range w.Env {
-		e.Env = append(e.Env, EnvVar{Name: e.name(v.Name), Value: clean(v.Value)})
+		e.Env = append(e.Env, EnvVar{Name: e.plain(v.Name), Value: clean(v.Value)})
 	}
 	for _, s := range w.Secrets {
-		e.Secrets = append(e.Secrets, Secret{Name: clean(s.Name), Env: e.name(s.Env)})
+		e.Secrets = append(e.Secrets, Secret{Name: clean(s.Name), Env: e.plain(s.Env)})
 	}
 	for _, k := range slices.Sorted(maps.Keys(w.Remote.Headers)) {
-		e.Remote.Headers = append(e.Remote.Headers, Header{Name: e.name(k), Value: clean(w.Remote.Headers[k])})
+		e.Remote.Headers = append(e.Remote.Headers, Header{Name: e.plain(k), Value: clean(w.Remote.Headers[k])})
 	}
 	return e
 }
 
-// name cleans a name and records whether cleaning changed it.
-func (e *Entry) name(s string) string {
+// plain cleans s and records whether cleaning changed it.
+func (e *Entry) plain(s string) string {
 	c := clean(s)
 	if c != s {
-		e.namesChanged = true
+		e.notPlain = true
 	}
 	return c
 }
@@ -152,7 +155,7 @@ const (
 	ReasonTransport  = "the remote uses a transport this tool does not set up"
 	ReasonURL        = "the remote URL is not a plain https URL"
 	ReasonHeader     = "sets a header this tool cannot pass safely"
-	ReasonNames      = "declares a variable or header name that is not plain text"
+	ReasonNames      = "its image, command, variable or header names are not plain text"
 	ReasonEnvName    = "declares an environment variable name agentsync cannot pass"
 	ReasonEnvValue   = "sets an environment value agentsync cannot pass safely"
 	ReasonSecretName = "declares a secret whose name cannot form a vault key"
@@ -217,7 +220,7 @@ func ToDraft(key, id string, e Entry) (mcpreg.Draft, error) {
 	if !ident.Valid(id) {
 		return mcpreg.Draft{}, mcpreg.ErrInvalidID
 	}
-	if e.namesChanged {
+	if e.notPlain {
 		return mcpreg.Draft{}, unsupported(ReasonNames)
 	}
 	b := &builder{id: id, refs: map[string]string{}}

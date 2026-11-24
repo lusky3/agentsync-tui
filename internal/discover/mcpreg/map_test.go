@@ -43,6 +43,7 @@ const (
 	vFlag        = "-v"
 	npx          = "npx"
 	commaVal     = "a,b"
+	readOnly     = "read-only"
 	backslashVal = `a\b`
 	spaceVal     = "a b"
 	stealRef     = "${secret:github.token}"
@@ -436,13 +437,13 @@ func TestFixedPackageArgumentsAppended(t *testing.T) {
 	p := pkgOf(typeNPM, npmPkg)
 	p.PackageArgs = []mcpreg.Argument{
 		{Type: positional, Name: "root_dir", Value: "/data"},
-		{Type: named, Name: modeFlag, Value: "read-only", Required: true},
+		{Type: named, Name: modeFlag, Value: readOnly, Required: true},
 		{Type: named, Name: vFlag, Value: "--level=2"},
 		{Type: positional, Name: "list", Value: commaVal},
 		{Type: named, Name: "--skipped", Default: "x"},
 	}
 	d := draft(t, serverWith(p))
-	checkStdio(t, d, npx, "-y", npmPkg+"@"+mapVersion, "/data", modeFlag, "read-only", vFlag, "--level=2", commaVal)
+	checkStdio(t, d, npx, "-y", npmPkg+"@"+mapVersion, "/data", modeFlag, readOnly, vFlag, "--level=2", commaVal)
 	a, _ := actions.McpAdd(d.Spec)
 	if !slices.Contains(a.Argv, `-y,`+npmPkg+"@"+mapVersion+`,/data,--mode,read-only,-v,--level=2,a\,b`) {
 		t.Errorf("argv = %q, want the comma in a,b escaped", a.Argv)
@@ -488,7 +489,7 @@ func TestRequiredArgumentWithoutValueUnsupported(t *testing.T) {
 
 func TestOptionalArgumentWithoutValueOmitted(t *testing.T) {
 	p := pkgOf(typePyPI, pypiPkg)
-	p.PackageArgs = []mcpreg.Argument{{Type: named, Name: modeFlag, Default: "read-only"}}
+	p.PackageArgs = []mcpreg.Argument{{Type: named, Name: modeFlag, Default: readOnly}}
 	checkStdio(t, draft(t, serverWith(p)), "uvx", pypiPkg+"=="+mapVersion)
 }
 

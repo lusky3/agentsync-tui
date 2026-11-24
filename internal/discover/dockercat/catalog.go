@@ -164,8 +164,12 @@ func filter(items []item, query string) []item {
 func (c *Client) load(ctx context.Context) (catalog, error) {
 	key := cachePrefix + CatalogURL
 	if raw, ok := c.cache.Get(key, cacheTTL); ok {
-		if cat, err := decode(raw); err == nil {
+		cat, err := decode(ctx, raw)
+		if err == nil {
 			return cat, nil
+		}
+		if ctx.Err() != nil {
+			return catalog{}, ctx.Err()
 		}
 	}
 	if c.hc == nil {
@@ -178,7 +182,7 @@ func (c *Client) load(ctx context.Context) (catalog, error) {
 	if looksHTML(raw) {
 		return catalog{}, fmt.Errorf("%w: %s sent an HTML page", ErrBlocked, Host)
 	}
-	cat, err := decode(raw)
+	cat, err := decode(ctx, raw)
 	if err != nil {
 		return catalog{}, err
 	}
@@ -199,14 +203,27 @@ func looksHTML(b []byte) bool {
 	return bytes.HasPrefix(bytes.TrimLeft(b, " \t\r\n"), []byte("<"))
 }
 
-// decode parses a catalog. The document is first parsed into a yaml.Node
-// tree, which never expands aliases; each entry is then checked and
-// decoded on its own into typed structs, so one bad entry is skipped (and
-// counted) instead of losing the catalog. An entry holding any alias
-// (the catalog uses none) is skipped before it is decoded, so an alias
-// bomb is never expanded. YAML errors are not wrapped: their text can
-// quote what the server sent.
-func decode(raw []byte) (catalog, error) {
+// Limits on the decode work one catalog may cause. yaml.v3's Decode checks
+// every mapping for duplicate keys in time quadratic in its size and
+// expands aliases, so only small, alias-free entries are ever decoded.
+const (
+	// maxEntries caps the registry; the catalog has about 320 entries.
+	maxEntries = 5000
+	// maxPairs caps the pairs of any one mapping inside an entry.
+	maxPairs = 128
+	// maxNodes caps the nodes of one entry.
+	maxNodes = 10000
+)
+
+// decode parses a catalog. The document is parsed into a yaml.Node tree,
+// which neither expands aliases nor checks keys, and the envelope and the
+// registry mapping are walked by hand: nothing above an entry is passed
+// to Decode. Each entry is then checked (budget, no alias) and decoded on
+// its own into typed structs, so one bad entry is skipped (and counted)
+// instead of losing the catalog. A repeated key keeps the first entry;
+// later ones are skipped undecoded. ctx is checked between entries. YAML
+// errors are not wrapped: their text can quote what the server sent.
+func decode(ctx context.Context, raw []byte) (catalog, error) {
 	bad := fmt.Errorf("%w from %s", ErrBadResponse, Host)
 	if int64(len(raw)) > MaxBody {
 		return catalog{}, bad
@@ -216,14 +233,21 @@ func decode(raw []byte) (catalog, error) {
 		return catalog{}, bad
 	}
 	reg, ok := registryNode(&doc)
-	if !ok {
+	if !ok || len(reg.Content) > 2*maxEntries {
 		return catalog{}, bad
 	}
 	var cat catalog
 	seen := map[string]bool{}
 	for i := 0; i+1 < len(reg.Content); i += 2 {
+		if err := ctx.Err(); err != nil {
+			return catalog{}, err
+		}
+		if seen[reg.Content[i].Value] {
+			cat.skipped++
+			continue
+		}
 		key, e, ok := decodeItem(reg.Content[i], reg.Content[i+1])
-		if !ok || seen[key] {
+		if !ok {
 			cat.skipped++
 			continue
 		}
@@ -265,11 +289,11 @@ func registryNode(doc *yaml.Node) (*yaml.Node, bool) {
 
 // decodeItem decodes one entry. The key must be plain text that
 // sanitizing leaves unchanged (it is the entry's identity); the value
-// must be an alias-free mapping that decodes into wireEntry without a
-// type error.
+// must be a mapping within budget (see withinBudget) that decodes into
+// wireEntry without a type error.
 func decodeItem(k, v *yaml.Node) (string, Entry, bool) {
 	if k.Kind != yaml.ScalarNode || k.Value == "" || clean(k.Value) != k.Value ||
-		v.Kind != yaml.MappingNode || hasAlias(v) {
+		v.Kind != yaml.MappingNode || !withinBudget(v) {
 		return "", Entry{}, false
 	}
 	var w wireEntry
@@ -279,18 +303,25 @@ func decodeItem(k, v *yaml.Node) (string, Entry, bool) {
 	return k.Value, toCatalogEntry(w), true
 }
 
-// hasAlias reports whether n or anything below it is an alias. The tree
-// is the parser's, so its depth is already bounded by the YAML library.
-func hasAlias(n *yaml.Node) bool {
-	if n.Kind == yaml.AliasNode {
-		return true
-	}
-	for _, c := range n.Content {
-		if hasAlias(c) {
-			return true
+// withinBudget reports whether the tree at n holds no alias, no mapping
+// of more than maxPairs pairs, and at most maxNodes nodes. It walks
+// iteratively and stops as soon as visited plus pending nodes pass
+// maxNodes, so its own work is bounded by that.
+func withinBudget(n *yaml.Node) bool {
+	stack := []*yaml.Node{n}
+	for count := 0; len(stack) > 0; count++ {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if cur.Kind == yaml.AliasNode ||
+			(cur.Kind == yaml.MappingNode && len(cur.Content) > 2*maxPairs) {
+			return false
+		}
+		stack = append(stack, cur.Content...)
+		if count+1+len(stack) > maxNodes { // visited plus pending
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // clean is the boundary every catalog string crosses.

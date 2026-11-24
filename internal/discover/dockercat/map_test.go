@@ -163,7 +163,7 @@ func TestSSERemoteAndBearerPrefixKept(t *testing.T) {
 }
 
 func TestUnsafeHeaderUnsupported(t *testing.T) {
-	for _, v := range []string{"${A-B}", "$X", "${X", "Bearer {X}", "${X}}", "a $" + tokenName, "${}", "x\x01"} {
+	for _, v := range []string{"${A-B}", "$X", "${X", "Bearer {X}", "${X}}", "a $" + tokenName, "${}", "x\x01", "$${A}", "x}${A}"} {
 		refuse(t, v, remote(func(e *dockercat.Entry) {
 			e.Remote.Headers = []dockercat.Header{{Name: authHeader, Value: v}}
 		}), dockercat.ReasonHeader)
@@ -187,7 +187,7 @@ func TestFilesystemTemplateIsUnsupportedNotRendered(t *testing.T) {
 	for name, mod := range map[string]func(*dockercat.Entry){
 		"env value":  func(e *dockercat.Entry) { e.Env = []dockercat.EnvVar{{Name: "P", Value: "{{x.y}}"}} },
 		"secret env": func(e *dockercat.Entry) { e.Secrets = []dockercat.Secret{{Name: "s", Env: "{{x}}"}} },
-		"command":    func(e *dockercat.Entry) { e.Command = []string{"{{filesystem.paths|volume|into}}"} },
+		keyCommand:   func(e *dockercat.Entry) { e.Command = []string{"{{filesystem.paths|volume|into}}"} },
 	} {
 		refuse(t, name, server(mod), dockercat.ReasonTemplate)
 	}
@@ -349,4 +349,9 @@ func TestEveryInstallableDraftPassesMcpAdd(t *testing.T) {
 	if n != 4 {
 		t.Errorf("%d installable entries, want 4", n)
 	}
+}
+
+func TestOverlongURLRejectedByAddGate(t *testing.T) {
+	u := "https://a.example.com/" + strings.Repeat("a", 2049-len("https://a.example.com/"))
+	refuse(t, "2049-byte url", remote(func(e *dockercat.Entry) { e.Remote.URL = u }), dockercat.ReasonRejected)
 }
