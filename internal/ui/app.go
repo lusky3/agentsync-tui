@@ -266,6 +266,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.requestChain(msg.Action, msg.Then, msg.Scope)
 	case GotoMsg:
 		return a, a.goTo(msg.Title)
+	case ComposeMcpMsg:
+		return a, a.compose(msg)
 	case RunMsg:
 		return a, a.finish(msg)
 	case EditFileMsg:

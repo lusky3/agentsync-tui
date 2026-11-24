@@ -35,7 +35,11 @@ const (
 	nFields
 )
 
-var serverTypes = []string{"stdio", "http", "sse"}
+// stdio is the server type whose target is a command (the others take a
+// URL).
+const stdio = "stdio"
+
+var serverTypes = []string{stdio, "http", "sse"}
 
 // maxField caps one input's length (bytes).
 const maxField = 4096
@@ -63,6 +67,15 @@ type form struct {
 	headers  []kv
 	existing map[string]bool
 	err      string // display-safe
+
+	// Set only when the form was prefilled from a discovered entry
+	// (newPrefilledForm): the values the entry still needs, focused after
+	// the agents field; the provenance and trust lines shown above the
+	// fields (display-safe); and the generated secret references that
+	// follow the id.
+	prompts []prompt
+	banner  []string
+	refs    genRefs
 }
 
 func newForm(existing map[string]bool) *form {
@@ -81,9 +94,9 @@ func (f *form) update(k tea.KeyPressMsg) formResult {
 	case "ctrl+s":
 		return formSubmit
 	case "tab", "down":
-		f.focus = (f.focus + 1) % nFields
+		f.focus = (f.focus + 1) % f.count()
 	case "shift+tab", "up":
-		f.focus = (f.focus + nFields - 1) % nFields
+		f.focus = (f.focus + f.count() - 1) % f.count()
 	case "enter":
 		return f.enter()
 	case "left":
@@ -100,10 +113,23 @@ func (f *form) update(k tea.KeyPressMsg) formResult {
 		f.dropLastEntry()
 	default:
 		if f.focus != fType {
-			f.vals[f.focus].Key(k)
+			f.input(f.focus).Key(k)
 		}
 	}
+	f.followRefs()
 	return formNone
+}
+
+// count is the number of focusable fields: the fixed ones and the prompts.
+func (f *form) count() int { return nFields + len(f.prompts) }
+
+// input is the text input of field i (not fType): a fixed field or, past
+// them, a prompt.
+func (f *form) input(i int) *ui.Field {
+	if i >= nFields {
+		return &f.prompts[i-nFields].val
+	}
+	return &f.vals[i]
 }
 
 // enter adds a pending env/header entry to its list, submits from the
@@ -112,7 +138,7 @@ func (f *form) enter() formResult {
 	switch {
 	case (f.focus == fEnv || f.focus == fHeader) && strings.TrimSpace(f.vals[f.focus].Value) != "":
 		f.addEntry()
-	case f.focus == fAgents:
+	case f.focus == f.count()-1:
 		return formSubmit
 	default:
 		f.focus++
@@ -140,13 +166,16 @@ func (f *form) dropLastEntry() {
 }
 
 // paste inserts bracketed-paste content into the focused input.
-func (f *form) paste(s string) { f.insert(s) }
+func (f *form) paste(s string) {
+	f.insert(s)
+	f.followRefs()
+}
 
 func (f *form) insert(s string) {
 	if f.focus == fType {
 		return
 	}
-	f.vals[f.focus].Insert(s)
+	f.input(f.focus).Insert(s)
 }
 
 // addEntry moves the focused env/header input into its list.
@@ -192,7 +221,7 @@ func addKV(list []kv, in, sep string) ([]kv, error) {
 // input that has not been added with enter yet.
 func (f *form) spec() (actions.AddSpec, error) {
 	s := actions.AddSpec{ID: strings.TrimSpace(f.vals[fID].Value), Type: serverTypes[f.typ]}
-	if t := strings.TrimSpace(f.vals[fTarget].Value); s.Type == "stdio" {
+	if t := strings.TrimSpace(f.vals[fTarget].Value); s.Type == stdio {
 		s.Command = t
 	} else {
 		s.URL = t
@@ -205,6 +234,9 @@ func (f *form) spec() (actions.AddSpec, error) {
 		s.Args = args
 	}
 	env, headers, err := f.withPending()
+	if err == nil {
+		env, err = f.withPrompts(env)
+	}
 	if err != nil {
 		return s, err
 	}
@@ -288,12 +320,15 @@ func echo(v string) string {
 
 // live renders the focused-or-not input text of field i, masked.
 func (f *form) live(i int) string {
+	if i >= nFields {
+		return f.prompts[i-nFields].live()
+	}
 	v := f.vals[i].Value
 	switch i {
 	case fType:
 		return "‹" + serverTypes[f.typ] + "›"
 	case fTarget:
-		if serverTypes[f.typ] == "stdio" {
+		if serverTypes[f.typ] == stdio {
 			return mask.OneLine(mask.FreeTextLive(v))
 		}
 		return mask.OneLine(mask.Text(v))
@@ -315,15 +350,20 @@ func (f *form) live(i int) string {
 
 func (f *form) view() string {
 	labels := [nFields]string{"id", "type", "command", "args", "env", "headers", "agents"}
-	if serverTypes[f.typ] != "stdio" {
+	if serverTypes[f.typ] != stdio {
 		labels[fTarget] = "url"
 	}
-	out := []string{theme.Bold.Render("Add MCP server"), ""}
+	out := []string{theme.Bold.Render("Add MCP server")}
+	for _, l := range f.banner {
+		out = append(out, theme.Warn.Render(l))
+	}
+	out = append(out, "")
 	warn := f.literalWarning()
 	for i := 0; i < nFields; i++ {
 		out = append(out, f.fieldLine(i, labels[i]))
 		out = append(out, f.fieldNotes(i, warn)...)
 	}
+	out = append(out, f.promptLines(warn)...)
 	out = append(out, "")
 	if f.err != "" {
 		out = append(out, theme.Bad.Render(f.err))

@@ -51,6 +51,9 @@ type Screen struct {
 
 	verify ui.Verifier // the pre-mutation re-read of the source tree
 
+	added *pendingAdd // a submitted add whose outcome drives the after-add note
+	vault ui.Rounds   // the after-add `secret list` read
+
 	width, height int
 }
 
@@ -83,7 +86,7 @@ func New(d ui.Deps) *Screen {
 }
 
 // Title implements ui.Screen.
-func (s *Screen) Title() string { return "MCP servers" }
+func (s *Screen) Title() string { return ui.ServersTitle }
 
 // Init is exactly Refresh (the shell may skip Init and only Refresh later).
 func (s *Screen) Init() tea.Cmd { return s.Refresh() }
@@ -97,11 +100,14 @@ func (s *Screen) SetScope(r runner.Runner, sc runner.Scope, home string) {
 	s.loaded, s.servers, s.dirGone, s.loadWarn = false, nil, false, ""
 	s.states, s.statusOK, s.stNote = nil, false, ""
 	s.list, s.detail, s.form, s.note = ui.List{}, false, nil, ""
+	s.added = nil
+	s.vault.Supersede()
 }
 
 // Shutdown implements ui.Shutdowner.
 func (s *Screen) Shutdown() {
 	s.reads.Cancel()
+	s.vault.Cancel()
 	s.verify.Invalidate()
 }
 
@@ -172,8 +178,19 @@ func (s *Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v, ok := s.verify.Accept(msg); ok {
 			return s, s.verified(v.(verification))
 		}
+	case ui.ComposeMcpMsg:
+		s.OpenPrefilled(msg)
+	case ui.RunMsg:
+		return s, s.addOutcome(msg)
+	case ui.NotRunMsg:
+		s.addDropped(msg)
+	case vaultMsg:
+		if s.vault.Current(msg.gen) {
+			s.note = afterAddNote(msg)
+		}
 	case tea.PasteMsg:
 		if s.form != nil {
+			s.form.existing = s.ids()
 			s.form.paste(msg.Content)
 		}
 	case tea.KeyPressMsg:
@@ -321,15 +338,17 @@ func (s *Screen) edit() tea.Cmd {
 }
 
 func (s *Screen) formKey(k tea.KeyPressMsg) tea.Cmd {
+	s.form.existing = s.ids() // the list may have refreshed since the form opened
 	switch s.form.update(k) {
 	case formCancel:
 		s.form = nil
 	case formSubmit:
-		s.form.existing = s.ids() // the list may have refreshed since the form opened
 		act, err := s.form.submit()
 		if err != nil {
 			return nil // shown inline by the form
 		}
+		spec, _ := s.form.spec() // submit built act from this very spec
+		s.expectAdd(act, spec)
 		s.form = nil
 		return ui.DoOr(act, nil, &s.note, s.scope)
 	}
