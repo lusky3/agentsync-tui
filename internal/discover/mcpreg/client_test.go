@@ -468,8 +468,8 @@ func TestUncleanOrCollidingInputNamesSkipEntry(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c, _ := newClient(t, nil, serveBytes(pageOf(entry, goodEntry)))
 			p, err := c.Search(context.Background(), anyQuery, "")
-			if err != nil || len(p.Servers) != 1 || p.Skipped != 1 {
-				t.Errorf("page = %+v, err = %v; want the entry skipped", p, err)
+			if err != nil || len(p.Servers) != 1 || p.Servers[0].Name != "io.example/good" || p.Skipped != 1 {
+				t.Errorf("page = %+v, err = %v; want the entry skipped and only io.example/good kept", p, err)
 			}
 		})
 	}
