@@ -583,13 +583,18 @@ func versionOK(typ, id, v string) bool {
 }
 
 func TestNPMVersionShapes(t *testing.T) {
-	for _, v := range []string{mapVersion, "0.0.1", "1.0.0-beta.1+build.5", "2.0.0-rc-1", "latest", "next", "beta.2"} {
+	for _, v := range []string{mapVersion, "0.0.1", "1.0.0-beta.1+build.5", "2.0.0-rc-1", "latest", "next", "beta.2",
+		"1.2.3-0", "1.2.3+01", "1.2.3-0a", "1.2.3-alpha.0", "1.2.3-x.7.z.92", "xenon", "x-ray", "vnext"} {
 		if !versionOK(typeNPM, npmPkg, v) {
 			t.Errorf("npm version %q refused", v)
 		}
 	}
 	bad := []string{"1.0.0.tgz", "1.0.0+x.tgz", "1.0.0-x.tgz", "1.0.0+b.tar", "1.0.0+x.TGZ", "1.0.0-x.tar.gz", "1.0.tar", "1.0.tar.gz", "LATEST.TGZ", "next.Tar.Gz", "1.0", "01.0.0", "1.0.0;x",
-		"x/y", "file:x", "~1.0.0", "^1.0.0", ">=1", "1.x", ".hidden", strings.Repeat("a", 129)}
+		"x/y", "file:x", "~1.0.0", "^1.0.0", ">=1", "1.x", ".hidden", strings.Repeat("a", 129),
+		// strict semver: a numeric prerelease identifier has no leading zero
+		"1.2.3-01", "1.2.3-beta.01", "1.2.3-00",
+		// letter-first, but npm reads these as versions or ranges, not tags
+		"v1", "V1", "v1.2", "v1.2.3", "v1.x", "x", "X", "x.x", "x.1", "v", "vx"}
 	for _, v := range bad {
 		if versionOK(typeNPM, npmPkg, v) {
 			t.Errorf("npm version %q accepted", v)

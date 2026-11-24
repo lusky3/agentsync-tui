@@ -126,11 +126,15 @@ var (
 	npmNameRe = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]{0,213}$`)
 	// PyPI project names (PEP 508 / 503): letters, digits, ._- inside.
 	pypiNameRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]{0,198}[A-Za-z0-9])?$`)
-	// npm versions: a strict semver (optional prerelease and build), or a
-	// dist-tag (letter first); see npmVersionOK. Anything else (a range, a
-	// file or URL spec) is refused.
-	semverRe  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
+	// npm versions: a strict semver (optional prerelease and build; a
+	// numeric prerelease identifier has no leading zero), or a dist-tag
+	// (letter first) that npm would not read as a version or range; see
+	// npmVersionOK. Anything else (a range, a file or URL spec) is refused.
+	semverRe  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-` + preID + `(\.` + preID + `)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
 	distTagRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*$`)
+	// rangeLikeRe matches what npm-package-arg accepts as a (loose) semver
+	// version or x-range before it falls back to a tag: v1, v1.2.3, x, 1.x.
+	rangeLikeRe = regexp.MustCompile(`^[vV=]*(([xX*]|[0-9]+)(\.([xX*]|[0-9]+)(\.([xX*]|[0-9]+)(-?[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)?)?)?$`)
 	// pep440Re is a normalized PEP 440 public version (no epoch) with an
 	// optional local part: release, a/b/rc, .postN, .devN, +local.
 	pep440Re = regexp.MustCompile(`(?i)^[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?(\+[a-z0-9]+(\.[a-z0-9]+)*)?$`)
@@ -144,6 +148,9 @@ var (
 )
 
 const (
+	// preID is one semver prerelease identifier: numeric without a leading
+	// zero, or alphanumeric.
+	preID        = `(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)`
 	ociLabel     = `[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?`
 	ociComponent = `[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*`
 )
@@ -183,7 +190,8 @@ func ValidRemoteURL(u string) bool { return checkURL(u) == nil }
 
 // npmVersionOK accepts a strict semver or a dist-tag. Any version ending in
 // .tgz, .tar or .tar.gz (any case) is refused: npm reads name@x.tgz as a
-// local file.
+// local file. A letter-first word npm reads as a version or range (v1,
+// x.x) is not a tag and is refused too.
 func npmVersionOK(v string) bool {
 	// Checked first: a semver prerelease or build part is dotted, so
 	// 1.0.0+x.tgz is a valid semver that npm still reads as a file.
@@ -191,7 +199,7 @@ func npmVersionOK(v string) bool {
 	if strings.HasSuffix(l, ".tgz") || strings.HasSuffix(l, ".tar") || strings.HasSuffix(l, ".tar.gz") {
 		return false
 	}
-	return semverRe.MatchString(v) || distTagRe.MatchString(v)
+	return semverRe.MatchString(v) || (distTagRe.MatchString(v) && !rangeLikeRe.MatchString(v))
 }
 
 // pkgRuntime is how a supported registryType runs: the command is fixed per
