@@ -103,7 +103,15 @@ type Deps struct {
 	// use for `chezmoi source-path`; nil means unavailable. The shell never
 	// runs an Action on it.
 	Chezmoi runner.Runner
+	// Discover is the discovery screens' network client, cache and staging
+	// directory (see Discover); its zero value means none is wired.
+	Discover Discover
 }
+
+// Close releases what the shell holds open for the screens (the discovery
+// cache). main calls it once the program has ended and its children are
+// gone.
+func (a *App) Close() error { return a.d.Discover.Cache.Close() }
 
 // BaseCtx is the context a screen derives its reads from: Deps.Ctx, or
 // context.Background when none was given.

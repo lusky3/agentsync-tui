@@ -664,6 +664,11 @@ func openRegularIn(top, rel string) (*os.File, fileKind, error) {
 		return nil, fileRegular, err
 	}
 	defer func() { _ = root.Close() }()
+	return openRegularInRoot(root, rel)
+}
+
+// openRegularInRoot is openRegularIn over a root the caller already holds.
+func openRegularInRoot(root *os.Root, rel string) (*os.File, fileKind, error) {
 	return openChecked(root.Lstat, func(name string) (*os.File, error) {
 		return openRegularRootFile(root, name)
 	}, filepath.FromSlash(rel))
@@ -732,6 +737,13 @@ func ReadRegularIn(top, rel string, limit int64) ([]byte, error) {
 func ReadRegularInContext(ctx context.Context, top, rel string, limit int64) ([]byte, error) {
 	f, kind, err := openRegularIn(top, rel)
 	return readOpened(ctx, rel, limit, f, kind, err)
+}
+
+// ReadRegularInRoot is ReadRegularIn over an os.Root the caller already
+// holds, so every read stays bound to the directory the caller vetted.
+func ReadRegularInRoot(root *os.Root, rel string, limit int64) ([]byte, error) {
+	f, kind, err := openRegularInRoot(root, rel)
+	return readOpened(context.Background(), rel, limit, f, kind, err)
 }
 
 // readOpened reads at most limit bytes of what openRegular returned for
