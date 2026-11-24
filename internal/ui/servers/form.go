@@ -35,7 +35,11 @@ const (
 	nFields
 )
 
-var serverTypes = []string{"stdio", "http", "sse"}
+// stdio is the server type whose target is a command (the others take a
+// URL).
+const stdio = "stdio"
+
+var serverTypes = []string{stdio, "http", "sse"}
 
 // maxField caps one input's length (bytes).
 const maxField = 4096
@@ -63,6 +67,19 @@ type form struct {
 	headers  []kv
 	existing map[string]bool
 	err      string // display-safe
+
+	// Set only when the form was prefilled from a discovered entry
+	// (newPrefilledForm): the values the entry still needs, focused after
+	// the agents field; the provenance and trust lines shown above the
+	// fields (display-safe); and the generated secret references that
+	// follow the id.
+	prompts []prompt
+	banner  []string
+	refs    genRefs
+
+	// scroll is the viewport over the body when the form is taller than
+	// the screen; it follows the focused field.
+	scroll ui.List
 }
 
 func newForm(existing map[string]bool) *form {
@@ -81,9 +98,9 @@ func (f *form) update(k tea.KeyPressMsg) formResult {
 	case "ctrl+s":
 		return formSubmit
 	case "tab", "down":
-		f.focus = (f.focus + 1) % nFields
+		f.focus = (f.focus + 1) % f.count()
 	case "shift+tab", "up":
-		f.focus = (f.focus + nFields - 1) % nFields
+		f.focus = (f.focus + f.count() - 1) % f.count()
 	case "enter":
 		return f.enter()
 	case "left":
@@ -100,10 +117,23 @@ func (f *form) update(k tea.KeyPressMsg) formResult {
 		f.dropLastEntry()
 	default:
 		if f.focus != fType {
-			f.vals[f.focus].Key(k)
+			f.input(f.focus).Key(k)
 		}
 	}
+	f.followRefs()
 	return formNone
+}
+
+// count is the number of focusable fields: the fixed ones and the prompts.
+func (f *form) count() int { return nFields + len(f.prompts) }
+
+// input is the text input of field i (not fType): a fixed field or, past
+// them, a prompt.
+func (f *form) input(i int) *ui.Field {
+	if i >= nFields {
+		return &f.prompts[i-nFields].val
+	}
+	return &f.vals[i]
 }
 
 // enter adds a pending env/header entry to its list, submits from the
@@ -112,7 +142,7 @@ func (f *form) enter() formResult {
 	switch {
 	case (f.focus == fEnv || f.focus == fHeader) && strings.TrimSpace(f.vals[f.focus].Value) != "":
 		f.addEntry()
-	case f.focus == fAgents:
+	case f.focus == f.count()-1:
 		return formSubmit
 	default:
 		f.focus++
@@ -140,27 +170,36 @@ func (f *form) dropLastEntry() {
 }
 
 // paste inserts bracketed-paste content into the focused input.
-func (f *form) paste(s string) { f.insert(s) }
+func (f *form) paste(s string) {
+	f.insert(s)
+	f.followRefs()
+}
 
 func (f *form) insert(s string) {
 	if f.focus == fType {
 		return
 	}
-	f.vals[f.focus].Insert(s)
+	f.input(f.focus).Insert(s)
 }
 
 // addEntry moves the focused env/header input into its list.
 func (f *form) addEntry() {
 	var err error
+	sep := ":"
 	if f.focus == fEnv {
-		f.env, err = addKV(f.env, f.vals[fEnv].Value, "=")
+		sep = "="
+		f.env, err = addKV(f.env, f.vals[fEnv].Value, sep)
 	} else {
-		f.headers, err = addKV(f.headers, f.vals[fHeader].Value, ":")
+		f.headers, err = addKV(f.headers, f.vals[fHeader].Value, sep)
 	}
 	if err != nil {
 		f.err = err.Error()
 		return
 	}
+	// A re-entered entry is the user's, as a dropped and retyped one is:
+	// its value's references are no longer the draft's generated ones.
+	k, _, _ := strings.Cut(f.vals[f.focus].Value, sep)
+	delete(f.refs.seen, site{f.focus, strings.TrimSpace(k)})
 	f.vals[f.focus].Clear()
 	f.err = ""
 }
@@ -192,7 +231,7 @@ func addKV(list []kv, in, sep string) ([]kv, error) {
 // input that has not been added with enter yet.
 func (f *form) spec() (actions.AddSpec, error) {
 	s := actions.AddSpec{ID: strings.TrimSpace(f.vals[fID].Value), Type: serverTypes[f.typ]}
-	if t := strings.TrimSpace(f.vals[fTarget].Value); s.Type == "stdio" {
+	if t := strings.TrimSpace(f.vals[fTarget].Value); s.Type == stdio {
 		s.Command = t
 	} else {
 		s.URL = t
@@ -205,6 +244,9 @@ func (f *form) spec() (actions.AddSpec, error) {
 		s.Args = args
 	}
 	env, headers, err := f.withPending()
+	if err == nil {
+		env, err = f.withPrompts(env)
+	}
 	if err != nil {
 		return s, err
 	}
@@ -288,12 +330,15 @@ func echo(v string) string {
 
 // live renders the focused-or-not input text of field i, masked.
 func (f *form) live(i int) string {
+	if i >= nFields {
+		return f.prompts[i-nFields].live()
+	}
 	v := f.vals[i].Value
 	switch i {
 	case fType:
 		return "‹" + serverTypes[f.typ] + "›"
 	case fTarget:
-		if serverTypes[f.typ] == "stdio" {
+		if serverTypes[f.typ] == stdio {
 			return mask.OneLine(mask.FreeTextLive(v))
 		}
 		return mask.OneLine(mask.Text(v))
@@ -313,25 +358,67 @@ func (f *form) live(i int) string {
 	return mask.OneLine(v)
 }
 
-func (f *form) view() string {
+// frame lays the form out in height lines: the title and the pinned
+// banner, the body scrolled so that the focused field and its notes stay
+// in view, then the error and the keys, which always fit.
+func (f *form) frame(height int) []string {
+	head, l, foot := f.layout()
+	head = append(head, f.pinned(height-len(head)-len(foot), l.last-l.first+1)...)
+	return f.scroll.FrameSpan(l.first, l.last, head, l.body, foot, height)
+}
+
+// pinned is the part of the banner that stays above the scrolling body,
+// whatever the focus: the provenance line always (it wins over body rows),
+// then each trust line while room lines still leave the body need rows
+// for the focused field and its notes. A trust line with no room is not
+// shown until the screen is taller or the focused block shorter.
+func (f *form) pinned(room, need int) []string {
+	var out []string
+	for i, b := range f.banner {
+		if i > 0 && room-len(out)-1 < need {
+			break
+		}
+		out = append(out, theme.Warn.Render(b))
+	}
+	return out
+}
+
+// formLayout is the scrollable part of the form and the lines
+// [first, last] of the focused field with its notes.
+type formLayout struct {
+	body        []string
+	first, last int
+}
+
+// add appends the lines of field i, recording them as the focused span
+// when i has focus.
+func (l *formLayout) add(focused bool, lines ...string) {
+	if focused {
+		l.first, l.last = len(l.body), len(l.body)+len(lines)-1
+	}
+	l.body = append(l.body, lines...)
+}
+
+func (f *form) layout() (head []string, l formLayout, foot []string) {
 	labels := [nFields]string{"id", "type", "command", "args", "env", "headers", "agents"}
-	if serverTypes[f.typ] != "stdio" {
+	if serverTypes[f.typ] != stdio {
 		labels[fTarget] = "url"
 	}
-	out := []string{theme.Bold.Render("Add MCP server"), ""}
+	head = []string{theme.Bold.Render("Add MCP server")}
+	l.body = append(l.body, "")
 	warn := f.literalWarning()
 	for i := 0; i < nFields; i++ {
-		out = append(out, f.fieldLine(i, labels[i]))
-		out = append(out, f.fieldNotes(i, warn)...)
+		l.add(i == f.focus, append([]string{f.fieldLine(i, labels[i])}, f.fieldNotes(i, warn)...)...)
 	}
-	out = append(out, "")
+	f.addPrompts(&l, warn)
+	foot = []string{""}
 	if f.err != "" {
-		out = append(out, theme.Bad.Render(f.err))
+		foot = append(foot, theme.Bad.Render(f.err))
 	}
-	for _, l := range strings.Split(formKeys, "\n") {
-		out = append(out, theme.Dim.Render(l))
+	for _, k := range strings.Split(formKeys, "\n") {
+		foot = append(foot, theme.Dim.Render(k))
 	}
-	return strings.Join(out, "\n")
+	return head, l, foot
 }
 
 // literalWarning is the warning shown under an env or header entry whose

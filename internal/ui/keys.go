@@ -177,15 +177,23 @@ type GotoMsg struct{ Title string }
 
 // goTo handles a GotoMsg.
 func (a *App) goTo(title string) tea.Cmd {
+	_, cmd, _ := a.jump(title)
+	return cmd
+}
+
+// jump shows the first screen titled title and returns its index and the
+// refresh it needs, and true; false, with a warning set, while a modal is open
+// or an action runs, or when no screen has the title.
+func (a *App) jump(title string) (int, tea.Cmd, bool) {
 	if a.modal != nil || a.running != nil {
 		a.setStatus(statusWarn, "busy: another action is in progress")
-		return nil
+		return 0, nil, false
 	}
 	for i, s := range a.screens {
 		if s.Title() == title {
-			return a.selectScreen(i)
+			return i, a.selectScreen(i), true
 		}
 	}
 	a.setStatus(statusWarn, "no screen named "+mask.OneLine(title))
-	return nil
+	return 0, nil, false
 }

@@ -93,6 +93,16 @@ func (l *List) FrameAt(anchor int, header, rows, footer []string, height int) []
 	return frame(header, rows, footer, height, func(n, room int) (int, int) { return l.WindowAt(anchor, n, room) })
 }
 
+// FrameSpan is Frame for a cursor that spans rows first..last (a block of
+// lines): the window moves as little as possible to show last, then far
+// enough back to show first, which wins when the block does not fit.
+func (l *List) FrameSpan(first, last int, header, rows, footer []string, height int) []string {
+	return frame(header, rows, footer, height, func(n, room int) (int, int) {
+		l.WindowAt(last, n, room)
+		return l.WindowAt(first, n, room)
+	})
+}
+
 // Scroll is the viewport of a long text (command output, a diff): the same
 // keys as List, moving the offset instead of a cursor.
 type Scroll struct {

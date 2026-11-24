@@ -1,0 +1,212 @@
+{
+  "servers": [
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+        "name": "com.pulsemcp/remote-filesystem",
+        "description": "Read and write files in a Google Cloud Storage bucket.",
+        "repository": {
+          "url": "https://github.com/pulsemcp/mcp-servers",
+          "source": "github",
+          "subfolder": "experimental/remote-filesystem"
+        },
+        "version": "0.1.5",
+        "packages": [
+          {
+            "registryType": "npm",
+            "registryBaseUrl": "https://registry.npmjs.org",
+            "identifier": "remote-filesystem-mcp-server",
+            "version": "0.1.5",
+            "runtimeHint": "npx",
+            "transport": {
+              "type": "stdio"
+            },
+            "environmentVariables": [
+              {
+                "name": "GCS_BUCKET",
+                "description": "Name of the bucket to expose",
+                "isRequired": true,
+                "format": "string"
+              },
+              {
+                "name": "GCS_PROJECT_ID",
+                "description": "Google Cloud project id",
+                "isRequired": false,
+                "format": "string"
+              },
+              {
+                "name": "GCS_PRIVATE_KEY",
+                "description": "Service account private key",
+                "isRequired": false,
+                "isSecret": true,
+                "format": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "publishedAt": "2025-10-20T14:02:11.000000Z",
+          "updatedAt": "2025-10-20T14:02:11.000000Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+        "name": "io.example/weather",
+        "description": "Hosted weather forecasts.",
+        "version": "2.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://{region}.weather.example/mcp",
+            "variables": {
+              "region": {
+                "description": "Deployment region",
+                "isRequired": true,
+                "default": "us",
+                "choices": [
+                  "us",
+                  "eu"
+                ]
+              }
+            },
+            "headers": [
+              {
+                "name": "Authorization",
+                "description": "API token",
+                "value": "Bearer {api_key}",
+                "isRequired": true,
+                "isSecret": true,
+                "variables": {
+                  "api_key": {
+                    "description": "Your weather API key",
+                    "isRequired": true,
+                    "isSecret": true
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "name": "io.example/args-demo",
+        "description": "A Python server that takes arguments.",
+        "version": "1.2.0",
+        "packages": [
+          {
+            "registryType": "pypi",
+            "identifier": "args-demo-mcp",
+            "fileSha256": "fe333e598595000ae021bd27117db32ec69af6987f507ba7a63c90638ff633ce",
+            "version": "1.2.0",
+            "runtimeHint": "uvx",
+            "transport": {
+              "type": "stdio"
+            },
+            "runtimeArguments": [
+              {
+                "type": "named",
+                "name": "--python",
+                "value": "3.12"
+              }
+            ],
+            "packageArguments": [
+              {
+                "type": "positional",
+                "valueHint": "root_dir",
+                "isRequired": true
+              },
+              {
+                "type": "named",
+                "name": "--mode",
+                "default": "read-only"
+              },
+              {
+                "type": "named",
+                "name": "--password",
+                "isSecret": true
+              }
+            ],
+            "environmentVariables": [
+              {
+                "name": "LOG_LEVEL",
+                "default": "info"
+              },
+              {
+                "name": "MODE",
+                "value": "strict"
+              }
+            ]
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active"
+        }
+      }
+    },
+    {
+      "server": {
+        "name": "io.example/old-server",
+        "description": "Superseded by io.example/weather.",
+        "version": "0.9.0",
+        "packages": [
+          {
+            "registryType": "oci",
+            "identifier": "docker.io/example/old-server",
+            "version": "0.9.0",
+            "transport": {
+              "type": "stdio"
+            }
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "deprecated"
+        }
+      }
+    },
+    {
+      "server": {
+        "name": "io.example/bundle",
+        "description": "Shipped as an MCP bundle.",
+        "version": "0.3.0",
+        "packages": [
+          {
+            "registryType": "mcpb",
+            "identifier": "https://github.com/example/bundle/releases/download/v0.3.0/bundle.mcpb",
+            "version": "0.3.0",
+            "fileSha256": "fe333e598595000ae021bd27117db32ec69af6987f507ba7a63c90638ff633ce",
+            "transport": {
+              "type": "stdio"
+            }
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active"
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "nextCursor": "io.example/old-server:0.9.0",
+    "count": 5
+  }
+}

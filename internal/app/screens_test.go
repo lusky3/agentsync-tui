@@ -13,7 +13,7 @@ import (
 var baseTitles = []string{
 	"MCP servers", "Drift", "Apply", "Reconcile", "Import", "Agents",
 	"Plugins", "Secrets", "Skills", "Subagents", "Commands", "Hooks",
-	"LSP", "Memory", "Health",
+	"LSP", "Memory", "Health", "MCP discover",
 }
 
 func TestScreensOrderAndTitles(t *testing.T) {

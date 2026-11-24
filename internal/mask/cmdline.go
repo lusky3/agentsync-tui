@@ -1,6 +1,7 @@
 package mask
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -123,7 +124,9 @@ func commandLine(words []string, depth int) []string {
 			out[i] = w
 			valueNext = true
 		default:
-			if name, val, ok := assignment(w); ok {
+			if shown, ok := pinned(w); ok {
+				out[i] = shown
+			} else if name, val, ok := assignment(w); ok {
 				out[i] = Text(name) + "=" + assignedValue(name, val)
 			} else {
 				out[i] = Text(w)
@@ -142,6 +145,36 @@ func assignment(w string) (name, val string, ok bool) {
 		return "", "", false
 	}
 	return name, val, true
+}
+
+var (
+	// pinnedNameRe is a package-shaped name (no leading '-').
+	pinnedNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	// pinnedVersionRe is a version-shaped value.
+	pinnedVersionRe = regexp.MustCompile(`^[0-9][0-9A-Za-z.+!-]{0,63}$`)
+	// envStyleRe is an ENV_STYLE name, whose "==" value stays masked.
+	envStyleRe = regexp.MustCompile(`^[A-Z0-9_]+$`)
+)
+
+// pinned renders a package==version word (a pinned requirement as uvx
+// takes it, D41): its first '=' starts "==", the name is package-shaped
+// and the value version-shaped. It is shown through Text (a token-shaped
+// name or version is still caught), except that an ENV_STYLE name
+// (TOKEN==123) keeps its value masked. Any other word is not pinned and
+// is judged as an assignment.
+func pinned(w string) (string, bool) {
+	i := strings.IndexByte(w, '=')
+	if i < 0 || !strings.HasPrefix(w[i:], "==") {
+		return "", false
+	}
+	name, ver := w[:i], w[i+2:]
+	if !pinnedNameRe.MatchString(name) || !pinnedVersionRe.MatchString(ver) {
+		return "", false
+	}
+	if envStyleRe.MatchString(name) {
+		return Text(name) + "==" + Mask, true
+	}
+	return Text(w), true
 }
 
 // assignedValue masks the value of an assignment with Value semantics
