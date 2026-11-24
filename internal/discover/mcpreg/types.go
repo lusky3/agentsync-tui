@@ -38,13 +38,15 @@ type Package struct {
 // Argument is a runtime or package argument. Type is "positional" or
 // "named". Name is the flag for a named argument and the value hint for a
 // positional one. An argument with Required set and no Value is one the
-// user must supply.
+// user must supply. Secret is the registry's isSecret: such an argument is
+// never passed as a plain token.
 type Argument struct {
 	Type     string
 	Name     string
 	Value    string
 	Default  string
 	Required bool
+	Secret   bool
 }
 
 // EnvVar is a declared input: an environment variable, or a URL-template

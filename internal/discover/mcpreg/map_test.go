@@ -213,10 +213,41 @@ func TestEnvDefaultBecomesPromptDefault(t *testing.T) {
 
 func TestFixedEnvValueIsLiteral(t *testing.T) {
 	p := pkgOf(typeNPM, npmPkg)
-	p.Env = []mcpreg.EnvVar{{Name: modeEnv, Value: "strict"}, {Name: "TOKEN", Value: "public", Secret: true}}
+	p.Env = []mcpreg.EnvVar{{Name: modeEnv, Value: "strict"}, {Name: logLevel, Value: "debug", Required: true}}
 	d := draft(t, serverWith(p))
-	if d.Spec.Env[modeEnv] != "strict" || d.Spec.Env["TOKEN"] != "public" {
+	if d.Spec.Env[modeEnv] != "strict" || d.Spec.Env[logLevel] != "debug" {
 		t.Errorf("Env = %v, want the fixed values", d.Spec.Env)
+	}
+}
+
+// Decision 7: a value the registry marks secret is never written into the
+// config as plain text, whether it is an environment value, a header
+// value that no secret variable fills, or a package argument.
+func TestSecretMarkedEnvValueUnsupported(t *testing.T) {
+	p := pkgOf(typeNPM, npmPkg)
+	p.Env = []mcpreg.EnvVar{{Name: "TOKEN", Value: "public", Secret: true}}
+	unsupported(t, serverWith(p), "secret")
+}
+
+func TestSecretMarkedHeaderLiteralUnsupported(t *testing.T) {
+	plain := []mcpreg.EnvVar{{Name: regionVar, Default: "us"}}
+	for _, h := range []mcpreg.Header{
+		{Name: authHeader, Value: "Bearer abc123", Secret: true},
+		{Name: authHeader, Value: "Bearer {region}", Secret: true, Variables: plain},
+	} {
+		r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{h}}
+		unsupported(t, remoteServer(r), "secret")
+	}
+}
+
+func TestSecretMarkedPackageArgumentUnsupported(t *testing.T) {
+	for _, a := range []mcpreg.Argument{
+		{Type: positional, Name: "password", Value: "demo-pass", Secret: true},
+		{Type: named, Name: "--token", Value: "abc", Secret: true},
+	} {
+		p := pkgOf(typeNPM, npmPkg)
+		p.PackageArgs = []mcpreg.Argument{a}
+		unsupported(t, serverWith(p), "secret")
 	}
 }
 

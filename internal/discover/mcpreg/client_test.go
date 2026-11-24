@@ -224,6 +224,7 @@ func TestArgumentsDefaultsAndVariablesDecoded(t *testing.T) {
 	wantPkg := []mcpreg.Argument{
 		{Type: "positional", Name: "root_dir", Required: true},
 		{Type: "named", Name: "--mode", Default: "read-only"},
+		{Type: "named", Name: "--password", Secret: true},
 	}
 	if !reflect.DeepEqual(pk.PackageArgs, wantPkg) {
 		t.Errorf("package args = %+v", pk.PackageArgs)

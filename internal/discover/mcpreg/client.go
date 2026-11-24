@@ -286,6 +286,7 @@ func toArgs(in []wireArgument) []Argument {
 			Value:    clean(a.Value),
 			Default:  clean(a.Default),
 			Required: a.IsRequired,
+			Secret:   a.IsSecret,
 		})
 	}
 	return out

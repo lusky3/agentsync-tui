@@ -132,6 +132,11 @@
                 "type": "named",
                 "name": "--mode",
                 "default": "read-only"
+              },
+              {
+                "type": "named",
+                "name": "--password",
+                "isSecret": true
               }
             ],
             "environmentVariables": [

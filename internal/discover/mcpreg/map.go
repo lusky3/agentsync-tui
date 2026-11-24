@@ -94,10 +94,12 @@ const (
 	reasonSpecRejected    = "agentsync would not accept the resulting server definition"
 	reasonCredentialName  = "the package name reads like a credential and could not be shown"
 	reasonHeaderTwice     = "declares the header "
+	reasonSecretLiteral   = "gives a fixed value for a secret; this tool never stores a secret as plain text"
 
 	trustMutableTag = "image tag is mutable (not digest-pinned)"
 	provenanceHead  = "official registry: "
 	httpsPrefix     = "https://"
+	secretRefHead   = "${secret:"
 	typeStdio       = "stdio"
 	registryOCI     = "oci"
 	// maxSuffix is the highest de-duplication suffix SuggestID tries.
@@ -376,6 +378,11 @@ func packageArgs(args []Argument) ([]string, error) {
 // gives with its dashes, such as --port) then the value. Every token must
 // pass argtok.Valid.
 func argTokens(a Argument) ([]string, error) {
+	// Decision 7: a secret is only ever a ${secret:...} reference in env or
+	// headers, never a plain argv token.
+	if a.Secret {
+		return nil, unsupported(reasonSecretLiteral)
+	}
 	if strings.Contains(a.Value, "{") {
 		return nil, unsupported(reasonArgVariables)
 	}
@@ -401,7 +408,8 @@ func argTokens(a Argument) ([]string, error) {
 
 // env maps environment variables: a fixed value is passed literally, a
 // secret becomes a namespaced reference, a required plain one becomes a
-// Prompt, and an optional plain one is omitted. Setting a runtime or
+// Prompt, and an optional plain one is omitted. A fixed value marked
+// secret refuses (Decision 7: never a literal). Setting a runtime or
 // loader variable (runenv.Reserved) in any of those ways refuses (D40).
 func (b *builder) env(vars []EnvVar) error {
 	seen := make(map[string]bool, len(vars))
@@ -422,6 +430,8 @@ func (b *builder) env(vars []EnvVar) error {
 
 func (b *builder) envVar(v EnvVar) error {
 	switch {
+	case v.Value != "" && v.Secret:
+		return unsupported(reasonSecretLiteral)
 	case v.Value != "":
 		if unsafeValue(v.Value) {
 			return unsupported(reasonEnvValue)
@@ -537,7 +547,9 @@ func checkURL(u string) error {
 
 // header returns "Name: value", or "" for an optional header with nothing
 // to send. A header with no value that is secret becomes a reference
-// named after the header itself.
+// named after the header itself. A secret header's value must take its
+// secret from a secret variable (Bearer {api_key}): one that fills to
+// plain text refuses (Decision 7).
 func (b *builder) header(h Header) (string, error) {
 	if !headerNameRe.MatchString(h.Name) {
 		return "", unsupported(reasonHeaderName)
@@ -556,6 +568,11 @@ func (b *builder) header(h Header) (string, error) {
 	}
 	if err != nil {
 		return "", err
+	}
+	// fill refuses '$' in the template and in defaults, so a reference in
+	// v can only be one ref generated.
+	if h.Secret && !strings.Contains(v, secretRefHead) {
+		return "", unsupported(reasonSecretLiteral)
 	}
 	// Trimmed as the add form trims a header value, so the prefill keeps it.
 	v = strings.TrimSpace(v)
@@ -644,7 +661,7 @@ func SecretRef(id, name string) string {
 	if key == "" || len(id)+1+len(key) > ident.MaxLen {
 		return ""
 	}
-	return "${secret:" + id + "." + key + "}"
+	return secretRefHead + id + "." + key + "}"
 }
 
 func lowerSnake(name string) string {
