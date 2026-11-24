@@ -556,7 +556,7 @@ func TestNPMVersionShapes(t *testing.T) {
 			t.Errorf("npm version %q refused", v)
 		}
 	}
-	bad := []string{"1.0.0.tgz", "1.0.tar", "1.0.tar.gz", "LATEST.TGZ", "next.Tar.Gz", "1.0", "01.0.0", "1.0.0;x",
+	bad := []string{"1.0.0.tgz", "1.0.0+x.tgz", "1.0.0-x.tgz", "1.0.0+b.tar", "1.0.0+x.TGZ", "1.0.0-x.tar.gz", "1.0.tar", "1.0.tar.gz", "LATEST.TGZ", "next.Tar.Gz", "1.0", "01.0.0", "1.0.0;x",
 		"x/y", "file:x", "~1.0.0", "^1.0.0", ">=1", "1.x", ".hidden", strings.Repeat("a", 129)}
 	for _, v := range bad {
 		if versionOK(typeNPM, npmPkg, v) {

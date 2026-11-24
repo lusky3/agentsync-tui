@@ -139,15 +139,17 @@ const (
 	ociComponent = `[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*`
 )
 
-// npmVersionOK accepts a strict semver or a dist-tag. A dist-tag ending in
-// .tgz, .tar or .tar.gz is refused: npm reads name@x.tgz as a local file.
+// npmVersionOK accepts a strict semver or a dist-tag. Any version ending in
+// .tgz, .tar or .tar.gz (any case) is refused: npm reads name@x.tgz as a
+// local file.
 func npmVersionOK(v string) bool {
-	if semverRe.MatchString(v) {
-		return true
-	}
+	// Checked first: a semver prerelease or build part is dotted, so
+	// 1.0.0+x.tgz is a valid semver that npm still reads as a file.
 	l := strings.ToLower(v)
-	return distTagRe.MatchString(v) &&
-		!strings.HasSuffix(l, ".tgz") && !strings.HasSuffix(l, ".tar") && !strings.HasSuffix(l, ".tar.gz")
+	if strings.HasSuffix(l, ".tgz") || strings.HasSuffix(l, ".tar") || strings.HasSuffix(l, ".tar.gz") {
+		return false
+	}
+	return semverRe.MatchString(v) || distTagRe.MatchString(v)
 }
 
 // pkgRuntime is how a supported registryType runs: the command is fixed per
