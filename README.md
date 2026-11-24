@@ -159,7 +159,7 @@ actions ask you to type a word instead (see the safety model).
 | 9 | Skills | canonical skills | `E`/`enter` edit, then `check` runs |
 | 10-14 | Subagents, Commands, Hooks, LSP, Memory | same as Skills | `E`/`enter` edit, then `check` runs |
 | 15 | Health | `doctor` and `check` results | `r` re-run |
-| 16 | MCP discover | search the official MCP Registry or the Docker MCP Catalog and open a result in the MCP servers add form (see Discovery and network access) | `/` search field (`enter` runs the search, `esc` leaves the field), `m` switch source, `enter` detail, `j`/`k` choose an install option in the detail, `i` install, `n` next page, `esc` back |
+| 16 | MCP discover | search the official MCP Registry or the Docker MCP Catalog and open a result in the MCP servers add form (see Discovery and network access) | `/` search field (`enter` runs the search, `esc` leaves the field), `m` switch source, `enter` detail, `j`/`k` choose an install option in the detail (`ctrl+d`/`ctrl+u` scroll a long one), `i` install, `n` next page, `esc` back |
 | 17 | Source repo | git status of the home, masked diff, commit, fetch, pull, push | `space` select, `a` all, `enter`/`d` diff, `c` commit, `f` fetch, `p` pull, `P` push, `i` clone a home (when missing), `r` refresh; after a pull, `D` Drift / `A` Apply |
 
 Long views (command output, diffs, the plugin detail) scroll with the same keys as the lists.

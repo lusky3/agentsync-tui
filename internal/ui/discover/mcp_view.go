@@ -21,7 +21,7 @@ import (
 
 const (
 	keysList   = "/ search • enter detail • i install • n next page • m source • " + ui.ScrollKeys
-	keysDetail = "j/k choose install option • i install (opens the MCP servers add form) • esc back"
+	keysDetail = "j/k choose install option • ctrl+d/ctrl+u scroll it • i install (opens the MCP servers add form) • esc back"
 	keysField  = "enter search (contacts the source) • esc leave the field"
 
 	markDeprecated  = "[deprecated] "
@@ -134,7 +134,7 @@ func unsupportedOnly(e mcpsrc.Entry) string {
 // detailView is the entry with its trust lines in the fixed head (never
 // scrolled off), then every install option with its own lines; the whole
 // block of the chosen option stays in view (its label first, when the
-// block does not fit).
+// block does not fit; the page keys then scroll through the rest of it).
 func (s *MCPScreen) detailView(e mcpsrc.Entry) []string {
 	head := []string{
 		theme.Bold.Render(mask.OneLine(e.Title)) + theme.Dim.Render("  "+sources[s.src].name+": "+mask.OneLine(e.ID)),
@@ -161,7 +161,12 @@ func (s *MCPScreen) detailView(e mcpsrc.Entry) []string {
 		}
 		body = append(body, lines...)
 	}
-	return s.opt.FrameSpan(first, last, head, body, ui.KeyLines(keysDetail, s.width), s.height)
+	foot := ui.KeyLines(keysDetail, s.width)
+	// Scrolling moves the top of the view down the block, never past
+	// where its last line is at the bottom.
+	s.optLines = last - first + 1
+	s.optScroll.Window(s.optLines, max(s.height-len(head)-len(foot), 1))
+	return s.opt.FrameSpan(first+s.optScroll.Offset, last, head, body, foot, s.height)
 }
 
 // optionLines renders one install option: its label, then either the

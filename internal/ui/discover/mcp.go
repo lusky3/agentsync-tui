@@ -110,7 +110,12 @@ type MCPScreen struct {
 	list   ui.List
 	detail string  // ID of the entry shown in detail; "" for the list
 	opt    ui.List // the chosen install option in detail
-	note   string  // display-safe
+	// optScroll is how far the chosen option's block is scrolled when it
+	// is taller than the screen (the page keys move it; choosing another
+	// option resets it).
+	optScroll ui.Scroll
+	optLines  int    // lines in the chosen option's block, as last shown
+	note      string // display-safe
 
 	width, height int
 }
@@ -303,7 +308,14 @@ func (s *MCPScreen) detailKey(k string) tea.Cmd {
 		s.detail = ""
 		return nil
 	}
+	switch k {
+	case "pgup", "ctrl+u", "pgdown", "ctrl+d", "space":
+		// Page keys scroll within the chosen option; j/k/home/end choose.
+		s.optScroll.Key(k, s.optLines)
+		return nil
+	}
 	if s.opt.Key(k, len(e.Installs)) {
+		s.optScroll = ui.Scroll{}
 		s.note = "" // it was about the option left behind
 		return nil
 	}
@@ -347,7 +359,7 @@ func (s *MCPScreen) openDetail() {
 		return
 	}
 	s.detail, s.note = e.ID, ""
-	s.opt = ui.List{}
+	s.opt, s.optScroll = ui.List{}, ui.Scroll{}
 	for i, in := range e.Installs {
 		if in.Draft != nil {
 			s.opt.Cursor = i

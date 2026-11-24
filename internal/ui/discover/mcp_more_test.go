@@ -226,3 +226,49 @@ func TestDetailListsFixedEnv(t *testing.T) {
 		t.Errorf("a secret value is shown:\n%s", v)
 	}
 }
+
+// An option taller than the screen can be scrolled through with the page
+// keys, without changing which option is chosen; j/k still choose.
+func TestDetailScrollsWithinTallOption(t *testing.T) {
+	e := threeOptions()
+	e.Installs = e.Installs[:2]
+	env := map[string]string{}
+	for i := 1; i <= 20; i++ {
+		env[fmt.Sprintf("E%02d", i)] = "v"
+	}
+	e.Installs[0].Draft.Spec.Env = env
+	e.Installs[0].Draft.Prompts = []mcpreg.Prompt{{Name: "ASK_LAST", Required: true}}
+	s := newScreen(ui.Deps{})
+	const height = 16
+	s.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+	s.res[0] = results{searched: true, entries: []mcpsrc.Entry{e}}
+	press(s, keyEnter)
+	fits := func(when string) string {
+		t.Helper()
+		v := view(s)
+		if n := strings.Count(v, "\n") + 1; n > height {
+			t.Errorf("%s: %d lines, want at most %d", when, n, height)
+		}
+		return v
+	}
+	if v := fits("opened"); !strings.Contains(v, "> option 1") || strings.Contains(v, "ASK_LAST") {
+		t.Fatalf("opened: want the option's head, not its tail:\n%s", v)
+	}
+	for i := 0; i < 5 && !strings.Contains(view(s), "asks for ASK_LAST"); i++ {
+		press(s, "ctrl+d")
+	}
+	if v := fits("scrolled"); !strings.Contains(v, "asks for ASK_LAST") || !strings.Contains(v, "sets E20=v") {
+		t.Errorf("scrolled: the option's tail is not reachable:\n%s", v)
+	}
+	if s.opt.Cursor != 0 {
+		t.Errorf("scrolling moved the chosen option to %d", s.opt.Cursor)
+	}
+	press(s, "ctrl+u", "ctrl+u", "ctrl+u", "ctrl+u", "ctrl+u")
+	if v := fits("back"); !strings.Contains(v, "> option 1") {
+		t.Errorf("scrolled back: the option's label is not in view:\n%s", v)
+	}
+	press(s, "ctrl+d", "j")
+	if v := fits("next option"); s.opt.Cursor != 1 || !strings.Contains(v, "> option 2") || !strings.Contains(v, "prov 2") {
+		t.Errorf("j: cursor %d, want option 2 chosen and in view:\n%s", s.opt.Cursor, v)
+	}
+}
