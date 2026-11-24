@@ -18,7 +18,9 @@
             "identifier": "remote-filesystem-mcp-server",
             "version": "0.1.5",
             "runtimeHint": "npx",
-            "transport": { "type": "stdio" },
+            "transport": {
+              "type": "stdio"
+            },
             "environmentVariables": [
               {
                 "name": "GCS_BUCKET",
@@ -67,7 +69,10 @@
                 "description": "Deployment region",
                 "isRequired": true,
                 "default": "us",
-                "choices": ["us", "eu"]
+                "choices": [
+                  "us",
+                  "eu"
+                ]
               }
             },
             "headers": [
@@ -107,22 +112,45 @@
             "identifier": "args-demo-mcp",
             "version": "1.2.0",
             "runtimeHint": "uvx",
-            "transport": { "type": "stdio" },
+            "transport": {
+              "type": "stdio"
+            },
             "runtimeArguments": [
-              { "type": "named", "name": "--python", "value": "3.12" }
+              {
+                "type": "named",
+                "name": "--python",
+                "value": "3.12"
+              }
             ],
             "packageArguments": [
-              { "type": "positional", "valueHint": "root_dir", "isRequired": true },
-              { "type": "named", "name": "--mode", "default": "read-only" }
+              {
+                "type": "positional",
+                "valueHint": "root_dir",
+                "isRequired": true
+              },
+              {
+                "type": "named",
+                "name": "--mode",
+                "default": "read-only"
+              }
             ],
             "environmentVariables": [
-              { "name": "LOG_LEVEL", "default": "info" }
+              {
+                "name": "LOG_LEVEL",
+                "default": "info"
+              },
+              {
+                "name": "MODE",
+                "value": "strict"
+              }
             ]
           }
         ]
       },
       "_meta": {
-        "io.modelcontextprotocol.registry/official": { "status": "active" }
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active"
+        }
       }
     },
     {
@@ -135,17 +163,44 @@
             "registryType": "oci",
             "identifier": "docker.io/example/old-server",
             "version": "0.9.0",
-            "transport": { "type": "stdio" }
+            "transport": {
+              "type": "stdio"
+            }
           }
         ]
       },
       "_meta": {
-        "io.modelcontextprotocol.registry/official": { "status": "deprecated" }
+        "io.modelcontextprotocol.registry/official": {
+          "status": "deprecated"
+        }
+      }
+    },
+    {
+      "server": {
+        "name": "io.example/bundle",
+        "description": "Shipped as an MCP bundle.",
+        "version": "0.3.0",
+        "packages": [
+          {
+            "registryType": "mcpb",
+            "identifier": "https://github.com/example/bundle/releases/download/v0.3.0/bundle.mcpb",
+            "version": "0.3.0",
+            "fileSha256": "fe333e598595000ae021bd27117db32ec69af6987f507ba7a63c90638ff633ce",
+            "transport": {
+              "type": "stdio"
+            }
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active"
+        }
       }
     }
   ],
   "metadata": {
     "nextCursor": "io.example/old-server:0.9.0",
-    "count": 4
+    "count": 5
   }
 }

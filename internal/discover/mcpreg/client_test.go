@@ -57,6 +57,12 @@ func (f *fake) hits() int {
 	return len(f.queries)
 }
 
+func (f *fake) requestPaths() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.paths)
+}
+
 func (f *fake) last(t *testing.T) url.Values {
 	t.Helper()
 	f.mu.Lock()
@@ -150,8 +156,8 @@ func TestParsesRealSample(t *testing.T) {
 	if err != nil {
 		t.Fatalf(searchFail, err)
 	}
-	if f.paths[0] != "/v0.1/servers" {
-		t.Errorf("path = %q", f.paths[0])
+	if got := f.requestPaths(); len(got) != 1 || got[0] != "/v0.1/servers" {
+		t.Errorf("paths = %q", got)
 	}
 	q := f.last(t)
 	if q.Get(searchParam) != fsQuery || q.Get(limitParam) != pageLimit || q.Get("version") != "latest" || q.Has(cursorParam) {
@@ -221,8 +227,11 @@ func TestArgumentsDefaultsAndVariablesDecoded(t *testing.T) {
 	if !reflect.DeepEqual(pk.PackageArgs, wantPkg) {
 		t.Errorf("package args = %+v", pk.PackageArgs)
 	}
-	if lvl := env(t, pk.Env, "LOG_LEVEL"); lvl.Default != "info" || lvl.Required {
+	if lvl := env(t, pk.Env, "LOG_LEVEL"); lvl.Default != "info" || lvl.Required || lvl.Value != "" {
 		t.Errorf("LOG_LEVEL = %+v", lvl)
+	}
+	if mode := env(t, pk.Env, "MODE"); mode.Value != "strict" {
+		t.Errorf("MODE = %+v, want fixed value strict", mode)
 	}
 	vars := find(t, p, weatherName).Remotes[0].Variables
 	want := []mcpreg.EnvVar{{Name: "region", Description: "Deployment region", Default: "us", Required: true}}
@@ -233,8 +242,8 @@ func TestArgumentsDefaultsAndVariablesDecoded(t *testing.T) {
 
 func TestDeprecatedStatusKept(t *testing.T) {
 	p := searchSample(t)
-	if len(p.Servers) != 4 {
-		t.Fatalf("got %d servers, want all 4 (deprecated ones included)", len(p.Servers))
+	if len(p.Servers) != 5 || p.Skipped != 0 {
+		t.Fatalf("got %d servers, %d skipped; want all 5 (deprecated ones included)", len(p.Servers), p.Skipped)
 	}
 	if s := find(t, p, oldName); s.Status != "deprecated" {
 		t.Errorf("status = %q", s.Status)
@@ -244,8 +253,9 @@ func TestDeprecatedStatusKept(t *testing.T) {
 // hostile is every way a server string could try to drive the terminal.
 const hostile = "\x1b]8;;http://x\x07evil\x1b]8;;\x07 \u202egnp.exe\x00\x1b[31m\u009b2J\r"
 
-// hostileSkeleton is a page in which every string, including the
-// variables' keys and the cursor, is the placeholder @H@.
+// hostileSkeleton is a page in which every string except input names
+// (env names, variable keys: a record with a hostile one is skipped, see
+// TestUncleanOrCollidingInputNamesSkipEntry) is the placeholder @H@.
 const hostileSkeleton = `{
   "servers": [{
     "server": {
@@ -253,14 +263,14 @@ const hostileSkeleton = `{
       "packages": [{
         "registryType": @H@, "identifier": @H@, "version": @H@, "runtimeHint": @H@,
         "transport": {"type": @H@},
-        "environmentVariables": [{"name": @H@, "description": @H@, "default": @H@}],
+        "environmentVariables": [{"name": "PLAIN", "value": @H@, "description": @H@, "default": @H@}],
         "runtimeArguments": [{"type": @H@, "name": @H@, "value": @H@, "default": @H@}],
         "packageArguments": [{"type": @H@, "valueHint": @H@, "isRequired": true}]
       }],
       "remotes": [{
         "type": @H@, "url": @H@,
-        "variables": {@H@: {"description": @H@, "default": @H@, "isSecret": true}},
-        "headers": [{"name": @H@, "value": @H@, "variables": {@H@: {"description": @H@}}}]
+        "variables": {"plain": {"description": @H@, "default": @H@, "isSecret": true}},
+        "headers": [{"name": @H@, "value": @H@, "variables": {"plain": {"description": @H@}}}]
       }]
     },
     "_meta": {"io.modelcontextprotocol.registry/official": {"status": @H@}}
@@ -286,8 +296,8 @@ func TestSanitizesHostileText(t *testing.T) {
 	if len(p.Servers) != 1 || p.Servers[0].Name != "evil gnp.exe" {
 		t.Fatalf("name = %q", p.Servers[0].Name)
 	}
-	// No string field (names, values, defaults, variable keys, the cursor)
-	// may carry a control or format rune.
+	// No string field (names, values, defaults, the cursor) may carry a
+	// control or format rune.
 	all := []rune(fmtAll(p))
 	for _, r := range all {
 		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == '\u202e' {
@@ -390,11 +400,80 @@ func TestTruncatedJSONIsErrBadResponse(t *testing.T) {
 }
 
 func TestNonObjectJSONIsErrBadResponse(t *testing.T) {
-	for _, body := range []string{`[]`, `"servers"`, `{"servers": {"a": 1}}`, ``} {
+	for _, body := range []string{`[]`, `"servers"`, `{"servers": {"a": 1}}`, ``, `{}`, `{"error":"x"}`} {
 		c, _ := newClient(t, nil, serveBytes([]byte(body)))
 		if _, err := c.Search(context.Background(), anyQuery, ""); !errors.Is(err, mcpreg.ErrBadResponse) {
 			t.Errorf("body %q: err = %v, want ErrBadResponse", body, err)
 		}
+	}
+}
+
+func TestEmptyServerListIsAnEmptyPage(t *testing.T) {
+	for _, body := range []string{`{"servers": []}`, `{"servers": null}`} {
+		c, _ := newClient(t, nil, serveBytes([]byte(body)))
+		p, err := c.Search(context.Background(), anyQuery, "")
+		if err != nil || len(p.Servers) != 0 || p.Skipped != 0 {
+			t.Errorf("body %q: page = %+v, err = %v; want an empty page", body, p, err)
+		}
+	}
+}
+
+// Records for the per-entry decode tests.
+const (
+	goodEntry     = `{"server": {"name": "io.example/good", "packages": [{"registryType": "npm", "identifier": "good", "transport": {"type": "stdio"}}]}}`
+	badTransport  = `{"server": {"name": "io.example/bad1", "packages": [{"registryType": "npm", "identifier": "bad", "transport": "stdio"}]}}`
+	badSecretFlag = `{"server": {"name": "io.example/bad2", "packages": [{"registryType": "npm", "identifier": "bad", "transport": {"type": "stdio"},
+		"environmentVariables": [{"name": "API_KEY", "isSecret": "true"}]}]}}`
+)
+
+func pageOf(entries ...string) []byte {
+	return []byte(`{"servers": [` + strings.Join(entries, ",") + `], "metadata": {}}`)
+}
+
+func TestOneMalformedEntrySkippedNotWholePage(t *testing.T) {
+	c, _ := newClient(t, nil, serveBytes(pageOf(badTransport, goodEntry, badSecretFlag)))
+	p, err := c.Search(context.Background(), anyQuery, "")
+	if err != nil {
+		t.Fatalf(searchFail, err)
+	}
+	if len(p.Servers) != 1 || p.Servers[0].Name != "io.example/good" || p.Skipped != 2 {
+		t.Errorf("page = %+v, want only the good record and Skipped 2", p)
+	}
+}
+
+func TestAllEntriesMalformedIsErrBadResponse(t *testing.T) {
+	c, _ := newClient(t, nil, serveBytes(pageOf(badTransport, badSecretFlag)))
+	if _, err := c.Search(context.Background(), anyQuery, ""); !errors.Is(err, mcpreg.ErrBadResponse) {
+		t.Fatalf("err = %v, want ErrBadResponse", err)
+	}
+}
+
+func TestUncleanOrCollidingInputNamesSkipEntry(t *testing.T) {
+	cases := map[string]string{
+		// "api\u0001_key" cleans to "api_key": its plain default must not
+		// stand in for the secret.
+		"remote variables": `{"server": {"name": "io.example/r", "remotes": [{"type": "sse", "url": "https://r.example/{api_key}",
+			"variables": {"api_key": {"isSecret": true}, "api\u0001_key": {"default": "x"}}}]}}`,
+		"header variables": `{"server": {"name": "io.example/h", "remotes": [{"type": "sse", "url": "https://h.example",
+			"headers": [{"name": "Authorization", "value": "{t}", "variables": {"t\u202e": {}}}]}]}}`,
+		"env names": `{"server": {"name": "io.example/e", "packages": [{"registryType": "npm", "identifier": "e", "transport": {"type": "stdio"},
+			"environmentVariables": [{"name": "API_KEY", "isSecret": true}, {"name": "API_KEY", "default": "x"}]}]}}`,
+	}
+	for name, entry := range cases {
+		t.Run(name, func(t *testing.T) {
+			c, _ := newClient(t, nil, serveBytes(pageOf(entry, goodEntry)))
+			p, err := c.Search(context.Background(), anyQuery, "")
+			if err != nil || len(p.Servers) != 1 || p.Skipped != 1 {
+				t.Errorf("page = %+v, err = %v; want the entry skipped", p, err)
+			}
+		})
+	}
+}
+
+func TestUnknownRegistryTypeKept(t *testing.T) {
+	pk := find(t, searchSample(t), "io.example/bundle").Packages[0]
+	if pk.RegistryType != "mcpb" || pk.Transport != "stdio" {
+		t.Errorf("package = %+v, want registryType mcpb kept as is", pk)
 	}
 }
 

@@ -4,6 +4,8 @@
 // `agentsync mcp add` spec is a separate step.
 package mcpreg
 
+import "encoding/json"
+
 // Server is one registry record, latest version only. Every string has
 // passed mask.Sanitize.
 type Server struct {
@@ -46,11 +48,14 @@ type Argument struct {
 }
 
 // EnvVar is a declared input: an environment variable, or a URL-template
-// or header variable (then Name is the variable's key).
+// or header variable (then Name is the variable's key). Value is an
+// environment variable's fixed value, if the record gives one (variables
+// never have one).
 type EnvVar struct {
 	Name        string
 	Description string
 	Default     string
+	Value       string
 	Required    bool
 	Secret      bool
 }
@@ -75,17 +80,22 @@ type Header struct {
 }
 
 // Page is one page of search results. Next is the cursor for the following
-// page, empty on the last page.
+// page, empty on the last page. Skipped counts records on the page that
+// could not be read (malformed, or with input names that are not plain
+// text or collide) and were left out of Servers.
 type Page struct {
 	Servers []Server
 	Next    string
+	Skipped int
 }
 
 // The wire types below mirror the parts of the v0.1 response this package
 // reads; unknown fields are ignored.
 
+// wirePage is the envelope. Servers stays raw so each record decodes on
+// its own; a missing key leaves it nil.
 type wirePage struct {
-	Servers  []wireEntry `json:"servers"`
+	Servers  json.RawMessage `json:"servers"`
 	Metadata struct {
 		NextCursor string `json:"nextCursor"`
 	} `json:"metadata"`
@@ -133,7 +143,8 @@ type wireInput struct {
 }
 
 type wireEnv struct {
-	Name string `json:"name"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
 	wireInput
 }
 

@@ -150,10 +150,10 @@ Dependency order: 1 → 2 → 3; 4,5 need 1-3; 5A needs 4,5; 5B needs 5A; 7 need
   - `type Server struct{ Name, Description, Version, RepoURL, Status string; Packages []Package; Remotes []Remote }`
   - `type Package struct{ RegistryType, Identifier, Version, RuntimeHint, Transport string; Env []EnvVar; RuntimeArgs, PackageArgs []Argument }` (`runtimeArguments` and `packageArguments`, kept so Task 5 can tell "no arguments" from "an argument you must supply")
   - `type Argument struct{ Type, Name, Value, Default string; Required bool }` (`Type` is `positional` or `named`)
-  - `type EnvVar struct{ Name, Description, Default string; Required, Secret bool }`
+  - `type EnvVar struct{ Name, Description, Default, Value string; Required, Secret bool }` (`Value` is an environment variable's fixed `value`; variables have none)
   - `type Remote struct{ Type, URL string; Headers []Header; Variables []EnvVar }` (`Variables` are the remote's declared URL-template variables)
   - `type Header struct{ Name, Value string; Required, Secret bool; Variables []EnvVar }`
-  - `type Page struct{ Servers []Server; Next string }`
+  - `type Page struct{ Servers []Server; Next string; Skipped int }` (`Skipped` counts records decoded independently and left out as malformed)
   - `func NewClient(h *netx.Client, c *cache.Cache) *Client`
   - `func (c *Client) Search(ctx context.Context, query, cursor string) (Page, error)` → `GET /v0.1/servers?search=<q>&limit=30&version=latest[&cursor=]`; results with `status != "active"` are returned but `Server.Status` is set so the UI can mark deprecated/deleted.
   - `var ErrBlocked, ErrBadResponse error`

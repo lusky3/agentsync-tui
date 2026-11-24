@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -70,7 +71,9 @@ func NewClient(h *netx.Client, c *cache.Cache) *Client {
 // only a response that decoded cleanly is cached.
 //
 // Errors: ErrBlocked for 401/403/429 or an HTML page; ErrBadResponse for
-// a body that does not decode; any other non-2xx is the netx error as is
+// a body that is not a server list, or a page whose every record was
+// unreadable (a page with some unreadable records returns the rest and
+// counts them in Page.Skipped); any other non-2xx is the netx error as is
 // (errors.Is netx.ErrStatus, errors.As *netx.StatusError); network,
 // timeout and size errors are netx's. There is no retry.
 //
@@ -132,21 +135,95 @@ func looksHTML(b []byte) bool {
 	return bytes.HasPrefix(bytes.TrimLeft(b, " \t\r\n"), []byte("<"))
 }
 
-// decode parses a page and sanitizes it. The JSON error is not wrapped:
-// its text can quote what the server sent.
+// decode parses a page and sanitizes it. Each record decodes on its own,
+// so one bad record is skipped (and counted) instead of losing the page.
+// ErrBadResponse means the envelope is not a server list (not JSON, not an
+// object, no "servers" key, "servers" not an array) or every record on a
+// non-empty page was skipped. "servers": null reads as an empty page. JSON
+// errors are not wrapped: their text can quote what the server sent.
 func decode(raw []byte, cursor string) (Page, error) {
+	bad := fmt.Errorf("%w from %s", ErrBadResponse, Host)
 	var w wirePage
-	if err := json.Unmarshal(raw, &w); err != nil {
-		return Page{}, fmt.Errorf("%w from %s", ErrBadResponse, Host)
+	if err := json.Unmarshal(raw, &w); err != nil || w.Servers == nil {
+		return Page{}, bad
 	}
-	p := Page{Servers: make([]Server, 0, len(w.Servers)), Next: clean(w.Metadata.NextCursor)}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(w.Servers, &entries); err != nil {
+		return Page{}, bad
+	}
+	p := Page{Servers: make([]Server, 0, len(entries)), Next: clean(w.Metadata.NextCursor)}
 	if p.Next == cursor {
 		p.Next = ""
 	}
-	for _, e := range w.Servers {
-		p.Servers = append(p.Servers, toServer(e))
+	for _, e := range entries {
+		if s, ok := decodeEntry(e); ok {
+			p.Servers = append(p.Servers, s)
+		} else {
+			p.Skipped++
+		}
+	}
+	if len(entries) > 0 && len(p.Servers) == 0 {
+		return Page{}, bad
 	}
 	return p, nil
+}
+
+// decodeEntry decodes one record strictly: any ill-typed field (which
+// json would otherwise zero, turning "isSecret": "true" into false) or
+// an unreadable input name rejects the whole record.
+func decodeEntry(raw json.RawMessage) (Server, bool) {
+	var e wireEntry
+	if err := json.Unmarshal(raw, &e); err != nil || !namesOK(e.Server) {
+		return Server{}, false
+	}
+	return toServer(e), true
+}
+
+// namesOK reports whether every input name in s (package env names,
+// remote and header variable keys) is plain text that sanitizing leaves
+// unchanged and is unique within its list or map. Otherwise two names
+// could clean to one, and a secret could resolve to another input's
+// plain default.
+func namesOK(s wireServer) bool {
+	for _, p := range s.Packages {
+		names := make([]string, 0, len(p.Env))
+		for _, e := range p.Env {
+			names = append(names, e.Name)
+		}
+		if !distinctClean(names) {
+			return false
+		}
+	}
+	for _, r := range s.Remotes {
+		if !remoteNamesOK(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func remoteNamesOK(r wireRemote) bool {
+	if !distinctClean(slices.Collect(maps.Keys(r.Variables))) {
+		return false
+	}
+	for _, h := range r.Headers {
+		if !distinctClean(slices.Collect(maps.Keys(h.Variables))) {
+			return false
+		}
+	}
+	return true
+}
+
+// distinctClean reports whether names are unchanged by clean and unique.
+func distinctClean(names []string) bool {
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		if clean(n) != n || seen[n] {
+			return false
+		}
+		seen[n] = true
+	}
+	return true
 }
 
 // clean is the boundary every server-supplied string crosses.
@@ -181,7 +258,7 @@ func toPackage(p wirePackage) Package {
 		PackageArgs:  toArgs(p.PackageArgs),
 	}
 	for _, e := range p.Env {
-		out.Env = append(out.Env, toEnv(e.Name, e.wireInput))
+		out.Env = append(out.Env, toEnv(e.Name, e.Value, e.wireInput))
 	}
 	return out
 }
@@ -204,11 +281,12 @@ func toArgs(in []wireArgument) []Argument {
 	return out
 }
 
-func toEnv(name string, in wireInput) EnvVar {
+func toEnv(name, value string, in wireInput) EnvVar {
 	return EnvVar{
 		Name:        clean(name),
 		Description: clean(in.Description),
 		Default:     clean(in.Default),
+		Value:       clean(value),
 		Required:    in.IsRequired,
 		Secret:      in.IsSecret,
 	}
@@ -227,7 +305,7 @@ func toVars(m map[string]wireInput) []EnvVar {
 	slices.Sort(names)
 	out := make([]EnvVar, 0, len(names))
 	for _, k := range names {
-		out = append(out, toEnv(k, m[k]))
+		out = append(out, toEnv(k, "", m[k]))
 	}
 	return out
 }
