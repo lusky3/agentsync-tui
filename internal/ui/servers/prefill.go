@@ -166,27 +166,27 @@ func (f *form) withPrompts(env []kv) ([]kv, error) {
 	return env, nil
 }
 
-// promptLines renders the prompt fields after the fixed ones, each with
-// its description (one line) and, for a literal in a secret one, warn.
-func (f *form) promptLines(warn string) []string {
+// addPrompts adds the prompt fields after the fixed ones, each with its
+// description (one line) and, for a literal in a secret one, warn.
+func (f *form) addPrompts(l *formLayout, warn string) {
 	if len(f.prompts) == 0 {
-		return nil
+		return
 	}
-	out := []string{"", theme.Bold.Render("  values this server needs")}
+	l.body = append(l.body, "", theme.Bold.Render("  values this server needs"))
 	for i, p := range f.prompts {
-		out = append(out, f.fieldLine(nFields+i, mask.OneLine(p.p.Name)))
+		lines := []string{f.fieldLine(nFields+i, mask.OneLine(p.p.Name))}
 		note := mask.OneLine(p.p.Description)
 		if p.p.Required {
 			note = strings.TrimSpace("(required) " + note)
 		}
 		if note != "" {
-			out = append(out, theme.Dim.Render("           "+note))
+			lines = append(lines, theme.Dim.Render("           "+note))
 		}
 		if p.secret() && strings.TrimSpace(p.val.Value) != "" && !refVisible(p.val.Value) {
-			out = append(out, theme.Warn.Render("           ! "+warn))
+			lines = append(lines, theme.Warn.Render("           ! "+warn))
 		}
+		l.add(nFields+i == f.focus, lines...)
 	}
-	return out
 }
 
 // site is where a generated reference sits: the command/url or args

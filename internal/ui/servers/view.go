@@ -23,7 +23,7 @@ func (s *Screen) View() tea.View {
 	var lines []string
 	switch {
 	case s.form != nil:
-		lines = strings.Split(s.form.view(), "\n")
+		lines = s.form.frame(s.height)
 	case s.detail:
 		lines = s.detailView()
 	default:

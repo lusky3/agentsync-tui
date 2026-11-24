@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -446,5 +447,47 @@ func TestPrefilledHeaderWithCommaSubmits(t *testing.T) {
 	act := onlyDo(t, press(s, keySave))
 	if !slices.Contains(act.Argv, "Accept: application/json, text/event-stream") {
 		t.Errorf(argvFmt, act.Argv)
+	}
+}
+
+// A draft with many prompts is taller than the terminal: the form must
+// scroll to the focused field and keep the error line in view, within the
+// screen's height.
+func TestTallFormFollowsFocusAndKeepsErrorVisible(t *testing.T) {
+	m := braveCompose()
+	for i := 1; i <= 8; i++ {
+		n := "P" + strconv.Itoa(i)
+		m.Prompts = append(m.Prompts, ui.FieldPrompt{Name: n, Required: true, Description: "value of " + n})
+	}
+	s := open(t, m)
+	const height = 24
+	s.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+	fits := func(when string) string {
+		t.Helper()
+		v := view(s)
+		if n := strings.Count(v, "\n") + 1; n > height {
+			t.Errorf("%s: %d lines, want at most %d:\n%s", when, n, height, v)
+		}
+		return v
+	}
+	if v := fits("opened"); !strings.Contains(v, "> id") || !strings.Contains(v, trustDigest) {
+		t.Errorf("opened: want the focused id and the banner:\n%s", v)
+	}
+	press(s, keySave)
+	if v := fits("refused"); !strings.Contains(v, "P1 is required") {
+		t.Errorf("refused: error not in view:\n%s", v)
+	}
+	for i := 0; i < nFields+7; i++ {
+		press(s, "tab")
+	}
+	v := fits("last prompt")
+	for _, want := range []string{"> P8", "value of P8", "P1 is required", "ctrl+s add server"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("last prompt focused: %q not in view:\n%s", want, v)
+		}
+	}
+	press(s, "tab")
+	if v := fits("wrapped"); !strings.Contains(v, "> id") {
+		t.Errorf("focus wrapped to id but it is not in view:\n%s", v)
 	}
 }

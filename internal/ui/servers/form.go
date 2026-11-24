@@ -76,6 +76,10 @@ type form struct {
 	prompts []prompt
 	banner  []string
 	refs    genRefs
+
+	// scroll is the viewport over the body when the form is taller than
+	// the screen; it follows the focused field.
+	scroll ui.List
 }
 
 func newForm(existing map[string]bool) *form {
@@ -354,30 +358,53 @@ func (f *form) live(i int) string {
 	return mask.OneLine(v)
 }
 
-func (f *form) view() string {
+// frame lays the form out in height lines: the title, the body scrolled
+// so that the focused field and its notes stay in view, then the error and
+// the keys, which always fit.
+func (f *form) frame(height int) []string {
+	head, l, foot := f.layout()
+	return f.scroll.FrameSpan(l.first, l.last, head, l.body, foot, height)
+}
+
+// formLayout is the scrollable part of the form and the lines
+// [first, last] of the focused field with its notes.
+type formLayout struct {
+	body        []string
+	first, last int
+}
+
+// add appends the lines of field i, recording them as the focused span
+// when i has focus.
+func (l *formLayout) add(focused bool, lines ...string) {
+	if focused {
+		l.first, l.last = len(l.body), len(l.body)+len(lines)-1
+	}
+	l.body = append(l.body, lines...)
+}
+
+func (f *form) layout() (head []string, l formLayout, foot []string) {
 	labels := [nFields]string{"id", "type", "command", "args", "env", "headers", "agents"}
 	if serverTypes[f.typ] != stdio {
 		labels[fTarget] = "url"
 	}
-	out := []string{theme.Bold.Render("Add MCP server")}
-	for _, l := range f.banner {
-		out = append(out, theme.Warn.Render(l))
+	head = []string{theme.Bold.Render("Add MCP server")}
+	for _, b := range f.banner {
+		l.body = append(l.body, theme.Warn.Render(b))
 	}
-	out = append(out, "")
+	l.body = append(l.body, "")
 	warn := f.literalWarning()
 	for i := 0; i < nFields; i++ {
-		out = append(out, f.fieldLine(i, labels[i]))
-		out = append(out, f.fieldNotes(i, warn)...)
+		l.add(i == f.focus, append([]string{f.fieldLine(i, labels[i])}, f.fieldNotes(i, warn)...)...)
 	}
-	out = append(out, f.promptLines(warn)...)
-	out = append(out, "")
+	f.addPrompts(&l, warn)
+	foot = []string{""}
 	if f.err != "" {
-		out = append(out, theme.Bad.Render(f.err))
+		foot = append(foot, theme.Bad.Render(f.err))
 	}
-	for _, l := range strings.Split(formKeys, "\n") {
-		out = append(out, theme.Dim.Render(l))
+	for _, k := range strings.Split(formKeys, "\n") {
+		foot = append(foot, theme.Dim.Render(k))
 	}
-	return strings.Join(out, "\n")
+	return head, l, foot
 }
 
 // literalWarning is the warning shown under an env or header entry whose
