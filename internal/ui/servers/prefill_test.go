@@ -240,12 +240,14 @@ func TestTakenIDIsRefused(t *testing.T) {
 }
 
 func TestSecretRefsFollowEditedID(t *testing.T) {
-	s := open(t, remoteCompose()) // id x is taken
-	// The user re-enters the Authorization header, keeping the generated
-	// reference and adding one of their own that names x.
-	press(s, "tab", "tab", "tab", "tab", "tab")
-	typeText(s, "Authorization: Bearer ${secret:x.api_key} ${secret:x.other}")
-	press(s, "enter", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "shift+tab")
+	m := remoteCompose() // id x is taken
+	m.Spec.Args = []string{keyFlag, "${secret:x.k}"}
+	s := open(t, m)
+	// The user types a reference of their own into the args value that
+	// holds a generated one; it names x too, but was not in the message.
+	press(s, "tab", "tab", "tab")
+	typeText(s, " ${secret:x.other}")
+	press(s, "shift+tab", "shift+tab", "shift+tab")
 	// An invalid id rewrites nothing; neither does a taken one (pasted
 	// whole, so no valid prefix is typed on the way).
 	press(s, "backspace")
@@ -260,17 +262,19 @@ func TestSecretRefsFollowEditedID(t *testing.T) {
 	}
 	typeText(s, "yz")
 	press(s, "backspace")
-	want := []string{"Authorization: Bearer ${secret:y.api_key} ${secret:x.other}", "X-Team: ${secret:y.team_id}"}
-	if got := submitSpec(t, s); got.ID != "y" || !slices.Equal(got.Headers, want) {
-		t.Fatalf("after renaming to y: id %q headers %q, want %q", got.ID, got.Headers, want)
+	want := []string{yAuth, "X-Team: ${secret:y.team_id}"}
+	wantArgs := []string{keyFlag, yKeyRef, "${secret:x.other}"}
+	got := submitSpec(t, s)
+	if got.ID != "y" || !slices.Equal(got.Headers, want) || !slices.Equal(got.Args, wantArgs) {
+		t.Fatalf("after renaming to y: id %q headers %q args %q, want %q %q", got.ID, got.Headers, got.Args, want, wantArgs)
 	}
 	v := view(s)
-	if !strings.Contains(v, "Bearer ${secret:y.api_key} ${secret:x.other}") {
+	if !strings.Contains(v, "Bearer ${secret:y.api_key}") {
 		t.Errorf("view does not show the rewritten reference:\n%s", v)
 	}
 	act := onlyDo(t, press(s, "ctrl+s"))
 	if !slices.Equal(act.Argv, mustAct(actions.McpAdd(actions.AddSpec{
-		ID: "y", Type: typeHTTP, URL: remoteURL, Headers: want,
+		ID: "y", Type: typeHTTP, URL: remoteURL, Headers: want, Args: wantArgs,
 	})).Argv) {
 		t.Errorf("argv %q", act.Argv)
 	}
@@ -278,12 +282,12 @@ func TestSecretRefsFollowEditedID(t *testing.T) {
 	s.run = &scripted{out: map[string]runner.Result{secretList: {Stdout: "y.api_key\n"}}}
 	drive(s, func() tea.Msg { return ui.RunMsg{Action: act} })
 	v = view(s)
-	for _, want := range []string{"y.team_id", "x.other", secretsTab} {
+	for _, want := range []string{"y.team_id", "y.k", "x.other", secretsTab} {
 		if !strings.Contains(v, want) {
 			t.Errorf("note missing %q:\n%s", want, v)
 		}
 	}
-	if strings.Contains(v, "x.api_key") || strings.Contains(v, "y.api_key,") || strings.Contains(v, "x.team_id") {
+	if strings.Contains(v, "x.api_key") || strings.Contains(v, "y.api_key") || strings.Contains(v, "x.team_id") {
 		t.Errorf("note names a stale or set reference:\n%s", v)
 	}
 }
@@ -296,7 +300,7 @@ func TestRemovedRefIsNoLongerTracked(t *testing.T) {
 	typeText(s, teamHeader)
 	press(s, "enter", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "backspace")
 	typeText(s, "y")
-	want := []string{"Authorization: Bearer ${secret:y.api_key}", teamHeader}
+	want := []string{yAuth, teamHeader}
 	if got := submitSpec(t, s).Headers; !slices.Equal(got, want) {
 		t.Errorf("headers %q, want %q", got, want)
 	}
@@ -341,12 +345,15 @@ func TestProvenanceBannerShown(t *testing.T) {
 		}
 	}
 	m := braveCompose()
-	m.Provenance = "official registry: evil\x1b[31m\nname@1.0"
-	m.Trust = []string{"line\x1b]0;title\x07 one"}
+	m.Provenance = "official registry: evil\x1b[31m\u202e\nname@1.0"
+	m.Trust = []string{"line\x1b]0;title\x07 one\u200b"}
+	m.Prompts = []ui.FieldPrompt{{Name: region, Description: "pick\x1b[2J\u202eone\u200b\x1b]8;;http://x\x07"}}
 	s = open(t, m)
 	raw := s.View().Content
-	if strings.Contains(raw, "\x1b]") || strings.Contains(raw, "\x1b[31m") {
-		t.Errorf("hostile provenance rendered live: %q", raw)
+	for _, bad := range []string{"\x1b]", "\x1b[31m", "\x1b[2J", "\u202e", "\u200b"} {
+		if strings.Contains(raw, bad) {
+			t.Errorf("hostile text rendered live (%q): %q", bad, raw)
+		}
 	}
 	if !strings.Contains(view(s), "evil") || !strings.Contains(view(s), "name@1.0"+runsCodeNote) {
 		t.Errorf("provenance not on one line:\n%s", view(s))

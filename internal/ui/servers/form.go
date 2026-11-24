@@ -181,15 +181,21 @@ func (f *form) insert(s string) {
 // addEntry moves the focused env/header input into its list.
 func (f *form) addEntry() {
 	var err error
+	sep := ":"
 	if f.focus == fEnv {
-		f.env, err = addKV(f.env, f.vals[fEnv].Value, "=")
+		sep = "="
+		f.env, err = addKV(f.env, f.vals[fEnv].Value, sep)
 	} else {
-		f.headers, err = addKV(f.headers, f.vals[fHeader].Value, ":")
+		f.headers, err = addKV(f.headers, f.vals[fHeader].Value, sep)
 	}
 	if err != nil {
 		f.err = err.Error()
 		return
 	}
+	// A re-entered entry is the user's, as a dropped and retyped one is:
+	// its value's references are no longer the draft's generated ones.
+	k, _, _ := strings.Cut(f.vals[f.focus].Value, sep)
+	delete(f.refs.seen, site{f.focus, strings.TrimSpace(k)})
 	f.vals[f.focus].Clear()
 	f.err = ""
 }

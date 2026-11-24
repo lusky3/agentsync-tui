@@ -2,6 +2,7 @@ package servers
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"regexp"
 	"slices"
@@ -17,19 +18,47 @@ import (
 // runsCode ends the provenance banner of a prefilled form.
 const runsCode = ": the command below runs code on your machine"
 
+// cannotPrefill starts the note for a discovered entry the form refuses.
+const cannotPrefill = "cannot prefill the add form: "
+
+// errNotKept: the form could not hold a value of the draft as given, so
+// what it would submit differs from what was offered.
+var errNotKept = errors.New("the entry holds a value the form cannot keep unchanged")
+
 // OpenPrefilled opens the add form with its fields set from a discovered
 // entry (the shell forwards a ui.ComposeMcpMsg to this screen only). It is
 // the same form as `a` opens: submitting it builds the action through
 // spec and submit and hands it to the confirm modal.
+//
+// An open form is never replaced (the shell refuses first; this is the
+// screen's own guard), and a message that is refused (Refusal) or that
+// the form cannot hold unchanged opens nothing and leaves a note.
 func (s *Screen) OpenPrefilled(m ui.ComposeMcpMsg) {
-	s.form = newPrefilledForm(s.ids(), m)
+	if s.form != nil {
+		s.form.err = ui.FormOpenNote
+		return
+	}
+	if why := m.Refusal(); why != "" {
+		s.note = cannotPrefill + why
+		return
+	}
+	f, err := newPrefilledForm(s.ids(), m)
+	if err != nil {
+		s.note = cannotPrefill + err.Error()
+		return
+	}
+	s.form = f
 	s.detail, s.note = false, ""
 }
 
 // newPrefilledForm is newForm with the fields set from m: the spec's
 // values, a field per prompt (prefilled with its default), the provenance
-// and trust banner, and the generated references to follow the id.
-func newPrefilledForm(existing map[string]bool, m ui.ComposeMcpMsg) *form {
+// and trust banner, and the generated references to follow the id. It
+// fails (errNotKept) unless the form gives back exactly m.Spec and every
+// prompt default: a value the fields sanitise, fold or cap (a line break,
+// a control or bidi rune, invalid UTF-8) or a header name given twice
+// would otherwise be submitted changed from what the user reviewed.
+func newPrefilledForm(existing map[string]bool, m ui.ComposeMcpMsg) (*form, error) {
 	f := newForm(existing)
 	sp := m.Spec
 	set := func(i int, v string) {
@@ -53,9 +82,15 @@ func newPrefilledForm(existing map[string]bool, m ui.ComposeMcpMsg) *form {
 		f.headers, _ = addKV(f.headers, h, ":") // a malformed one is refused by McpAdd
 	}
 	set(fAgents, strings.Join(sp.Agents, ","))
+	if got, err := f.spec(); err != nil || !sameSpec(got, sp) {
+		return nil, errNotKept
+	}
 	for _, p := range m.Prompts {
 		pr := prompt{p: p, val: ui.Field{Max: maxField}}
 		pr.val.Insert(p.Default)
+		if pr.val.Value != p.Default {
+			return nil, fmt.Errorf("%w (default of %s)", errNotKept, mask.OneLine(p.Name))
+		}
 		f.prompts = append(f.prompts, pr)
 	}
 	f.banner = []string{"from " + mask.OneLine(m.Provenance) + runsCode}
@@ -66,7 +101,14 @@ func newPrefilledForm(existing map[string]bool, m ui.ComposeMcpMsg) *form {
 	if id := strings.TrimSpace(sp.ID); existing[id] {
 		f.err = mask.OneLine(id) + " already exists — change the id"
 	}
-	return f
+	return f, nil
+}
+
+// sameSpec compares two specs field by field, nil and empty alike.
+func sameSpec(a, b actions.AddSpec) bool {
+	return a.ID == b.ID && a.Type == b.Type && a.Command == b.Command && a.URL == b.URL &&
+		slices.Equal(a.Args, b.Args) && slices.Equal(a.Headers, b.Headers) &&
+		slices.Equal(a.Agents, b.Agents) && maps.Equal(a.Env, b.Env)
 }
 
 // joinArgs renders args for the args field so that shellwords.Split gives

@@ -127,3 +127,46 @@ func TestComposeWithoutServersTabWarns(t *testing.T) {
 		t.Errorf("got %d, status %q", len(a.received()), app.status)
 	}
 }
+
+// refusedOnTab checks that m was refused with a warning naming want: no
+// tab switch, nothing forwarded.
+func refusedOnTab(t *testing.T, m ComposeMcpMsg, want string) {
+	t.Helper()
+	app, _, srv, _ := composeApp(baseDeps(newFakeRunner()))
+	app.Update(m)
+	if app.active != 0 || len(srv.received()) != 0 {
+		t.Errorf("active = %d, servers got %d", app.active, len(srv.received()))
+	}
+	if app.statusKind != statusWarn || !strings.Contains(app.status, want) {
+		t.Errorf("status = %q (%v)", app.status, app.statusKind)
+	}
+}
+
+// A prompt that asks for a secret value would store it as plain text:
+// discovery carries secrets as references only, so the entry is refused.
+func TestSecretPromptRefused(t *testing.T) {
+	m := sampleCompose()
+	m.Prompts = []FieldPrompt{{Name: "REGION"}, {Name: "PASSWORD", Secret: true}}
+	refusedOnTab(t, m, "asks for a secret value")
+}
+
+// References built for another id would be submitted in that server's
+// vault namespace if the user pressed ctrl+s straight away.
+func TestMismatchedRefIDRefused(t *testing.T) {
+	m := sampleCompose()
+	m.RefID = "other"
+	refusedOnTab(t, m, "another server id")
+}
+
+// An open form on the servers tab (it captures keys) is never replaced.
+func TestComposeRefusedWhileServersFormOpen(t *testing.T) {
+	app, _, srv, _ := composeApp(baseDeps(newFakeRunner()))
+	srv.capture = true
+	app.Update(sampleCompose())
+	if app.active != 0 || len(srv.received()) != 0 {
+		t.Errorf("active = %d, servers got %d", app.active, len(srv.received()))
+	}
+	if !strings.Contains(app.status, "finish or close the open form first") {
+		t.Errorf("status = %q", app.status)
+	}
+}
