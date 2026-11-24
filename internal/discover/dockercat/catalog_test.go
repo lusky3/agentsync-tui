@@ -472,6 +472,11 @@ func TestBadEnvelopeIsErrBadResponse(t *testing.T) {
 		"scalar doc":    "just text\n",
 		"all bad":       "registry:\n  a: 1\n  b:\n    disableNetwork: maybe\n",
 		"empty":         "",
+		// A second registry key would be ignored, so the first one
+		// (null here: an empty catalog) would stand for an hour.
+		"null then registry": "registry: null\nregistry:\n  brave:\n    type: server\n",
+		"registry twice":     "registry: {}\nregistry: {}\n",
+		"quoted twice":       "registry: {}\n\"registry\": {}\n",
 	} {
 		c, _ := newClient(t, nil, serveBytes([]byte(body)))
 		if _, err := c.Search(context.Background(), "", ""); !errors.Is(err, dockercat.ErrBadResponse) {

@@ -263,7 +263,8 @@ func decode(ctx context.Context, raw []byte) (catalog, error) {
 }
 
 // registryNode finds the top-level "registry" mapping. A null registry
-// is an empty one; a missing or ill-typed one is not a catalog.
+// is an empty one; a missing, repeated or ill-typed one is not a catalog
+// (with two, which one counts would be a guess).
 func registryNode(doc *yaml.Node) (*yaml.Node, bool) {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
 		return nil, false
@@ -272,18 +273,23 @@ func registryNode(doc *yaml.Node) (*yaml.Node, bool) {
 	if top.Kind != yaml.MappingNode {
 		return nil, false
 	}
+	var reg *yaml.Node
 	for i := 0; i+1 < len(top.Content); i += 2 {
-		k, v := top.Content[i], top.Content[i+1]
-		if k.Kind != yaml.ScalarNode || k.Value != "registry" {
+		if k := top.Content[i]; k.Kind != yaml.ScalarNode || k.Value != "registry" {
 			continue
 		}
-		switch {
-		case v.Kind == yaml.MappingNode:
-			return v, true
-		case v.Kind == yaml.ScalarNode && v.Tag == "!!null":
-			return &yaml.Node{Kind: yaml.MappingNode}, true
+		if reg != nil {
+			return nil, false
 		}
+		reg = top.Content[i+1]
+	}
+	switch {
+	case reg == nil:
 		return nil, false
+	case reg.Kind == yaml.MappingNode:
+		return reg, true
+	case reg.Kind == yaml.ScalarNode && reg.Tag == "!!null":
+		return &yaml.Node{Kind: yaml.MappingNode}, true
 	}
 	return nil, false
 }
