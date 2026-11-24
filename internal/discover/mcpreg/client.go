@@ -31,6 +31,10 @@ const (
 	maxBody int64 = 4 << 20
 )
 
+// MaxPageRecords is the most records decoded from one page (pageSize are
+// asked for); the rest are counted in Page.Skipped.
+const MaxPageRecords = 100
+
 // Errors Search returns besides those from netx. Match them with errors.Is.
 var (
 	// ErrBlocked is a refusal rather than an answer: HTTP 401, 403 or 429
@@ -139,7 +143,8 @@ func looksHTML(b []byte) bool {
 // so one bad record is skipped (and counted) instead of losing the page.
 // ErrBadResponse means the envelope is not a server list (not JSON, not an
 // object, no "servers" key, "servers" not an array) or every record on a
-// non-empty page was skipped. "servers": null reads as an empty page. JSON
+// non-empty page was skipped. Records past MaxPageRecords are not decoded,
+// only counted as skipped. "servers": null reads as an empty page. JSON
 // errors are not wrapped: their text can quote what the server sent.
 func decode(raw []byte, cursor string) (Page, error) {
 	bad := fmt.Errorf("%w from %s", ErrBadResponse, Host)
@@ -151,10 +156,15 @@ func decode(raw []byte, cursor string) (Page, error) {
 	if err := json.Unmarshal(w.Servers, &entries); err != nil {
 		return Page{}, bad
 	}
-	p := Page{Servers: make([]Server, 0, len(entries)), Next: clean(w.Metadata.NextCursor)}
+	p := Page{Next: clean(w.Metadata.NextCursor)}
 	if p.Next == cursor {
 		p.Next = ""
 	}
+	if len(entries) > MaxPageRecords {
+		p.Skipped = len(entries) - MaxPageRecords
+		entries = entries[:MaxPageRecords]
+	}
+	p.Servers = make([]Server, 0, len(entries))
 	for _, e := range entries {
 		if s, ok := decodeEntry(e); ok {
 			p.Servers = append(p.Servers, s)

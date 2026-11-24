@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -592,5 +593,22 @@ func TestNilHTTPIsAnErrorNotAPanic(t *testing.T) {
 	_, err := mcpreg.NewClient(nil, nil).Search(context.Background(), anyQuery, "")
 	if err == nil {
 		t.Fatal("Search with no HTTP client succeeded")
+	}
+}
+
+// A page holds at most MaxPageRecords records (we ask for 30): the rest
+// are not decoded, only counted as skipped.
+func TestOversizedPageTruncated(t *testing.T) {
+	entries := make([]string, mcpreg.MaxPageRecords+5)
+	for i := range entries {
+		entries[i] = `{"server": {"name": "io.example/n` + strconv.Itoa(i) + `", "remotes": [{"type": "sse", "url": "https://x.example/sse"}]}}`
+	}
+	c, _ := newClient(t, nil, serveBytes(pageOf(entries...)))
+	p, err := c.Search(context.Background(), anyQuery, "")
+	if err != nil {
+		t.Fatalf(searchFail, err)
+	}
+	if len(p.Servers) != mcpreg.MaxPageRecords || p.Skipped != 5 {
+		t.Errorf("got %d servers, %d skipped; want %d and 5", len(p.Servers), p.Skipped, mcpreg.MaxPageRecords)
 	}
 }

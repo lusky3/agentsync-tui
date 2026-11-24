@@ -33,6 +33,13 @@ const (
 	takenID      = "http-srv"
 	secretList   = "secret list"
 	euWest       = "eu-west-1"
+	keySave      = "ctrl+s"
+	keyBackTab   = "shift+tab"
+	keyBackspace = "backspace"
+	argvFmt      = "argv %q"
+	viewFmt      = "view:\n%s"
+	otherBody    = "other tab body"
+	canaryWord   = "CANARY"
 )
 
 // braveCompose is a Docker-catalog-shaped draft: a stdio docker run with
@@ -136,7 +143,7 @@ type otherTab struct{}
 
 func (otherTab) Init() tea.Cmd                         { return nil }
 func (o otherTab) Update(tea.Msg) (tea.Model, tea.Cmd) { return o, nil }
-func (otherTab) View() tea.View                        { return tea.NewView("other tab body") }
+func (otherTab) View() tea.View                        { return tea.NewView(otherBody) }
 func (otherTab) Title() string                         { return "Other" }
 func (otherTab) Refresh() tea.Cmd                      { return nil }
 
@@ -144,7 +151,7 @@ func appView(app *ui.App) string { return ansi.Strip(app.View().Content) }
 
 func TestComposeActivatesServersTabAndOpensForm(t *testing.T) {
 	app, scr := shell(t, okRunner())
-	if v := appView(app); !strings.Contains(v, "other tab body") {
+	if v := appView(app); !strings.Contains(v, otherBody) {
 		t.Fatalf("precondition: first tab on show:\n%s", v)
 	}
 	appDrive(app, func() tea.Msg { return braveCompose() })
@@ -152,7 +159,7 @@ func TestComposeActivatesServersTabAndOpensForm(t *testing.T) {
 	if !strings.Contains(v, "Add MCP server") || !strings.Contains(v, "brave") || !scr.CapturesKeys() {
 		t.Fatalf("prefilled form not on show:\n%s", v)
 	}
-	if strings.Contains(v, "other tab body") {
+	if strings.Contains(v, otherBody) {
 		t.Errorf("still on the first tab:\n%s", v)
 	}
 }
@@ -174,18 +181,18 @@ func TestPrefilledFormValuesAreMaskedLikeManualEntry(t *testing.T) {
 	// A literal typed into a secret-named prompt is bullets, as in manual entry.
 	press(s, "tab", "tab", "tab", "tab", "tab", "tab", "tab")
 	typeText(s, canary)
-	if v := view(s); strings.Contains(v, "CANARY") || !strings.Contains(v, "API_TOKEN") || !strings.Contains(v, "••••") {
+	if v := view(s); strings.Contains(v, canaryWord) || !strings.Contains(v, "API_TOKEN") || !strings.Contains(v, "••••") {
 		t.Errorf("secret-named prompt echoes its value:\n%s", v)
 	}
 	// So is a literal in a secret-named env entry typed into the env input.
-	press(s, "shift+tab", "shift+tab", "shift+tab")
+	press(s, keyBackTab, keyBackTab, keyBackTab)
 	typeText(s, "MY_SECRET="+canary)
 	press(s, "enter")
-	if v := view(s); strings.Contains(v, "CANARY") || !strings.Contains(v, "MY_SECRET = ••••") {
+	if v := view(s); strings.Contains(v, canaryWord) || !strings.Contains(v, "MY_SECRET = ••••") {
 		t.Errorf("env literal shown:\n%s", v)
 	}
-	act := onlyDo(t, press(s, "ctrl+s"))
-	if strings.Contains(act.Display(), "CANARY") {
+	act := onlyDo(t, press(s, keySave))
+	if strings.Contains(act.Display(), canaryWord) {
 		t.Errorf("display leaks: %s", act.Display())
 	}
 }
@@ -196,7 +203,7 @@ func TestPrefilledSubmitBuildsSameActionAsManual(t *testing.T) {
 	if got := submitSpec(t, s); !reflect.DeepEqual(got, m.Spec) {
 		t.Fatalf("spec round trip:\n got %#v\nwant %#v", got, m.Spec)
 	}
-	act := onlyDo(t, press(s, "ctrl+s"))
+	act := onlyDo(t, press(s, keySave))
 	want := mustAct(actions.McpAdd(m.Spec))
 	if !slices.Equal(act.Argv, want.Argv) || act.Display() != want.Display() {
 		t.Errorf("action\n got %q / %s\nwant %q / %s", act.Argv, act.Display(), want.Argv, want.Display())
@@ -210,7 +217,7 @@ func TestPrefilledStillGoesThroughConfirmModal(t *testing.T) {
 	fr := &scripted{}
 	app, _ := shell(t, fr)
 	appDrive(app, func() tea.Msg { return braveCompose() })
-	appPress(app, "ctrl+s")
+	appPress(app, keySave)
 	v := appView(app)
 	if !strings.Contains(v, addBrave) || !strings.Contains(v, "Run it?") {
 		t.Fatalf("confirm modal not shown:\n%s", v)
@@ -231,11 +238,11 @@ func TestTakenIDIsRefused(t *testing.T) {
 	if !strings.Contains(view(s), "already exists") {
 		t.Errorf("taken id not flagged on open:\n%s", view(s))
 	}
-	if msgs := press(s, "ctrl+s"); len(msgs) != 0 {
+	if msgs := press(s, keySave); len(msgs) != 0 {
 		t.Fatalf("submitted a taken id: %#v", msgs)
 	}
 	if s.form == nil || !strings.Contains(view(s), "already exists — press E on it to edit") {
-		t.Errorf("view:\n%s", view(s))
+		t.Errorf(viewFmt, view(s))
 	}
 }
 
@@ -247,21 +254,21 @@ func TestSecretRefsFollowEditedID(t *testing.T) {
 	// holds a generated one; it names x too, but was not in the message.
 	press(s, "tab", "tab", "tab")
 	typeText(s, " ${secret:x.other}")
-	press(s, "shift+tab", "shift+tab", "shift+tab")
+	press(s, keyBackTab, keyBackTab, keyBackTab)
 	// An invalid id rewrites nothing; neither does a taken one (pasted
 	// whole, so no valid prefix is typed on the way).
-	press(s, "backspace")
+	press(s, keyBackspace)
 	for _, id := range []string{"-bad", takenID} {
 		s.Update(tea.PasteMsg{Content: id})
 		if got := submitSpec(t, s).Headers; got[1] != teamHeader {
 			t.Errorf("id %q rewrote a reference: %q", id, got)
 		}
 		for range id {
-			press(s, "backspace")
+			press(s, keyBackspace)
 		}
 	}
 	typeText(s, "yz")
-	press(s, "backspace")
+	press(s, keyBackspace)
 	want := []string{yAuth, "X-Team: ${secret:y.team_id}"}
 	wantArgs := []string{keyFlag, yKeyRef, "${secret:x.other}"}
 	got := submitSpec(t, s)
@@ -272,11 +279,11 @@ func TestSecretRefsFollowEditedID(t *testing.T) {
 	if !strings.Contains(v, "Bearer ${secret:y.api_key}") {
 		t.Errorf("view does not show the rewritten reference:\n%s", v)
 	}
-	act := onlyDo(t, press(s, "ctrl+s"))
+	act := onlyDo(t, press(s, keySave))
 	if !slices.Equal(act.Argv, mustAct(actions.McpAdd(actions.AddSpec{
 		ID: "y", Type: typeHTTP, URL: remoteURL, Headers: want, Args: wantArgs,
 	})).Argv) {
-		t.Errorf("argv %q", act.Argv)
+		t.Errorf(argvFmt, act.Argv)
 	}
 	// The after-add note checks the final references.
 	s.run = &scripted{out: map[string]runner.Result{secretList: {Stdout: "y.api_key\n"}}}
@@ -298,7 +305,7 @@ func TestRemovedRefIsNoLongerTracked(t *testing.T) {
 	s := open(t, remoteCompose())
 	press(s, "tab", "tab", "tab", "tab", "tab", "ctrl+d") // drops X-Team
 	typeText(s, teamHeader)
-	press(s, "enter", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "backspace")
+	press(s, "enter", keyBackTab, keyBackTab, keyBackTab, keyBackTab, keyBackTab, keyBackspace)
 	typeText(s, "y")
 	want := []string{yAuth, teamHeader}
 	if got := submitSpec(t, s).Headers; !slices.Equal(got, want) {
@@ -316,19 +323,19 @@ func TestRequiredPromptsMustBeFilledBeforeSubmit(t *testing.T) {
 	if v := view(s); !strings.Contains(v, "the AWS region") {
 		t.Errorf("description not on one line:\n%s", v)
 	}
-	if msgs := press(s, "ctrl+s"); len(msgs) != 0 {
+	if msgs := press(s, keySave); len(msgs) != 0 {
 		t.Fatalf("submitted with a required prompt empty: %#v", msgs)
 	}
 	if !strings.Contains(view(s), "REGION is required") {
-		t.Errorf("view:\n%s", view(s))
+		t.Errorf(viewFmt, view(s))
 	}
 	press(s, "tab", "tab", "tab", "tab", "tab", "tab", "tab")
 	typeText(s, euWest)
-	act := onlyDo(t, press(s, "ctrl+s"))
+	act := onlyDo(t, press(s, keySave))
 	spec := m.Spec
 	spec.Env = map[string]string{braveEnv: braveRef, region: euWest, "LOG_LEVEL": "info"}
 	if !slices.Equal(act.Argv, mustAct(actions.McpAdd(spec)).Argv) {
-		t.Errorf("argv %q", act.Argv)
+		t.Errorf(argvFmt, act.Argv)
 	}
 }
 
@@ -367,7 +374,7 @@ func TestScopeSwitchClosesPrefilledForm(t *testing.T) {
 		t.Error("prefilled form survived a scope switch")
 	}
 	if v := view(s); strings.Contains(v, "Add MCP server") || strings.Contains(v, braveProv) {
-		t.Errorf("view:\n%s", v)
+		t.Errorf(viewFmt, v)
 	}
 }
 
@@ -377,7 +384,7 @@ func TestAfterAddNoteListsSecretsToSet(t *testing.T) {
 	fr := &scripted{out: map[string]runner.Result{secretList: {Stdout: "brave.other_token\nGITHUB_TOKEN\n"}}}
 	app, _ := shell(t, fr)
 	appDrive(app, func() tea.Msg { return m })
-	appPress(app, "ctrl+s", "y")
+	appPress(app, keySave, "y")
 	if fr.ran(addBrave) != 1 || fr.ran(secretList) != 1 {
 		t.Fatalf("calls %q", fr.calls)
 	}
@@ -399,7 +406,7 @@ func TestAfterAddNoteSaysWhenItCouldNotCheck(t *testing.T) {
 	fr := &scripted{out: map[string]runner.Result{secretList: {ExitCode: 1, Stderr: `set backend = "age" in agentsync.toml [secrets]`}}}
 	app, _ := shell(t, fr)
 	appDrive(app, func() tea.Msg { return braveCompose() })
-	appPress(app, "ctrl+s", "y")
+	appPress(app, keySave, "y")
 	v := appView(app)
 	if !strings.Contains(v, "could not check") || !strings.Contains(v, "brave.brave_api_key") {
 		t.Errorf("note:\n%s", v)
@@ -417,13 +424,13 @@ func TestAfterAddNoteOnlyForSuccessfulAddWithSecrets(t *testing.T) {
 	m := braveCompose()
 	m.Spec.Env = nil
 	appDrive(app, func() tea.Msg { return m })
-	appPress(app, "ctrl+s", "y")
+	appPress(app, keySave, "y")
 	m = braveCompose()
 	appDrive(app, func() tea.Msg { return m })
-	appPress(app, "ctrl+s", "n")
+	appPress(app, keySave, "n")
 	m.Spec.ID, m.RefID = "plain", "plain"
 	appDrive(app, func() tea.Msg { return m })
-	appPress(app, "ctrl+s", "y")
+	appPress(app, keySave, "y")
 	if fr.ran("mcp add") != 2 || fr.ran(secretList) != 0 {
 		t.Errorf("calls %q", fr.calls)
 	}
@@ -436,8 +443,8 @@ func TestPrefilledHeaderWithCommaSubmits(t *testing.T) {
 	m.Spec.ID, m.RefID = "commas", "commas"
 	m.Spec.Headers = []string{"Accept: application/json, text/event-stream"}
 	s := open(t, m)
-	act := onlyDo(t, press(s, "ctrl+s"))
+	act := onlyDo(t, press(s, keySave))
 	if !slices.Contains(act.Argv, "Accept: application/json, text/event-stream") {
-		t.Errorf("argv %q", act.Argv)
+		t.Errorf(argvFmt, act.Argv)
 	}
 }

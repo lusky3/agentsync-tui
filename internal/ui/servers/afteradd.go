@@ -16,6 +16,9 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/ui"
 )
 
+// noteAdded starts every after-add note.
+const noteAdded = "added "
+
 // vaultRefRe finds ${secret:KEY} references anywhere in a value (the vault
 // key rule, as the Secrets tab reads them).
 var vaultRefRe = regexp.MustCompile(`\$\{secret:([A-Za-z0-9][A-Za-z0-9._-]*)\}`)
@@ -111,9 +114,9 @@ func readVault(ctx context.Context, gen int, r runner.Runner, timeout time.Durat
 // here. When the vault could not be listed it says so and names every
 // reference, rather than claiming none is missing.
 func afterAddNote(m vaultMsg) string {
-	id := mask.OneLine(m.add.id)
+	id := noteAdded + mask.OneLine(m.add.id)
 	if m.note != "" {
-		return "added " + id + "; could not check the vault (" + m.note + "): make sure these are set in the Secrets tab: " +
+		return id + "; could not check the vault (" + m.note + "): make sure these are set in the Secrets tab: " +
 			joinKeys(m.add.keys)
 	}
 	var missing []string
@@ -123,9 +126,9 @@ func afterAddNote(m vaultMsg) string {
 		}
 	}
 	if len(missing) == 0 {
-		return "added " + id + "; every secret it references is set"
+		return id + "; every secret it references is set"
 	}
-	return "added " + id + "; set these secrets in the Secrets tab: " + joinKeys(missing)
+	return id + "; set these secrets in the Secrets tab: " + joinKeys(missing)
 }
 
 func joinKeys(keys []string) string {

@@ -32,7 +32,7 @@ func argsCompose(args ...string) ui.ComposeMcpMsg {
 // renameFromArgs moves focus from the args field back to the id field and replaces
 // the id with typed text.
 func renameFromArgs(s *Screen, id string) {
-	press(s, "shift+tab", "shift+tab", "shift+tab", "backspace")
+	press(s, keyBackTab, keyBackTab, keyBackTab, keyBackspace)
 	typeText(s, id)
 }
 
@@ -57,7 +57,7 @@ func TestRenameRewritesOnlyGeneratedOccurrence(t *testing.T) {
 // the retyped one is the user's and stays.
 func TestRetypedGeneratedRefIsUsers(t *testing.T) {
 	s := open(t, argsCompose(keyRef, keyRef))
-	press(s, "tab", "tab", "tab", "backspace")
+	press(s, "tab", "tab", "tab", keyBackspace)
 	typeText(s, "}")
 	renameFromArgs(s, "y")
 	if got, want := argsOf(t, s), []string{yKeyRef, keyRef}; !slices.Equal(got, want) {
@@ -68,7 +68,7 @@ func TestRetypedGeneratedRefIsUsers(t *testing.T) {
 // A pasted id moves the references at once.
 func TestPastedIDMovesRefs(t *testing.T) {
 	s := open(t, remoteCompose())
-	press(s, "backspace")
+	press(s, keyBackspace)
 	s.Update(tea.PasteMsg{Content: "y"})
 	if got := submitSpec(t, s).Headers; got[1] != "X-Team: ${secret:y.team_id}" {
 		t.Errorf("headers %q", got)
@@ -81,7 +81,7 @@ func TestIDTakenSinceOpenNotFollowed(t *testing.T) {
 	s := open(t, remoteCompose())
 	writeServer(t, s.home, "z", offTOML)
 	drive(s, s.Refresh())
-	press(s, "backspace")
+	press(s, keyBackspace)
 	typeText(s, "z")
 	if got := submitSpec(t, s).Headers; got[1] != teamHeader {
 		t.Errorf("rewrote to a taken id: %q", got)
@@ -94,7 +94,7 @@ func TestReenteredEntryIsUsers(t *testing.T) {
 	s := open(t, remoteCompose())
 	press(s, "tab", "tab", "tab", "tab", "tab")
 	typeText(s, "X-Team: shared ${secret:x.team_id}")
-	press(s, "enter", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "backspace")
+	press(s, "enter", keyBackTab, keyBackTab, keyBackTab, keyBackTab, keyBackTab, keyBackspace)
 	typeText(s, "y")
 	want := []string{yAuth, "X-Team: shared ${secret:x.team_id}"}
 	if got := submitSpec(t, s).Headers; !slices.Equal(got, want) {
@@ -110,7 +110,7 @@ func pendingBrave(t *testing.T, id string) (*Screen, actions.Action) {
 	m.Spec.Env = map[string]string{braveEnv: "${secret:" + id + ".brave_api_key}"}
 	s := open(t, m)
 	s.run = &scripted{}
-	return s, onlyDo(t, press(s, "ctrl+s"))
+	return s, onlyDo(t, press(s, keySave))
 }
 
 func vaultReads(s *Screen) int { return s.run.(*scripted).ran(secretList) }
@@ -154,7 +154,7 @@ func TestOlderVaultResultIgnored(t *testing.T) {
 	s, first := pendingBrave(t, "first")
 	msg1 := runCmd(upd(s, ui.RunMsg{Action: first}))
 	s.Update(braveCompose())
-	second := onlyDo(t, press(s, "ctrl+s"))
+	second := onlyDo(t, press(s, keySave))
 	msg2 := runCmd(upd(s, ui.RunMsg{Action: second}))
 	if msg1 == nil || msg2 == nil {
 		t.Fatal("precondition: two vault reads")

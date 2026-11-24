@@ -12,6 +12,8 @@ import (
 	"github.com/lusky3/agentsync-tui/internal/runner"
 )
 
+const activeFmt = "active = %d, servers got %d"
+
 // composeScreen records every ComposeMcpMsg it is handed.
 type composeScreen struct {
 	*fakeScreen
@@ -111,7 +113,7 @@ func TestComposeRefusedWithoutProject(t *testing.T) {
 	app, _, srv, _ := composeApp(d)
 	app.Update(sampleCompose())
 	if app.active != 0 || len(srv.received()) != 0 {
-		t.Errorf("active = %d, servers got %d", app.active, len(srv.received()))
+		t.Errorf(activeFmt, app.active, len(srv.received()))
 	}
 	if !strings.Contains(app.status, "no project directory") {
 		t.Errorf("status = %q", app.status)
@@ -135,7 +137,7 @@ func refusedOnTab(t *testing.T, m ComposeMcpMsg, want string) {
 	app, _, srv, _ := composeApp(baseDeps(newFakeRunner()))
 	app.Update(m)
 	if app.active != 0 || len(srv.received()) != 0 {
-		t.Errorf("active = %d, servers got %d", app.active, len(srv.received()))
+		t.Errorf(activeFmt, app.active, len(srv.received()))
 	}
 	if app.statusKind != statusWarn || !strings.Contains(app.status, want) {
 		t.Errorf("status = %q (%v)", app.status, app.statusKind)
@@ -164,7 +166,7 @@ func TestComposeRefusedWhileServersFormOpen(t *testing.T) {
 	srv.capture = true
 	app.Update(sampleCompose())
 	if app.active != 0 || len(srv.received()) != 0 {
-		t.Errorf("active = %d, servers got %d", app.active, len(srv.received()))
+		t.Errorf(activeFmt, app.active, len(srv.received()))
 	}
 	if !strings.Contains(app.status, "finish or close the open form first") {
 		t.Errorf("status = %q", app.status)

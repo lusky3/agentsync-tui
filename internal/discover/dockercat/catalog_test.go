@@ -25,19 +25,20 @@ import (
 )
 
 const (
-	catalogPath = "testdata/catalog.yaml"
-	searchFail  = "Search: %v"
-	errWant     = "err = %v, want %v"
-	keyBrave    = "brave"
-	keyContext7 = "context7"
-	keyStripe   = "stripe"
-	keyTime     = "time"
-	keyFS       = "filesystem"
-	keyCurl     = "curl"
-	keyLinear   = "linear"
-	cacheKey    = "dockercat:" + dockercat.CatalogURL
-	keyCommand  = "command"
-	keyOK       = "ok"
+	catalogPath  = "testdata/catalog.yaml"
+	searchFail   = "Search: %v"
+	errWant      = "err = %v, want %v"
+	keyBrave     = "brave"
+	keyContext7  = "context7"
+	keyStripe    = "stripe"
+	keyTime      = "time"
+	keyFS        = "filesystem"
+	keyCurl      = "curl"
+	keyLinear    = "linear"
+	cacheKey     = "dockercat:" + dockercat.CatalogURL
+	keyCommand   = "command"
+	registryHead = "registry:\n"
+	keyOK        = "ok"
 )
 
 // fake counts requests to the catalog stand-in.
@@ -170,7 +171,7 @@ func TestSourceNameStable(t *testing.T) {
 // third one mentions "Needle" in its description.
 func generated(n int) []byte {
 	var b bytes.Buffer
-	b.WriteString("registry:\n")
+	b.WriteString(registryHead)
 	for i := n - 1; i >= 0; i-- { // reverse order: Search must sort
 		desc := "plain"
 		if i%3 == 0 {
@@ -382,7 +383,7 @@ func TestWideMappingInEntrySkippedQuickly(t *testing.T) {
 
 func TestHugeRegistryRefusedQuickly(t *testing.T) {
 	var b strings.Builder
-	b.WriteString("registry:\n")
+	b.WriteString(registryHead)
 	for i := range 50000 { // under 2 MiB, ten times the entry cap
 		fmt.Fprintf(&b, "  k%d: {type: poci}\n", i)
 	}
@@ -480,7 +481,7 @@ func TestBadEnvelopeIsErrBadResponse(t *testing.T) {
 }
 
 func TestNullOrEmptyRegistryIsEmptyPage(t *testing.T) {
-	for _, body := range []string{"registry:\n", "registry: {}\n"} {
+	for _, body := range []string{registryHead, "registry: {}\n"} {
 		p := searchBody(t, []byte(body), "")
 		if len(p.Entries) != 0 || p.Skipped != 0 {
 			t.Errorf("%q: %+v", body, p)
