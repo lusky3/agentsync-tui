@@ -335,8 +335,14 @@ func (b *builder) pkg(p Package) error {
 	if err != nil {
 		return err
 	}
-	if err := b.env(p.Env); err != nil {
+	passed, err := b.env(p.Env)
+	if err != nil {
 		return err
+	}
+	if p.RegistryType == registryOCI {
+		// docker run starts the container with none of its own
+		// environment: each variable must be named with -e before the image.
+		idArgs = slices.Insert(idArgs, len(rt.prefix), forwardFlags(passed)...)
 	}
 	b.d.Spec.Type = typeStdio
 	b.d.Spec.Command = rt.command
@@ -450,36 +456,44 @@ func argTokens(a Argument) ([]string, error) {
 // Prompt, and an optional plain one is omitted. A fixed value marked
 // secret refuses (Decision 7: never a literal). Setting a runtime or
 // loader variable (runenv.Reserved) in any of those ways refuses (D40).
-func (b *builder) env(vars []EnvVar) error {
+// It returns, in order, the names the server will be given: those set and
+// those prompted for.
+func (b *builder) env(vars []EnvVar) ([]string, error) {
+	var passed []string
 	seen := make(map[string]bool, len(vars))
 	for _, v := range vars {
 		if !envNameRe.MatchString(v.Name) || seen[v.Name] {
-			return unsupported(reasonEnvName)
+			return nil, unsupported(reasonEnvName)
 		}
 		seen[v.Name] = true
 		if runenv.Reserved(v.Name) && (v.Value != "" || v.Secret || v.Required) {
-			return unsupported(runenv.Reason(v.Name))
+			return nil, unsupported(runenv.Reason(v.Name))
 		}
-		if err := b.envVar(v); err != nil {
-			return err
+		ok, err := b.envVar(v)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			passed = append(passed, v.Name)
 		}
 	}
-	return nil
+	return passed, nil
 }
 
-func (b *builder) envVar(v EnvVar) error {
+// envVar maps one variable and reports whether the server gets it.
+func (b *builder) envVar(v EnvVar) (bool, error) {
 	switch {
 	case v.Value != "" && v.Secret:
-		return unsupported(reasonSecretLiteral)
+		return false, unsupported(reasonSecretLiteral)
 	case v.Value != "":
 		if unsafeValue(v.Value) {
-			return unsupported(reasonEnvValue)
+			return false, unsupported(reasonEnvValue)
 		}
 		b.setEnv(v.Name, v.Value)
 	case v.Secret:
 		ref, err := b.ref(v.Name)
 		if err != nil {
-			return err
+			return false, err
 		}
 		b.setEnv(v.Name, ref)
 	case v.Required:
@@ -490,8 +504,19 @@ func (b *builder) envVar(v EnvVar) error {
 		b.d.Prompts = append(b.d.Prompts, Prompt{
 			Name: v.Name, Required: true, Default: def, Description: v.Description,
 		})
+	default:
+		return false, nil
 	}
-	return nil
+	return true, nil
+}
+
+// forwardFlags is "-e NAME" for each name, as docker run takes them.
+func forwardFlags(names []string) []string {
+	out := make([]string, 0, 2*len(names))
+	for _, n := range names {
+		out = append(out, "-e", n)
+	}
+	return out
 }
 
 // unsafeValue reports whether a fixed or default value cannot be offered:

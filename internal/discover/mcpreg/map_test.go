@@ -944,3 +944,27 @@ func TestOCIIdentifierShapesRefused(t *testing.T) {
 		}
 	}
 }
+
+// docker run does not pass the host environment into the container: every
+// variable the draft sets, and every one the form will ask for, needs its
+// own -e NAME before the image.
+func TestOCIEnvForwardedIntoContainer(t *testing.T) {
+	p := ociPkg(ociImage+":1.0", "")
+	p.Env = []mcpreg.EnvVar{
+		{Name: modeEnv, Value: "strict"},
+		{Name: apiKey, Secret: true},
+		{Name: "BUCKET", Required: true},
+		{Name: "OPTIONAL_THING"},
+	}
+	d := draft(t, serverWith(p))
+	checkStdio(t, d, "docker", "run", "-i", "--rm", "-e", modeEnv, "-e", apiKey, "-e", "BUCKET", ociImage+":1.0")
+	if d.Spec.Env[apiKey] != demoRef || d.Spec.Env[modeEnv] != "strict" {
+		t.Errorf("Env = %v", d.Spec.Env)
+	}
+}
+
+func TestNonOCIEnvNotForwardedAsArgs(t *testing.T) {
+	p := pkgOf(typeNPM, npmPkg)
+	p.Env = []mcpreg.EnvVar{{Name: apiKey, Secret: true}}
+	checkStdio(t, draft(t, serverWith(p)), npx, "-y", npmPkg+"@"+mapVersion)
+}
