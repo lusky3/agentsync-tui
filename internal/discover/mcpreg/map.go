@@ -94,6 +94,7 @@ const (
 	reasonSpecRejected    = "agentsync would not accept the resulting server definition"
 	reasonCredentialName  = "the package name reads like a credential and could not be shown"
 	reasonHeaderTwice     = "declares the header "
+	reasonTooLong         = "fills a header value or URL past the length this tool accepts"
 	reasonChecksum        = "declares a file checksum its runtime cannot verify before running it"
 	reasonRegistryBase    = "is published to a package registry other than the one its runtime installs from"
 	reasonSecretLiteral   = "gives a fixed value for a secret; this tool never stores a secret as plain text"
@@ -606,7 +607,7 @@ func (b *builder) remote(r Remote) error {
 	if len(r.Headers) > maxHeaders {
 		return unsupported(reasonTooMany)
 	}
-	u, err := b.fill(r.URL, r.Variables, false)
+	u, err := b.fill(r.URL, r.Variables, false, maxValue)
 	if err != nil {
 		return err
 	}
@@ -668,7 +669,9 @@ func (b *builder) header(h Header) (string, error) {
 	var err error
 	switch {
 	case h.Value != "":
-		v, err = b.fill(h.Value, h.Variables, true)
+		// Room for what the trim below removes: only the template's own
+		// text can hold spaces (defaults and references have none).
+		v, err = b.fill(h.Value, h.Variables, true, maxValue+len(h.Value))
 	case h.Secret:
 		v, err = b.ref(h.Name)
 	case h.Required:
@@ -696,8 +699,10 @@ func (b *builder) header(h Header) (string, error) {
 // variable's secret reference (only when secrets is set: a URL never
 // carries one) or default. The template itself may hold no '$' (so it can
 // never write a reference of its own); a placeholder that is undeclared,
-// unbalanced, nested or neither secret nor defaulted refuses.
-func (b *builder) fill(tmpl string, vars []EnvVar, secrets bool) (string, error) {
+// unbalanced, nested or neither secret nor defaulted refuses. So does an
+// output longer than limit, as soon as it would grow past it (one
+// placeholder repeated could otherwise expand a page into gigabytes).
+func (b *builder) fill(tmpl string, vars []EnvVar, secrets bool, limit int) (string, error) {
 	if strings.Contains(tmpl, "$") {
 		return "", unsupported(reasonTemplateText)
 	}
@@ -716,6 +721,9 @@ func (b *builder) fill(tmpl string, vars []EnvVar, secrets bool) (string, error)
 		val, err := b.resolve(rest[i+1:i+1+j], vars, secrets)
 		if err != nil {
 			return "", err
+		}
+		if out.Len()+i+len(val) > limit {
+			return "", unsupported(reasonTooLong)
 		}
 		out.WriteString(rest[:i])
 		out.WriteString(val)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1011,5 +1012,43 @@ func TestDeclaredFileSHA256Unsupported(t *testing.T) {
 	for _, p := range []mcpreg.Package{pkgOf(typeNPM, npmPkg), pkgOf(typePyPI, pypiPkg), ociPkg(ociImage+":1", "")} {
 		p.FileSHA256 = ociDigest[len("sha256:"):]
 		unsupported(t, serverWith(p), "checksum")
+	}
+}
+
+// allocated returns the bytes f allocates.
+func allocated(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// A template repeating a placeholder whose default is long would expand
+// to hundreds of MiB before the length check refused it; fill now stops
+// as soon as the output is past what could still pass.
+func TestPlaceholderExpansionBounded(t *testing.T) {
+	long := []mcpreg.EnvVar{{Name: "x", Default: strings.Repeat("a", 32<<10)}}
+	tmpl := strings.Repeat("{x}", 10000)
+	for name, r := range map[string]mcpreg.Remote{
+		"header": {Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{{Name: authHeader, Value: tmpl, Variables: long}}},
+		"url":    {Type: streamable, URL: "https://h.example/" + tmpl, Variables: long},
+	} {
+		s := remoteServer(r)
+		if n := allocated(func() { unsupported(t, s, "") }); n > 32<<20 {
+			t.Errorf("%s: refusing allocated %d MiB, want it bounded", name, n>>20)
+		}
+	}
+}
+
+// The bound leaves room for what trimming removes: a header value whose
+// template is mostly surrounding spaces still maps.
+func TestPaddedHeaderTemplateStillMaps(t *testing.T) {
+	pad := strings.Repeat(" ", 6000)
+	r := mcpreg.Remote{Type: streamable, URL: remoteURL, Headers: []mcpreg.Header{{
+		Name: "X-Region", Value: pad + "{region}" + pad, Variables: []mcpreg.EnvVar{{Name: regionVar, Default: "us"}},
+	}}}
+	if got := draft(t, remoteServer(r)).Spec.Headers; !slices.Equal(got, []string{"X-Region: us"}) {
+		t.Errorf("Headers = %q", got)
 	}
 }
