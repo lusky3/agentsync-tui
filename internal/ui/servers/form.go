@@ -358,12 +358,29 @@ func (f *form) live(i int) string {
 	return mask.OneLine(v)
 }
 
-// frame lays the form out in height lines: the title, the body scrolled
-// so that the focused field and its notes stay in view, then the error and
-// the keys, which always fit.
+// frame lays the form out in height lines: the title and the pinned
+// banner, the body scrolled so that the focused field and its notes stay
+// in view, then the error and the keys, which always fit.
 func (f *form) frame(height int) []string {
 	head, l, foot := f.layout()
+	head = append(head, f.pinned(height-len(head)-len(foot), l.last-l.first+1)...)
 	return f.scroll.FrameSpan(l.first, l.last, head, l.body, foot, height)
+}
+
+// pinned is the part of the banner that stays above the scrolling body,
+// whatever the focus: the provenance line always (it wins over body rows),
+// then each trust line while room lines still leave the body need rows
+// for the focused field and its notes. A trust line with no room is not
+// shown until the screen is taller or the focused block shorter.
+func (f *form) pinned(room, need int) []string {
+	var out []string
+	for i, b := range f.banner {
+		if i > 0 && room-len(out)-1 < need {
+			break
+		}
+		out = append(out, theme.Warn.Render(b))
+	}
+	return out
 }
 
 // formLayout is the scrollable part of the form and the lines
@@ -388,9 +405,6 @@ func (f *form) layout() (head []string, l formLayout, foot []string) {
 		labels[fTarget] = "url"
 	}
 	head = []string{theme.Bold.Render("Add MCP server")}
-	for _, b := range f.banner {
-		l.body = append(l.body, theme.Warn.Render(b))
-	}
 	l.body = append(l.body, "")
 	warn := f.literalWarning()
 	for i := 0; i < nFields; i++ {

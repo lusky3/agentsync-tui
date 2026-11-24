@@ -491,3 +491,50 @@ func TestTallFormFollowsFocusAndKeepsErrorVisible(t *testing.T) {
 		t.Errorf("focus wrapped to id but it is not in view:\n%s", v)
 	}
 }
+
+// The provenance banner is pinned above the scrolling body: on a short
+// screen it is in view when the form opens and after focus moves to the
+// last field, and the focused field is still shown.
+func TestBannerPinnedWhateverTheFocus(t *testing.T) {
+	m := braveCompose()
+	for i := 1; i <= 4; i++ {
+		m.Prompts = append(m.Prompts, ui.FieldPrompt{Name: "P" + strconv.Itoa(i), Required: true})
+	}
+	for _, height := range []int{8, 14} {
+		s := open(t, m)
+		s.Update(tea.WindowSizeMsg{Width: 120, Height: height})
+		check := func(when, focused string) {
+			t.Helper()
+			v := view(s)
+			for _, want := range []string{braveProv + runsCodeNote, focused} {
+				if !strings.Contains(v, want) {
+					t.Errorf("height %d, %s: %q not in view:\n%s", height, when, want, v)
+				}
+			}
+			if n := strings.Count(v, "\n") + 1; n > height {
+				t.Errorf("height %d, %s: %d lines:\n%s", height, when, n, v)
+			}
+		}
+		check("opened", "> id")
+		for i := 0; i < nFields+3; i++ {
+			press(s, "tab")
+		}
+		check("last field", "> P4")
+	}
+}
+
+// When the screen has room, the trust lines are pinned with the banner.
+func TestTrustLinesPinnedWhenTheyFit(t *testing.T) {
+	m := braveCompose()
+	for i := 1; i <= 4; i++ {
+		m.Prompts = append(m.Prompts, ui.FieldPrompt{Name: "P" + strconv.Itoa(i), Required: true})
+	}
+	s := open(t, m)
+	s.Update(tea.WindowSizeMsg{Width: 120, Height: 14})
+	for i := 0; i < nFields+3; i++ {
+		press(s, "tab")
+	}
+	if v := view(s); !strings.Contains(v, trustDigest) {
+		t.Errorf("trust line scrolled away:\n%s", v)
+	}
+}
