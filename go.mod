@@ -7,7 +7,7 @@ toolchain go1.26.11
 require (
 	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/pelletier/go-toml/v2 v2.4.3
 )
 
